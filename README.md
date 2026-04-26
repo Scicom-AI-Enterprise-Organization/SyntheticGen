@@ -1,218 +1,290 @@
-# Enterprise Template
+# SyntheticGen
 
-A Next.js 16 starter for building internal/enterprise apps. Comes wired with:
+Enterprise-grade synthetic dataset generator for LLM fine-tuning, with first-class
+support for **Malaysian languages and registers** — Bahasa Melayu, English, Mandarin,
+Tamil, code-switching (Bahasa Rojak), and a hard-enforced **formality lock** for
+enterprise customers (TM, banks, government) that need formal Bahasa Baku output
+with **no Manglish particles** (`lah / lor / meh / kan / kot / wei / doh / eh`).
 
-- **Auth.js v5** — credentials (email + password), Microsoft Entra ID (Azure AD), Google, Keycloak, SAML
-- **RBAC** — roles + permissions, enforced by Next.js proxy middleware and server helpers
-- **Prisma + Postgres** — users, accounts, sessions, roles, permissions, invitations
-- **Authed app shell** — collapsible sidebar nav, top bar with theme toggle and user menu
-- **Profile** — `/profile` lets users update their name and set/change their password (works for both credentials and SSO users)
-- **Admin UI** — `/admin/users` (assign roles), `/admin/roles` (toggle permissions), `/admin/organization` (shareable invite links)
-- **AI Workspace** — `/ai` interactive demo combining every showcase AI pattern (chatbot, structured flow, agent assist, voice, summary cards)
-- **Showcase** — the original component gallery preserved at `/showcase/*`
-- React 19, Tailwind CSS v4, Radix UI
+Built on top of an enterprise Next.js 16 + Auth.js v5 + Prisma + Postgres template,
+with a Python (FastAPI + asyncpg) science backend that owns LLM provider calls,
+validators, generation, and exports.
 
-## Default credentials
+## What it does
 
-After running `npm run db:seed`, sign in at `/login` with:
+- **Multilingual generation** — single-turn samples (multi-turn coming next slice) in
+  Bahasa Melayu, English, Mandarin, Tamil, with first-class code-switching policy
+  (none / inter-sentential / intra-sentential / rojak) and configurable rate.
+- **Formality enforcement** — every project ships with two seeded `LanguageProfile`
+  presets:
+  - **Malaysia – Enterprise Formal (TM-style)** — formal Bahasa Baku, particle ban,
+    SMS-shortcut rejection, English loanwords restricted to a telco-domain allowlist
+    (`router`, `bil`, `bandwidth`, …).
+  - **Malaysia – Casual (Manglish OK)** — full Bahasa Rojak with intra-sentential
+    code-switching enabled.
+- **Layered formality precedence** — Run > Persona > LanguageProfile > Project default.
+  The Run wizard exposes a "Formality lock" toggle that overrides everything below it.
+- **Cheap-first validator pipeline** — JSON-Schema → lingua-py language ID →
+  register-compliance (Manglish particle / Bahasa Baku / loanword policy) → n-gram
+  repetition. Anything `fail` → conversation marked `rejected`.
+- **OpenAI-compatible providers** — one client serves OpenAI, vLLM, Together,
+  OpenRouter, SGLang, Anthropic-via-proxy. API keys AES-256-GCM encrypted at rest;
+  decrypted only inside the Python worker.
+- **Project-scoped RBAC** — `OWNER / EDITOR / ANNOTATOR / VIEWER` per project, on top
+  of the existing global Auth.js permissions.
+- **Dataset versioning** — frozen `DatasetVersion` snapshots are immutable, with
+  full lineage (which conversations, from which run, with which judge verdicts).
+- **OpenAI fine-tune JSONL export** — one click per version. ShareGPT / Alpaca /
+  Parquet / HF Hub push planned for slice 2.
+- **Audit log** — every project / provider / run / dataset action persisted.
 
-| Email | Password |
-| --- | --- |
-| `admin@example.com` | `admin1234` |
+## Architecture
 
-Override before seeding by setting `SEED_ADMIN_EMAIL` and `SEED_ADMIN_PASSWORD` in `.env`. **Change these before deploying anywhere reachable.**
+Two processes share Postgres as the integration bus:
 
-## Bootstrap
-
-Prerequisites: Node 20+, npm, Docker (or a local Postgres 14+).
-
-### 1. Clone and install
-
-```bash
-git clone <your-fork-url> my-app
-cd my-app
-npm install
+```
+ ┌────────────────────┐        ┌──────────────────────┐        ┌──────────────┐
+ │ Next.js (TS)       │        │ Postgres (Prisma)    │        │ Python       │
+ │  - Auth.js + RBAC  │ writes │  - Project, Persona  │  reads │  - providers │
+ │  - all CRUD UI     │ ─────▶│  - LanguageProfile   │◀───── │  - validators│
+ │  - run wizard      │        │  - GenerationRun/Job │  writes│  - worker    │
+ │  - SSE progress    │ reads  │  - Conversation/Msg  │ ─────▶│  - exporter  │
+ │  - dataset freeze  │ ◀───── │  - Validation        │        │  - FastAPI   │
+ └────────────────────┘        └──────────────────────┘        └──────────────┘
+                                       ▲
+                                       │ NOTIFY synthgen_run
+                                       │ (live progress)
 ```
 
-`postinstall` runs `prisma generate` automatically.
+The Python service exposes only **internal endpoints** that Next.js calls
+service-to-service (gated by a shared `SYNTHGEN_INTERNAL_TOKEN`).
 
-### 2. Configure environment
+## Repo layout
+
+```
+prisma/                Schema + migrations + seed (TS)
+src/                   Next.js app (TS)
+  app/(app)/projects/  All project-scoped pages
+  app/api/             SSE + JSON APIs Next.js calls
+  lib/
+    rbac.ts            Global RBAC (template)
+    project-rbac.ts    Project-scoped role → action map
+    crypto.ts          AES-256-GCM matching the Python wire format
+    audit.ts           Audit log helper
+    synthgen-api.ts    Thin client for the Python service
+worker/                Python service
+  synthgen/
+    presets.py         Manglish particles, Baku shortcuts, loanword allowlists
+    style_guide.py     Auto-injected formality system-prompt fragment
+    templates.py       Mustache renderer
+    providers.py       httpx OpenAI-compat client + pricing table
+    validators/        schema, lang_id (lingua-py), register, ngram
+    generation.py      Single-turn generation pipeline
+    exporter.py        OpenAI JSONL writer
+    bootstrap.py       Seed default LanguageProfile presets per project
+    api/main.py        FastAPI internal endpoints
+    jobworker/main.py  Job poller (SELECT ... FOR UPDATE SKIP LOCKED)
+    crypto.py          AES-256-GCM matching the TS wire format
+  tests/               smoke_e2e.py + smoke_export.py + stub_openai.py
+storage/exports/       Built export artifacts (local FS in slice 1)
+```
+
+## Quickstart
+
+Prereqs: Node 20+, npm, Python 3.11+ (3.13 recommended), [uv](https://docs.astral.sh/uv/),
+Docker (or your own Postgres).
 
 ```bash
+git clone <your-fork-url> syntheticgen
+cd syntheticgen
 cp .env.example .env
+# Generate secrets
+sed -i "s|^AUTH_SECRET=.*|AUTH_SECRET=$(openssl rand -base64 32)|" .env
+sed -i "s|^APP_ENCRYPTION_KEY=.*|APP_ENCRYPTION_KEY=$(openssl rand -base64 32)|" .env
+sed -i "s|^SYNTHGEN_INTERNAL_TOKEN=.*|SYNTHGEN_INTERNAL_TOKEN=$(openssl rand -hex 24)|" .env
 ```
 
-Edit `.env` and set at minimum:
-
-- `AUTH_SECRET` — generate with `openssl rand -base64 32`
-- `AUTH_URL` — defaults to `http://localhost:3000`
-- `DATABASE_URL` — Postgres connection string (the default matches the bundled Docker Postgres)
-
-Enable any SSO providers you want by uncommenting and filling in their env vars. Each provider is auto-enabled when its `*_CLIENT_ID` / `*_ENTRY_POINT` is present — no code changes needed. Redirect URIs to register with your IdP:
-
-- OIDC providers: `${AUTH_URL}/api/auth/callback/<provider>` (`google`, `microsoft-entra-id`, `keycloak`)
-- SAML ACS: `${AUTH_URL}/api/auth/saml/callback`
-
-### 3. Start Postgres
-
-Either use the bundled container:
+### 1. Postgres + migrations + seed
 
 ```bash
 docker compose up -d db
+npm install
+npm run db:migrate      # applies prisma/migrations/*
+npm run db:seed         # creates roles, permissions, admin user
 ```
 
-Or point `DATABASE_URL` at your own Postgres instance.
+Default admin: `admin@example.com / admin1234` (override with
+`SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`).
 
-### 4. Migrate and seed
+### 2. Python worker
 
 ```bash
-npm run db:migrate    # creates tables (prompts for a migration name on first run)
-npm run db:seed       # creates roles, permissions, and default admin user
+cd worker
+uv venv --python 3.13 .venv
+uv pip install --python .venv/bin/python -e .
+cd ..
 ```
 
-The seed creates:
+### 3. Run all three processes
 
-- Roles: `admin` (all permissions), `member` (no permissions, auto-assigned to new SSO sign-ups)
-- Permissions: `users:read`, `users:write`, `users:delete`, `roles:read`, `roles:write`, `invites:read`, `invites:write`
-- Admin user: `admin@example.com` / `admin1234` (override with `SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD`)
-
-### 5. Run
+In **three terminals** (or use `tmux` / `Procfile`):
 
 ```bash
+# Terminal 1 — Python FastAPI service (internal endpoints + run/export triggers)
+env $(grep -v '^#' .env | xargs) \
+  worker/.venv/bin/uvicorn synthgen.api.main:app --port 8000
+
+# Terminal 2 — Python job worker (LLM calls + validators)
+env $(grep -v '^#' .env | xargs) \
+  worker/.venv/bin/python -m synthgen.jobworker.main
+
+# Terminal 3 — Next.js dev server
 npm run dev
 ```
 
-Open http://localhost:3000 and sign in at `/login` with the seeded admin to access `/admin/users` and `/admin/roles`.
+Open http://localhost:3000 and sign in. Click **Projects → New project**.
+The two Malaysia LanguageProfile presets are seeded automatically by the Python
+worker on project creation; if the worker is offline you'll get a soft warning
+and can re-seed via **Settings → Reseed default language profiles**.
 
-### Reset the database
+## End-to-end happy path
 
-```bash
-npx prisma migrate reset    # drops, re-migrates, and re-seeds
-```
+1. **Create project** — click *New project*. Two LanguageProfile presets appear under
+   the Languages tab (formal + casual).
+2. **Add a Persona** under *Personas* — at minimum a name. The form warns if the
+   persona's formality clashes with the chosen LanguageProfile (e.g. persona is
+   `colloquial` but profile bans particles).
+3. **Add a TaxonomyNode** under *Taxonomy* — slice 1 uses a single flat list per
+   project (e.g. `billing`, `modem-troubleshooting`, `plan-upgrade`).
+4. **Add a PromptTemplate** under *Templates*. The default body uses
+   `{{persona.name}}`, `{{taxonomy.path}}`, `{{language.primary}}`, `{{difficulty}}`.
+5. **Add a Provider** under *Providers* — pick OpenAI / vLLM / Together / etc.,
+   paste an API key (encrypted before saving).
+6. **Start a Run** under *Runs → New run*. Pick taxonomy nodes × personas ×
+   difficulties × rows-per-cell. Use the **Formality lock** to force `formal` even if
+   personas/profiles are mixed.
+7. **Watch progress** — the run detail page subscribes to SSE; counts and cost
+   update live as the worker drains jobs.
+8. **Inspect Conversations** — table at `/projects/.../conversations`. Click a row
+   to see the full transcript and per-axis validation verdicts (`pass / warn / fail`).
+9. **Freeze and export** — *Datasets → New dataset → Freeze version → Build OpenAI
+   JSONL*. The file lands under `./storage/exports/<projectId>/...jsonl`.
 
-### One-shot Docker bootstrap
+## RBAC model
 
-To run the whole stack (Postgres + app) in containers:
+**Global roles** (Auth.js / template) — `admin`, `member`. Global admin sees and
+can act on every project. `member` users can list and create projects.
 
-```bash
-cp .env.example .env
-docker compose up --build -d
-docker compose exec app npx prisma migrate deploy
-docker compose exec app npx tsx prisma/seed.ts
-```
+**Project roles** (per `ProjectMember`):
 
-## Routes
+| Action | OWNER | EDITOR | ANNOTATOR | VIEWER |
+|---|:---:|:---:|:---:|:---:|
+| `project.read` | ✓ | ✓ | ✓ | ✓ |
+| `project.update / delete / members.manage` | ✓ | | | |
+| `providers.manage` | ✓ | ✓ | | |
+| `taxonomy / personas / languages / tools / templates .write` | ✓ | ✓ | | |
+| `runs.execute / runs.cancel` | ✓ | ✓ | | |
+| `conversations.annotate` | ✓ | ✓ | ✓ | |
+| `datasets.freeze / datasets.export` | ✓ | ✓ | | |
 
-| Route | Description |
-| --- | --- |
-| `/` | Public landing page |
-| `/login` | Sign-in (credentials + enabled SSO providers, split-hero layout) |
-| `/dashboard` | Authed home — shows your roles and permissions |
-| `/profile` | Edit your name, set / change password, view linked sign-in methods |
-| `/ai` | Interactive AI workspace using every showcase AI pattern |
-| `/admin/users` | Manage users (requires `users:read` / `users:write`) |
-| `/admin/roles` | Manage roles & permissions (requires `roles:read` / `roles:write`) |
-| `/admin/organization` | Create and revoke invitation links (requires `invites:read` / `invites:write`) |
-| `/invite/[token]` | Accept an invite link — auto-assigns the bound role on first sign-in |
-| `/showcase/*` | Component gallery, design system, template previews |
-| `/forbidden` | Shown when RBAC denies access |
+Server-side gate: `requireProjectPermission(projectId, action)` — `src/lib/project-rbac.ts`.
 
-## Auth providers
+## Why a TS + Python split
 
-Each SSO provider is enabled only if its env vars are set. See `.env.example`.
+- **TS / Next.js** is great at request/response, forms, auth, and shipping a
+  cohesive UI. It owns everything user-facing.
+- **Python** is where data scientists and AI engineers live. The validators,
+  provider client, generation orchestration, judge LLMs (slice 2), and HF Hub /
+  Parquet exports are markedly easier to maintain in Python — `lingua-py`,
+  `jsonschema`, `httpx`, `sentence-transformers`, `datasets`, and `pyarrow` all
+  Just Work.
+- They share **Postgres** as the bus; no Redis, no Celery, no Inngest. Workers
+  claim jobs atomically with `SELECT ... FOR UPDATE SKIP LOCKED`. State, queue,
+  and lineage live in one place.
 
-- **Azure AD / Microsoft Entra ID** — `AUTH_AZURE_AD_CLIENT_ID`, `AUTH_AZURE_AD_CLIENT_SECRET`, `AUTH_AZURE_AD_TENANT_ID`
-- **Google** — `AUTH_GOOGLE_CLIENT_ID`, `AUTH_GOOGLE_CLIENT_SECRET`
-- **Keycloak** — `AUTH_KEYCLOAK_CLIENT_ID`, `AUTH_KEYCLOAK_CLIENT_SECRET`, `AUTH_KEYCLOAK_ISSUER`
-- **SAML** — `AUTH_SAML_ENTRY_POINT`, `AUTH_SAML_ISSUER`, `AUTH_SAML_IDP_CERT`. Implemented with `@node-saml/node-saml`. SP routes are at `/api/auth/saml/login` and `/api/auth/saml/callback`. For multi-tenant SAML, point a generic OIDC provider at [BoxyHQ Jackson](https://boxyhq.com/docs/jackson/overview) instead.
+## The Malaysia formality moat
 
-OAuth/OIDC redirect URI: `${AUTH_URL}/api/auth/callback/<provider>`. SAML ACS: `${AUTH_URL}/api/auth/saml/callback`.
+This is the bit generic synth-data tools don't model. Three layers cooperate:
 
-## RBAC
+1. **System-prompt style guide** — `worker/synthgen/style_guide.py` auto-prepends
+   instructions like *"Respond in formal Bahasa Melayu Baku. Do not use Manglish
+   particles … Use full standard spelling (`tidak` not `tak` …)."* This is cheap
+   prevention; it reduces the rate of violations the model produces.
+2. **Register-compliance validator** — `worker/synthgen/validators/register.py`.
+   Word-bounded, case-insensitive blocklist match for Manglish particles, regex
+   blocklist for project-defined patterns, Bahasa Baku enforcement that rejects
+   SMS shortcuts (`tak / je / dah / mcm`), allowlist policy for English loanwords.
+   Belt-and-braces: catches what the prompt missed.
+3. **Per-project tuning** — every field on `LanguageProfile` is editable. Telco
+   teams ship with `router / modem / bil / bandwidth` in their loanword allowlist;
+   bank teams ship with their own.
 
-Permissions follow the convention `<resource>:<action>` (e.g. `users:read`). Default seeded permissions:
+## Smoke tests
 
-- `users:read`, `users:write`, `users:delete`
-- `roles:read`, `roles:write`
-- `invites:read`, `invites:write`
-
-Default seeded roles:
-
-- `admin` — all permissions
-- `member` — none (auto-assigned to new SSO sign-ups)
-
-### Server helpers (`src/lib/rbac.ts`)
-
-```ts
-import { requireUser, requirePermission, requireRole, hasPermission } from "@/lib/rbac";
-
-await requirePermission("users:write");
-```
-
-### UI guard (`src/components/auth/protected.tsx`)
-
-```tsx
-<Protected permission="users:write" fallback={<p>No access</p>}>
-  <CreateUserButton />
-</Protected>
-```
-
-### Middleware
-
-`src/proxy.ts` (the Next.js 16 successor to `middleware.ts`) redirects unauthenticated requests to `/login`. Add new public paths to the `PUBLIC_PATHS` array.
-
-## Database
-
-Schema in `prisma/schema.prisma`. Common commands:
-
-```bash
-npm run db:migrate    # create + apply a new migration in dev
-npm run db:deploy     # apply migrations in CI / prod
-npm run db:seed       # seed roles, permissions, admin
-npm run db:studio     # open Prisma Studio
-```
-
-## Docker
+The `worker/tests/` directory has two end-to-end smokes you can run against a real
+local Postgres + the in-repo stub OpenAI server:
 
 ```bash
-docker compose up --build
+# 1. Start the stub OpenAI on :8765
+env $(grep -v '^#' .env | xargs) worker/.venv/bin/python worker/tests/stub_openai.py &
+# 2. Start the Python API on :8000 (so bootstrap works)
+env $(grep -v '^#' .env | xargs) worker/.venv/bin/uvicorn synthgen.api.main:app --port 8000 &
+
+# 3. Run a project bootstrap, then 2 jobs (clean + Manglish), assert correct verdicts
+env $(grep -v '^#' .env | xargs) worker/.venv/bin/python worker/tests/smoke_e2e.py
+
+# 4. Freeze a dataset version and emit OpenAI JSONL
+env $(grep -v '^#' .env | xargs) worker/.venv/bin/python worker/tests/smoke_export.py
 ```
 
-Brings up Postgres + the app. Set `AUTH_SECRET` in your environment first.
+Both expect a smoke project named `smoke-proj-001` (created by the first run).
 
-## Inviting users
+## Configuration
 
-Admins (or anyone with `invites:write`) can mint shareable sign-up links from `/admin/organization`:
+| Env var | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5434/enterprise?schema=public` | Postgres for both TS and Python |
+| `AUTH_SECRET` | (required) | Auth.js JWT signing |
+| `AUTH_URL` | `http://localhost:3000` | App base URL |
+| `APP_ENCRYPTION_KEY` | (required) | 32 bytes base64 — encrypts provider API keys |
+| `SYNTHGEN_API_URL` | `http://localhost:8000` | Where Next.js finds the Python service |
+| `SYNTHGEN_INTERNAL_TOKEN` | (required) | Shared secret for service-to-service calls |
+| `EXPORTS_DIR` | `./storage/exports` | Where built export files land |
+| `WORKER_POLL_INTERVAL_SECONDS` | `2` | Idle poll interval for the job worker |
+| `WORKER_CONCURRENCY` | `4` | Number of in-process consumer coroutines |
 
-- **Optional email binding** — leave blank to allow anyone with the link, or set an email so only that account may accept.
-- **Optional pre-assigned role** — the role is granted automatically when the invite is consumed.
-- **Configurable expiry** — defaults to 7 days, max 365.
+## Out of scope for slice 1 (planned)
 
-A new invite copies its URL to the clipboard immediately. The invitee opens the link, signs in (or signs up via SSO), and is redirected to `/dashboard` with the role attached. Invites can be revoked at any time.
-
-## AI Workspace
-
-`/ai` is a working playground that exercises every AI component pattern from the showcase in one screen:
-
-- Traditional chatbot with typing indicator
-- Quick-action prompts (structured chatbot)
-- Agent-assist suggestions that surface as you type keywords like `password`, `refund`, `ticket`
-- Voice recording UI (waveform + timer) and per-message voice playback
-- Inline AI summary card and AI-annotated metric (headless chatbot)
-- Live knowledge-base highlighting based on the composer input
-- Helpful / not-helpful feedback and source citations on every assistant message
-
-The replies come from a `fakeAnswer()` stub in `src/app/(app)/ai/ai-workspace.tsx` — swap it for a real LLM call (e.g. an `/api/ai` route) when wiring up your backend.
-
-## Showcase
-
-The component gallery, design system, and template mocks from the original Scicom Design Hub are kept at `/showcase/*` for reference. Delete `src/app/showcase/` if you don't need them.
+- Multi-turn conversation generation (architecture supports `parentId`, branching,
+  but UI is linear)
+- Tool / function calling + mock executor with MyKad / LHDN / Maybank locale presets
+- Judge-LLM validators (per-axis rubrics, sampled at e.g. 10%)
+- Annotation UI (`/projects/[id]/annotate`)
+- Embedding-based dedup (pgvector)
+- ShareGPT / Alpaca / Parquet / HF Hub push exporters
+- Cost budgets per team
+- Adversarial / red-team slice presets
+- Diversity dashboards
+- Jawi / Tamil-script / Hans generation paths (schema supports them; lang-ID and
+  validators currently focus on Latin-script outputs)
 
 ## Tech stack
 
-- [Next.js 16](https://nextjs.org)
-- [React 19](https://react.dev)
-- [Auth.js v5](https://authjs.dev)
-- [Prisma 6](https://www.prisma.io) + Postgres
-- [Tailwind CSS v4](https://tailwindcss.com)
-- [Radix UI](https://www.radix-ui.com)
+- [Next.js 16](https://nextjs.org) + React 19 + Tailwind v4 + Radix UI
+- [Auth.js v5](https://authjs.dev) — credentials, Azure AD, Google, Keycloak, SAML
+- [Prisma 6](https://www.prisma.io) + Postgres 14+
+- Python 3.11+ + [FastAPI](https://fastapi.tiangolo.com) + [asyncpg](https://magicstack.github.io/asyncpg/)
+- [lingua-py](https://github.com/pemistahl/lingua-py) for language detection
+- [httpx](https://www.python-httpx.org/) for OpenAI-compat calls
+- [cryptography](https://cryptography.io/) for AES-256-GCM (matching Node's `crypto`)
+
+## Default credentials
+
+After `npm run db:seed`:
+
+| Email | Password |
+|---|---|
+| `admin@example.com` | `admin1234` |
+
+**Change these before deploying anywhere reachable.** Override with
+`SEED_ADMIN_EMAIL` / `SEED_ADMIN_PASSWORD` before seeding.

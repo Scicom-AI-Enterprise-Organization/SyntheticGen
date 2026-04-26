@@ -39,7 +39,11 @@ async function loadUserAccess(userId: string) {
   return { roles, permissions };
 }
 
-const providers = [
+// Use a wide provider type so the array accepts both Credentials and the
+// various SSO OAuth/OIDC providers below; NextAuth itself accepts any
+// provider config from its `providers/*` modules.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const providers: any[] = [
   Credentials({
     name: "Email and password",
     credentials: {

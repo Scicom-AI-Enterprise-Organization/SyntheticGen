@@ -1,8 +1,8 @@
 import Link from "next/link";
-import { redirect } from "next/navigation";
 import { auth } from "@/lib/auth";
 import { prisma } from "@/lib/db";
 import { Button } from "@/components/ui/button";
+import { RegisterForm } from "./register-form";
 
 export default async function InvitePage({
   params,
@@ -14,7 +14,7 @@ export default async function InvitePage({
 
   const invite = await prisma.invitation.findUnique({
     where: { token },
-    include: { role: true },
+    include: { role: true, invitedBy: { select: { email: true, name: true } } },
   });
 
   if (!invite) return <InviteState title="Invalid invitation" body="This link is not recognized." />;
@@ -24,8 +24,19 @@ export default async function InvitePage({
     return <InviteState title="Invitation expired" body="Ask the sender to issue a new link." />;
   }
 
+  // Unauth: render the register form so the user can create an account in one shot.
+  // The footer of the form links to /login for users who already have an account.
   if (!session?.user?.id) {
-    redirect(`/login?callbackUrl=${encodeURIComponent(`/invite/${token}`)}`);
+    const inviterLabel =
+      invite.invitedBy?.name ?? invite.invitedBy?.email ?? "Someone on the team";
+    return (
+      <RegisterForm
+        token={token}
+        inviteEmail={invite.email ?? null}
+        inviterLabel={inviterLabel}
+        roleName={invite.role?.name ?? null}
+      />
+    );
   }
 
   if (invite.email && invite.email.toLowerCase() !== session.user.email?.toLowerCase()) {
@@ -74,7 +85,7 @@ function InviteState({
   cta,
 }: {
   title: string;
-  body: string;
+  body: React.ReactNode;
   cta?: React.ReactNode;
 }) {
   return (

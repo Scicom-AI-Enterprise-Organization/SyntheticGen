@@ -118,19 +118,16 @@ export function LoginForm({ callbackUrl, error, providers }: LoginFormProps) {
         />
         <div className="absolute inset-0 bg-black/40" />
         <div className="relative z-10 flex h-full flex-col justify-between p-10">
-          <div className="text-xl font-bold tracking-tight text-white">
-            Enterprise Template
-          </div>
+          <div className="text-xl font-bold tracking-tight text-white">SyntheticGen</div>
           <div>
             <h2 className="text-3xl font-bold text-white">Welcome back</h2>
             <p className="mt-3 max-w-sm text-sm text-white/80">
-              Sign in to access your dashboard, manage users, and configure roles
-              and permissions.
+              Sign in to manage projects, kick off generation runs, and review
+              Malaysia-focused synthetic datasets.
             </p>
-            <div className="mt-8 flex gap-8">
-              <Stat value="RBAC" label="Roles & permissions" />
-              <Stat value="SSO" label="Azure · Google · Keycloak · SAML" />
-              <Stat value="JWT" label="Stateless sessions" />
+            <div className="mt-8 flex gap-6">
+              <Stat value="MS · EN · ZH · TA" label="Multilingual + Bahasa Rojak" />
+              <Stat value="Formality lock" label="Enterprise Bahasa Baku" />
             </div>
           </div>
         </div>

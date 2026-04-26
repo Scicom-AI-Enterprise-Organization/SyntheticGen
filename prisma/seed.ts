@@ -11,12 +11,19 @@ const PERMISSIONS = [
   { key: "roles:write", description: "Manage roles and permissions" },
   { key: "invites:read", description: "View invitations" },
   { key: "invites:write", description: "Create and revoke invitations" },
+  { key: "projects:read", description: "List and view projects" },
+  { key: "projects:write", description: "Create and update projects" },
+  { key: "projects:delete", description: "Archive projects" },
+  { key: "providers:read", description: "View provider credentials" },
+  { key: "providers:write", description: "Manage provider credentials" },
+  { key: "audit:read", description: "View audit log" },
 ];
 
 const ROLES: Record<string, string[]> = {
   admin: PERMISSIONS.map((p) => p.key),
-  member: [],
+  member: ["projects:read", "projects:write"],
 };
+
 
 async function main() {
   for (const p of PERMISSIONS) {

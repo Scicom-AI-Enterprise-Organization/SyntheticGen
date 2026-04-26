@@ -24,6 +24,15 @@ model User {
 
   invitesSent     Invitation[] @relation("InvitedBy")
   invitesAccepted Invitation[] @relation("AcceptedBy")
+
+  projectsCreated     Project[]            @relation("ProjectCreatedBy")
+  projectMemberships  ProjectMember[]
+  projectMembersAdded ProjectMember[]      @relation("ProjectMemberAddedBy")
+  providersCreated    ProviderCredential[]
+  runsCreated         GenerationRun[]
+  datasetVersions     DatasetVersion[]
+  exportsCreated      ExportArtifact[]
+  auditLog            AuditLogEntry[]
 }
 
 model Account {
@@ -118,4 +127,564 @@ model RolePermission {
   permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
 
   @@id([roleId, permissionId])
+}
+
+// =====================================================================
+// SyntheticGen
+// =====================================================================
+
+enum ProjectRole {
+  OWNER
+  EDITOR
+  ANNOTATOR
+  VIEWER
+}
+
+model Project {
+  id               String    @id @default(cuid())
+  slug             String    @unique
+  name             String
+  description      String?
+  // Default formality applied when LanguageProfile / Persona / Run leave it unset.
+  defaultFormality String    @default("formal")
+  archivedAt       DateTime?
+  createdById      String
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  createdBy        User                 @relation("ProjectCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  members          ProjectMember[]
+  taxonomies       Taxonomy[]
+  personas         Persona[]
+  languageProfiles LanguageProfile[]
+  toolCatalogs     ToolCatalog[]
+  templates        PromptTemplate[]
+  providers        ProviderCredential[]
+  runs             GenerationRun[]
+  conversations    Conversation[]
+  datasets         Dataset[]
+  auditLog         AuditLogEntry[]
+
+  @@index([createdById])
+  @@index([archivedAt])
+}
+
+model ProjectMember {
+  projectId String
+  userId    String
+  role      ProjectRole @default(VIEWER)
+  addedAt   DateTime    @default(now())
+  addedById String?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  addedBy User?   @relation("ProjectMemberAddedBy", fields: [addedById], references: [id], onDelete: SetNull)
+
+  @@id([projectId, userId])
+  @@index([userId])
+}
+
+model Taxonomy {
+  id          String   @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  nodes   TaxonomyNode[]
+
+  @@unique([projectId, name])
+}
+
+model TaxonomyNode {
+  id         String   @id @default(cuid())
+  taxonomyId String
+  parentId   String?
+  name       String
+  slug       String
+  // Materialized path "/root/billing/refunds" for prefix queries.
+  path       String
+  depth      Int
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  taxonomy Taxonomy       @relation(fields: [taxonomyId], references: [id], onDelete: Cascade)
+  parent   TaxonomyNode?  @relation("TaxonomyNodeChildren", fields: [parentId], references: [id], onDelete: Cascade)
+  children TaxonomyNode[] @relation("TaxonomyNodeChildren")
+
+  conversations Conversation[]
+  runUsages     RunTaxonomyNode[]
+
+  @@unique([taxonomyId, parentId, slug])
+  @@index([taxonomyId, path])
+}
+
+// First-class language/script/code-switch policy.
+// Personas reference one; runs may override.
+model LanguageProfile {
+  id        String  @id @default(cuid())
+  projectId String
+  name      String
+  // ISO primary language: ms, en, zh, ta.
+  primary   String
+  // Secondary languages used in code-switching.
+  secondary String[]
+  // latin | jawi | hans | hant | tamil
+  script    String  @default("latin")
+
+  // none | inter-sentential | intra-sentential | rojak
+  codeSwitchPolicy String  @default("none")
+  codeSwitchRate   Float?
+
+  // formal | semi-formal | colloquial | mixed
+  register             String  @default("formal")
+  // Master switch — when false, particles are stripped/banned.
+  allowParticles       Boolean @default(false)
+  // Manglish/Bahasa Rojak particle blocklist applied when allowParticles=false.
+  bannedTokens         String[]
+  // Regex blocklist for harder cases.
+  bannedPatterns       String[]
+  // When true, validator additionally rejects spelling shortcuts (tak/je/dah/mcm).
+  requireBahasaBaku    Boolean @default(false)
+  // forbid | allowlist | free
+  englishLoanwordPolicy String @default("free")
+  // Allowlist of English loanwords permitted when policy=allowlist (e.g. router, bil).
+  loanwordAllowlist    String[]
+
+  dialectHints       String[]
+  formalityDefault   String?
+  notes              String?
+  isPreset           Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project  Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  personas Persona[]
+  runs     GenerationRun[]
+
+  @@unique([projectId, name])
+}
+
+// Malaysia-rich; most fields nullable so partial personas are valid.
+model Persona {
+  id          String  @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+
+  // malay | chinese | indian | iban | kadazan | orang-asli | mixed | other
+  ethnicity String?
+  // kl | selangor | penang | johor | kelantan | terengganu | kedah | perak | sabah | sarawak | ...
+  region    String?
+  // urban | suburban | kampung
+  urbanity  String?
+  // 13-17 | 18-24 | 25-34 | 35-49 | 50-64 | 65+
+  ageRange  String?
+  gender    String?
+  occupation String?
+  // baku | colloquial | manglish | mixed
+  formality String?
+  // Flag rather than storing religion; gates halal/prayer-time content.
+  religionAware Boolean @default(false)
+  dialectTags   String[]
+
+  languageProfileId String?
+
+  // Overflow (verbosity, politeness, code-switch frequency, common interjections).
+  traits Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project         Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  languageProfile LanguageProfile? @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
+  conversations   Conversation[]
+  runUsages       RunPersona[]
+
+  @@unique([projectId, name])
+  @@index([projectId])
+}
+
+model ToolCatalog {
+  id          String   @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  tools   ToolDef[]
+
+  @@unique([projectId, name])
+}
+
+model ToolDef {
+  id          String  @id @default(cuid())
+  catalogId   String
+  // Function name (mykad_lookup, lhdn_efile_status, maybank2u_transfer).
+  name        String
+  description String
+  parameters  Json
+  // Schema for the fake executor to generate realistic responses.
+  mockResponseSchema Json?
+  // Example response keyed values (e.g. valid MyKad pattern, MYR formatting).
+  mockSeed           Json?
+  // Tags like mykad, lhdn, maybank, tng, duitnow.
+  localePresets      String[]
+  // Bumps on schema change so old runs replay deterministically.
+  version            Int      @default(1)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  catalog ToolCatalog @relation(fields: [catalogId], references: [id], onDelete: Cascade)
+
+  @@unique([catalogId, name, version])
+}
+
+model PromptTemplate {
+  id              String  @id @default(cuid())
+  projectId       String
+  name            String
+  description     String?
+  // system | user-seed | judge | conversation-driver
+  kind            String  @default("user-seed")
+  body            String
+  variableSchema  Json?
+  fewShotExamples Json?
+  version         Int     @default(1)
+  parentTemplateId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project        Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  parentTemplate PromptTemplate?  @relation("PromptTemplateLineage", fields: [parentTemplateId], references: [id], onDelete: SetNull)
+  forks          PromptTemplate[] @relation("PromptTemplateLineage")
+  runs           GenerationRun[]
+
+  @@unique([projectId, name, version])
+}
+
+model ProviderCredential {
+  id              String   @id @default(cuid())
+  projectId       String
+  name            String
+  // openai | vllm | together | openrouter | sglang | anthropic-proxy | custom
+  kind            String   @default("openai")
+  baseUrl         String
+  // AES-256-GCM ciphertext of the API key (nonce | tag | ct).
+  encryptedApiKey Bytes
+  // Last-4 + hash for UI display.
+  keyFingerprint  String
+  defaultModel    String?
+  headers         Json?
+  createdById     String
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User    @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  runs GenerationRun[]
+
+  @@unique([projectId, name])
+}
+
+model GenerationRun {
+  id          String  @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+  // draft | queued | running | paused | completed | failed | cancelled
+  status      String  @default("draft")
+
+  // Frozen at start: model, sampling params, taxonomy IDs, persona IDs,
+  // language profile IDs, difficulty levels, target rows per cell, validation config.
+  configSnapshot Json
+
+  providerCredentialId String?
+  templateId           String?
+  languageProfileId    String?
+  model                String
+  // temperature, top_p, max_tokens, seed.
+  samplingParams       Json
+  // { taxonomyNodes: [...], personas: [...], difficulties: [...], rowsPerCell: N }
+  gridSpec             Json
+  // formal | semi-formal | colloquial | mixed | inherit
+  formalityPolicy      String  @default("inherit")
+
+  targetCount   Int       @default(0)
+  producedCount Int       @default(0)
+  acceptedCount Int       @default(0)
+  costUsd       Decimal?  @db.Decimal(12, 6)
+  tokensIn      BigInt    @default(0)
+  tokensOut     BigInt    @default(0)
+  startedAt     DateTime?
+  completedAt   DateTime?
+  // Last enqueued cursor for resume.
+  checkpointState Json?
+
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project            Project             @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy          User                @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  providerCredential ProviderCredential? @relation(fields: [providerCredentialId], references: [id], onDelete: SetNull)
+  template           PromptTemplate?     @relation(fields: [templateId], references: [id], onDelete: SetNull)
+  languageProfile    LanguageProfile?    @relation(fields: [languageProfileId], references: [id], onDelete: SetNull)
+
+  jobs          GenerationJob[]
+  conversations Conversation[]
+  taxonomyNodes RunTaxonomyNode[]
+  personas      RunPersona[]
+
+  @@index([projectId, status, createdAt(sort: Desc)])
+}
+
+model RunTaxonomyNode {
+  runId          String
+  taxonomyNodeId String
+
+  run  GenerationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  node TaxonomyNode  @relation(fields: [taxonomyNodeId], references: [id], onDelete: Cascade)
+
+  @@id([runId, taxonomyNodeId])
+}
+
+model RunPersona {
+  runId     String
+  personaId String
+
+  run     GenerationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  persona Persona       @relation(fields: [personaId], references: [id], onDelete: Cascade)
+
+  @@id([runId, personaId])
+}
+
+// One cell of the grid; resumable unit of work.
+model GenerationJob {
+  id      String  @id @default(cuid())
+  runId   String
+  // taxonomy:abc|persona:xyz|difficulty:hard|idx:7 — unique within run.
+  cellKey String
+  // pending | running | succeeded | failed | skipped
+  status  String  @default("pending")
+  attempts Int    @default(0)
+  lastError String?
+  // Rendered prompt + tool catalog + persona context for replay.
+  inputContext   Json?
+  conversationId String?
+  tokensIn       Int     @default(0)
+  tokensOut      Int     @default(0)
+  costUsd        Decimal? @db.Decimal(10, 6)
+  latencyMs      Int?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  run          GenerationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@unique([runId, cellKey])
+  @@index([runId, status])
+}
+
+model Conversation {
+  id              String  @id @default(cuid())
+  projectId       String
+  runId           String?
+  taxonomyNodeId  String?
+  personaId       String?
+
+  // Denormalized for query performance — populated by lang-ID validator.
+  primaryLanguage String?
+  primaryScript   String?
+  difficulty      String?
+  turnCount       Int     @default(0)
+  tokenCount      Int     @default(0)
+
+  // generated | accepted | rejected | flagged | annotated
+  status   String   @default("generated")
+  // Content hash for cheap exact-dup detection.
+  dedupHash String?
+  metadata Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  run          GenerationRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
+  taxonomyNode TaxonomyNode? @relation(fields: [taxonomyNodeId], references: [id], onDelete: SetNull)
+  persona      Persona?      @relation(fields: [personaId], references: [id], onDelete: SetNull)
+
+  messages    Message[]
+  validations Validation[]
+  jobs        GenerationJob[]
+  versionLinks DatasetVersionConversation[]
+
+  @@index([projectId, status, createdAt(sort: Desc)])
+  @@index([runId])
+  @@index([dedupHash])
+}
+
+model Message {
+  id             String  @id @default(cuid())
+  conversationId String
+  parentId       String?
+  ordinal        Int
+
+  // system | user | assistant | tool
+  role        String
+  content     String?
+  // [{id, name, arguments}]
+  toolCalls   Json?
+  toolCallId  String?
+  // Dominant language tag (auto-filled by lang-ID validator).
+  language    String?
+  // [{start, end, lang, script}] for code-switch lineage.
+  languageSpans Json?
+  script      String?
+  tokenCount  Int?
+  latencyMs   Int?
+  // Per-turn provenance for mixed-model traces.
+  model       String?
+  // Full API response for replay/debugging.
+  rawProviderResponse Json?
+
+  createdAt DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  parent       Message?     @relation("MessageBranch", fields: [parentId], references: [id], onDelete: SetNull)
+  children     Message[]    @relation("MessageBranch")
+
+  @@index([conversationId, ordinal])
+  @@index([parentId])
+}
+
+model Validation {
+  id             String  @id @default(cuid())
+  conversationId String
+  // schema | langid | regex | ngram-repetition | profanity | judge-llm | tool-arg-schema | register-compliance
+  validatorKind  String
+  // correctness | naturalness | language-fidelity | code-switch-realism | tool-arg-validity | safety | register
+  axis           String
+  // pass | fail | warn
+  verdict        String
+  score          Float?
+  // Diagnostic payload (e.g. detected vs target language, failed JSON Schema path, judge rationale).
+  details        Json?
+  judgeModel     String?
+  judgePromptTemplateId String?
+  costUsd        Decimal? @db.Decimal(10, 6)
+  latencyMs      Int?
+
+  createdAt DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId, axis])
+}
+
+model Dataset {
+  id               String  @id @default(cuid())
+  projectId        String
+  name             String
+  description      String?
+  currentVersionId String? @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project        Project          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  versions       DatasetVersion[] @relation("DatasetVersions")
+  currentVersion DatasetVersion?  @relation("DatasetCurrentVersion", fields: [currentVersionId], references: [id], onDelete: SetNull)
+
+  @@unique([projectId, name])
+}
+
+model DatasetVersion {
+  id              String   @id @default(cuid())
+  datasetId       String
+  // semver-ish, e.g. 0.1.0
+  version         String
+  description     String?
+  changelog       String?
+  frozenAt        DateTime @default(now())
+  frozenById      String
+  // Diff/lineage chain.
+  parentVersionId String?
+  // Counts by language/persona/difficulty captured at freeze time.
+  stats           Json?
+
+  dataset       Dataset                       @relation("DatasetVersions", fields: [datasetId], references: [id], onDelete: Cascade)
+  frozenBy      User                          @relation(fields: [frozenById], references: [id], onDelete: Restrict)
+  parentVersion DatasetVersion?               @relation("DatasetVersionLineage", fields: [parentVersionId], references: [id], onDelete: SetNull)
+  children      DatasetVersion[]              @relation("DatasetVersionLineage")
+  conversations DatasetVersionConversation[]
+  exports       ExportArtifact[]
+  pinnedBy      Dataset?                      @relation("DatasetCurrentVersion")
+
+  @@unique([datasetId, version])
+}
+
+// Explicit join enforces FK; deletion of source conversations is restricted while referenced.
+model DatasetVersionConversation {
+  datasetVersionId String
+  conversationId   String
+  addedAt          DateTime @default(now())
+
+  datasetVersion DatasetVersion @relation(fields: [datasetVersionId], references: [id], onDelete: Cascade)
+  conversation   Conversation   @relation(fields: [conversationId], references: [id], onDelete: Restrict)
+
+  @@id([datasetVersionId, conversationId])
+}
+
+model ExportArtifact {
+  id               String   @id @default(cuid())
+  datasetVersionId String
+  // openai-jsonl | sharegpt | alpaca | parquet | hf-hub
+  format           String
+  // local | s3 | hf
+  storageKind      String   @default("local")
+  storagePath      String
+  byteSize         BigInt?
+  rowCount         Int?
+  checksumSha256   String?
+  // building | ready | failed
+  status           String   @default("building")
+  createdById      String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  datasetVersion DatasetVersion @relation(fields: [datasetVersionId], references: [id], onDelete: Cascade)
+  createdBy      User           @relation(fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@index([datasetVersionId, format])
+}
+
+model AuditLogEntry {
+  id          String   @id @default(cuid())
+  projectId   String?
+  actorUserId String?
+  actorIp     String?
+  // project.create | run.start | run.cancel | dataset.freeze | provider.create | provider.delete | export.create | ...
+  action      String
+  targetKind  String?
+  targetId    String?
+  metadata    Json?
+  createdAt   DateTime @default(now())
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+  actor   User?    @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt(sort: Desc)])
+  @@index([actorUserId, createdAt(sort: Desc)])
 }

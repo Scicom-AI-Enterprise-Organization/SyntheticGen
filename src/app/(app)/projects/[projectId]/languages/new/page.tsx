@@ -1,0 +1,65 @@
+import { prisma } from "@/lib/db";
+import { requireProjectPermission } from "@/lib/project-rbac";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import { ProfileEditor } from "../profile-editor";
+
+export default async function NewLanguageProfilePage({
+  params,
+}: {
+  params: Promise<{ projectId: string }>;
+}) {
+  const { projectId } = await params;
+  await requireProjectPermission(projectId, "languages.write");
+
+  const providers = await prisma.providerCredential.findMany({
+    where: { projectId },
+    orderBy: { name: "asc" },
+    select: { id: true, name: true, defaultModel: true },
+  });
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">New language profile</h1>
+      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Profile</CardTitle>
+          <CardDescription>
+            Build a custom (language × script × register × code-switch) policy. For TM-style enterprise
+            data, set <code>register=formal</code>, turn off particles, and require Bahasa Baku.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <ProfileEditor
+            projectId={projectId}
+            providers={providers}
+            initial={{
+              name: "",
+              primary: "ms",
+              secondary: ["en"],
+              script: "latin",
+              codeSwitchPolicy: "none",
+              codeSwitchRate: null,
+              register: "formal",
+              allowParticles: false,
+              bannedTokens: [],
+              bannedPatterns: [],
+              requireBahasaBaku: false,
+              englishLoanwordPolicy: "free",
+              loanwordAllowlist: [],
+              dialectHints: [],
+              notes: null,
+            }}
+          />
+        </CardContent>
+      </Card>
+    </div>
+  );
+}

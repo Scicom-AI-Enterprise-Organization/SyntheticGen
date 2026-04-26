@@ -18,8 +18,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Enterprise Template",
-  description: "Next.js enterprise starter with RBAC and SSO",
+  title: "SyntheticGen",
+  description: "Malaysia-focused synthetic dataset generator for LLM fine-tuning",
 };
 
 export default function RootLayout({
