@@ -52,7 +52,7 @@ export default async function LanguagesPage({
           <CardDescription>
             <Sparkles className="mr-1 inline h-3 w-3" />
             Presets are highlighted. Edit any profile to customise banned tokens, loanword policy,
-            or Bahasa Baku enforcement.
+            or Formal Malay enforcement.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -69,7 +69,7 @@ export default async function LanguagesPage({
               codeSwitchPolicy: p.codeSwitchPolicy,
               codeSwitchRate: p.codeSwitchRate,
               allowParticles: p.allowParticles,
-              requireBahasaBaku: p.requireBahasaBaku,
+              requireFormalMalay: p.requireFormalMalay,
               englishLoanwordPolicy: p.englishLoanwordPolicy,
               isPreset: p.isPreset,
               bannedTokenCount: p.bannedTokens.length,

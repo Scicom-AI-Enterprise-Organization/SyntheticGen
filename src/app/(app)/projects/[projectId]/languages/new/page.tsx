@@ -33,7 +33,7 @@ export default async function NewLanguageProfilePage({
           <CardTitle>Profile</CardTitle>
           <CardDescription>
             Build a custom (language × script × register × code-switch) policy. For TM-style enterprise
-            data, set <code>register=formal</code>, turn off particles, and require Bahasa Baku.
+            data, set <code>register=formal</code>, turn off particles, and require Formal Malay.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -51,7 +51,7 @@ export default async function NewLanguageProfilePage({
               allowParticles: false,
               bannedTokens: [],
               bannedPatterns: [],
-              requireBahasaBaku: false,
+              requireFormalMalay: false,
               englishLoanwordPolicy: "free",
               loanwordAllowlist: [],
               dialectHints: [],

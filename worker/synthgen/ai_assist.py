@@ -14,7 +14,7 @@ from typing import Any
 from . import db
 from .crypto import decrypt_secret
 from .providers import chat_completion
-from .presets import MANGLISH_PARTICLES, BAHASA_BAKU_SHORTCUTS, TELCO_LOANWORD_ALLOWLIST
+from .presets import MANGLISH_PARTICLES, FORMAL_MALAY_SHORTCUTS, TELCO_LOANWORD_ALLOWLIST
 
 
 log = logging.getLogger(__name__)
@@ -55,7 +55,7 @@ LANGUAGE_PROFILE_FIELDS = f"""\
   "allowParticles": true_or_false,
   "bannedTokens": ["lowercase tokens to ban — for formal MS use {MANGLISH_PARTICLES[:6]}..."],
   "bannedPatterns": ["regex patterns, optional"],
-  "requireBahasaBaku": true_or_false,
+  "requireFormalMalay": true_or_false,
   "englishLoanwordPolicy": "one of: forbid | allowlist | free",
   "loanwordAllowlist": ["English loanwords permitted, e.g. {TELCO_LOANWORD_ALLOWLIST[:5]}"],
   "dialectHints": ["e.g. kelantan, manglish"],
@@ -92,12 +92,64 @@ TOOL_DEF_FIELDS = """\
 `parameters` MUST be a valid JSON Schema object describing the function arguments.
 """
 
+FLOW_GRAPH_FIELDS = """\
+A conversation flow as a directed graph. Return ONLY this JSON object:
+
+{
+  "nodes": [
+    {
+      "id": "snake_case_id",
+      "type": "start | intent | action | condition | end",
+      "data": { ...node-kind-specific... }
+    },
+    ...
+  ],
+  "edges": [
+    {
+      "id": "e1",
+      "source": "<node id>",
+      "target": "<node id>",
+      "label": "optional short label, e.g. tool.success | user_confirms"
+    },
+    ...
+  ]
+}
+
+Per-node `data` shapes:
+
+  start:     { "label": "Start" }
+  intent:    { "label": "Short title", "description": "1 sentence", "examples": ["utterance", ...] }   // 1-4 examples
+  action:    { "label": "Short title", "description": "What the assistant does", "toolIds": [...], "toolMode": "sequential | parallel" }
+  condition: { "label": "Short title", "expression": "free-text condition" }
+  end:       { "label": "Closing label", "outcome": "resolved | escalated | abandoned" }
+
+Constraints (HARD):
+- Exactly one node with type=start.
+- Every edge.source and edge.target MUST reference an existing node.id.
+- For action.toolIds, ONLY use tool IDs from AVAILABLE_TOOLS in the user message. If no
+  relevant tool is available, leave toolIds empty (the assistant will respond in plain text).
+- Use short snake_case node IDs derived from the label (e.g. "intent_modem_outage",
+  "action_lookup_account").
+- DO NOT include node positions; the UI auto-layouts.
+- DO NOT wrap the JSON in prose, markdown fences, or comments.
+
+Modeling guidance:
+- Branch on condition nodes when downstream behavior depends on tool results or user
+  response. Label each outgoing edge with the case (e.g. "tool.success", "tool.not_found",
+  "yes", "no").
+- Multi-call turns: put multiple tools on a single Action node's toolIds. Use
+  toolMode=sequential when later calls depend on earlier results, parallel when independent.
+- Every flow must reach at least one end node from start.
+- Prefer clarity over completeness — 5-15 nodes is usually right.
+"""
+
 KIND_FIELDS: dict[str, str] = {
     "persona": PERSONA_FIELDS,
     "taxonomy-node": TAXONOMY_NODE_FIELDS,
     "language-profile": LANGUAGE_PROFILE_FIELDS,
     "prompt-template": PROMPT_TEMPLATE_FIELDS,
     "tool-def": TOOL_DEF_FIELDS,
+    "flow-graph": FLOW_GRAPH_FIELDS,
 }
 
 
@@ -113,7 +165,7 @@ The object MUST conform to this field shape (omit a field rather than guess):
 
 Defaults / hints:
 - For Malaysian enterprise / TM-style scenarios: register=formal, allowParticles=false,
-  requireBahasaBaku=true, englishLoanwordPolicy=allowlist with telco terms
+  requireFormalMalay=true, englishLoanwordPolicy=allowlist with telco terms
   (router, modem, bil, bandwidth, internet, wifi).
 - For casual Malaysian content (social media, B2C marketing): register=colloquial,
   allowParticles=true, codeSwitchPolicy=intra-sentential, codeSwitchRate=0.3-0.5.

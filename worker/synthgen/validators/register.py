@@ -1,14 +1,14 @@
 """Register-compliance validator — the enterprise (TM-style) enforcement layer.
 
 Catches Manglish particles, SMS shortcuts, and unallowed English loanwords. This is
-the cheap-but-load-bearing piece that makes formal Bahasa Baku datasets actually formal.
+the cheap-but-load-bearing piece that makes Formal Malay datasets actually formal.
 """
 from __future__ import annotations
 
 import re
 
 from ..malay_words import is_likely_malay
-from ..presets import BAHASA_BAKU_SHORTCUTS
+from ..presets import FORMAL_MALAY_SHORTCUTS
 from .base import ValidationResult, ValidatorContext
 
 
@@ -76,9 +76,9 @@ def validate_register_compliance(text: str, ctx: ValidatorContext) -> list[Valid
                 )
             )
 
-    # 3. Bahasa Baku — reject SMS shortcuts when enforced.
-    if ctx.require_bahasa_baku and ctx.primary_language == "ms":
-        pat = _compile_word_blocklist(BAHASA_BAKU_SHORTCUTS)
+    # 3. Formal Malay — reject SMS shortcuts when enforced.
+    if ctx.require_formal_malay and ctx.primary_language == "ms":
+        pat = _compile_word_blocklist(FORMAL_MALAY_SHORTCUTS)
         if pat:
             hits = pat.findall(text)
             if hits:
@@ -88,7 +88,7 @@ def validate_register_compliance(text: str, ctx: ValidatorContext) -> list[Valid
                         axis="register",
                         verdict="fail",
                         details={
-                            "reason": "bahasa_baku_shortcut",
+                            "reason": "formal_malay_shortcut",
                             "hits": list(set(h.lower() for h in hits)),
                             "count": len(hits),
                         },

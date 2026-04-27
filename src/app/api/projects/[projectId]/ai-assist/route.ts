@@ -13,6 +13,7 @@ const KIND_TO_ACTION = {
   "language-profile": "languages.write",
   "prompt-template": "templates.write",
   "tool-def": "tools.write",
+  "flow-graph": "flows.write",
 } as const;
 
 const bodySchema = z.object({
@@ -22,11 +23,13 @@ const bodySchema = z.object({
     "language-profile",
     "prompt-template",
     "tool-def",
+    "flow-graph",
   ]),
   prompt: z.string().min(3).max(4000),
   providerId: z.string(),
   model: z.string().optional().nullable(),
-  extraContext: z.string().max(4000).optional().nullable(),
+  // flow-graph passes the project's tool catalog as extraContext, which can be larger.
+  extraContext: z.string().max(16000).optional().nullable(),
 });
 
 export async function POST(

@@ -33,7 +33,7 @@ def run_pipeline(text: str, ctx: ValidatorContext) -> list[ValidationResult]:
     lang_results = validate_language(text, ctx)
     results.extend(lang_results)
 
-    # 3. Register compliance — Manglish particle ban, Bahasa Baku, loanword policy.
+    # 3. Register compliance — Manglish particle ban, Formal Malay, loanword policy.
     results.extend(validate_register_compliance(text, ctx))
 
     # 4. Repetition / quality heuristics.

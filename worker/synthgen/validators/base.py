@@ -35,7 +35,7 @@ class ValidatorContext:
     allow_particles: bool
     banned_tokens: list[str]
     banned_patterns: list[str]
-    require_bahasa_baku: bool
+    require_formal_malay: bool
     english_loanword_policy: str
     loanword_allowlist: list[str]
     code_switch_policy: str

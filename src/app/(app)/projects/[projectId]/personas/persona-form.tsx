@@ -72,7 +72,7 @@ export function PersonaForm({
       return `Persona formality "${formality}" expects Manglish, but the language profile "${selectedLP.name}" bans particles. The validator will reject most outputs.`;
     }
     if (formality === "baku" && selectedLP.allowParticles) {
-      return `Persona is set to Bahasa Baku but the language profile permits particles — outputs may drift colloquial.`;
+      return `Persona is set to Formal Malay but the language profile permits particles — outputs may drift colloquial.`;
     }
     return null;
   }, [selectedLP, formality]);

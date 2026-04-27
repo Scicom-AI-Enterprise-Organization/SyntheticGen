@@ -18,7 +18,7 @@ interface Profile {
   codeSwitchPolicy: string;
   codeSwitchRate: number | null;
   allowParticles: boolean;
-  requireBahasaBaku: boolean;
+  requireFormalMalay: boolean;
   englishLoanwordPolicy: string;
   isPreset: boolean;
   bannedTokenCount: number;
@@ -106,7 +106,7 @@ export function LanguageProfilesTable({
                       no particles ({p.bannedTokenCount})
                     </Badge>
                   )}
-                  {p.requireBahasaBaku && (
+                  {p.requireFormalMalay && (
                     <Badge variant="default" className="text-[10px]">
                       Baku
                     </Badge>

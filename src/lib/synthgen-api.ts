@@ -42,7 +42,8 @@ export type AiAssistKind =
   | "taxonomy-node"
   | "language-profile"
   | "prompt-template"
-  | "tool-def";
+  | "tool-def"
+  | "flow-graph";
 
 export interface AiAssistResult {
   ok: boolean;

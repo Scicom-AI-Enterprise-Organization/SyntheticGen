@@ -55,7 +55,7 @@ export default async function EditLanguageProfilePage({
               allowParticles: p.allowParticles,
               bannedTokens: p.bannedTokens,
               bannedPatterns: p.bannedPatterns,
-              requireBahasaBaku: p.requireBahasaBaku,
+              requireFormalMalay: p.requireFormalMalay,
               englishLoanwordPolicy: p.englishLoanwordPolicy as "forbid" | "allowlist" | "free",
               loanwordAllowlist: p.loanwordAllowlist,
               dialectHints: p.dialectHints,

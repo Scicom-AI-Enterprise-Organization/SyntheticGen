@@ -58,7 +58,7 @@ async def bootstrap_project_defaults(project_id: str) -> int:
             preset.allow_particles,
             preset.banned_tokens,
             preset.banned_patterns,
-            preset.require_bahasa_baku,
+            preset.require_formal_malay,
             preset.english_loanword_policy,
             preset.loanword_allowlist,
             preset.dialect_hints,

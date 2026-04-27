@@ -82,7 +82,7 @@ export function TemplateForm({
           projectId={projectId}
           kind="prompt-template"
           providers={providers}
-          placeholder="A user-seed template for telco customer-support inquiries about modem outages, in formal Bahasa Baku, that uses {{persona.name}} and {{taxonomy.path}}."
+          placeholder="A user-seed template for telco customer-support inquiries about modem outages, in Formal Malay, that uses {{persona.name}} and {{taxonomy.path}}."
           onApply={applyAi}
         />
       </div>

@@ -133,7 +133,7 @@ def _resolve_formality(
     return FormalityPolicy(
         register=register,
         allow_particles=allow_particles,
-        require_bahasa_baku=bool(lp.get("requireBahasaBaku", False)),
+        require_formal_malay=bool(lp.get("requireBahasaBaku", False)),
         english_loanword_policy=lp.get("englishLoanwordPolicy") or "free",
         loanword_allowlist=list(lp.get("loanwordAllowlist") or []),
         primary=lp.get("primary") or "ms",
@@ -244,7 +244,7 @@ async def execute_job(job_id: str) -> str:
         allow_particles=policy.allow_particles,
         banned_tokens=list(lp.get("bannedTokens") or []),
         banned_patterns=list(lp.get("bannedPatterns") or []),
-        require_bahasa_baku=policy.require_bahasa_baku,
+        require_formal_malay=policy.require_formal_malay,
         english_loanword_policy=policy.english_loanword_policy,
         loanword_allowlist=policy.loanword_allowlist,
         code_switch_policy=lp.get("codeSwitchPolicy") or "none",

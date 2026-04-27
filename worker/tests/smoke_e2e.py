@@ -5,7 +5,7 @@
 3. Insert a GenerationRun + one GenerationJob.
 4. Run execute_job() once.
 5. Verify a Conversation + Messages + Validations landed.
-6. Assert register-compliance verdict is "pass" (because stub returns clean Bahasa Baku).
+6. Assert register-compliance verdict is "pass" (because stub returns clean Formal Malay).
 
 Then repeat with the "manglish" trigger word and assert a register fail.
 """
@@ -193,7 +193,7 @@ async def main():
         deps = await _ensure_dependencies(conn)
         print(f"  deps ready: {deps}")
 
-        # CASE A — formal lock, stub returns clean Bahasa Baku
+        # CASE A — formal lock, stub returns clean Formal Malay
         run_id, job_id = await _make_run(
             conn, deps, name="smoke-formal", formality_policy="formal",
         )

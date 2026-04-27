@@ -159,6 +159,7 @@ model Project {
   languageProfiles LanguageProfile[]
   toolCatalogs     ToolCatalog[]
   templates        PromptTemplate[]
+  flows            Flow[]
   providers        ProviderCredential[]
   runs             GenerationRun[]
   conversations    Conversation[]
@@ -247,7 +248,7 @@ model LanguageProfile {
   // Regex blocklist for harder cases.
   bannedPatterns       String[]
   // When true, validator additionally rejects spelling shortcuts (tak/je/dah/mcm).
-  requireBahasaBaku    Boolean @default(false)
+  requireFormalMalay   Boolean @default(false) @map("requireBahasaBaku")
   // forbid | allowlist | free
   englishLoanwordPolicy String @default("free")
   // Allowlist of English loanwords permitted when policy=allowlist (e.g. router, bil).
@@ -367,6 +368,35 @@ model PromptTemplate {
   runs           GenerationRun[]
 
   @@unique([projectId, name, version])
+}
+
+// Conversation flow graph — drives multi-turn synthetic generation along a
+// hand-authored DAG (intent → action → branch → terminal). React Flow stores
+// the canonical graph in `nodes` + `edges` JSON; the worker walks paths to
+// produce structured multi-turn samples.
+model Flow {
+  id          String  @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+  // Bumps when nodes/edges change in a way that breaks an in-progress run.
+  version     Int     @default(1)
+  // React Flow node array: [{id, type, position, data}, ...].
+  // `type`: start | intent | action | condition | end
+  nodes       Json
+  // React Flow edge array: [{id, source, target, label?, data?}, ...].
+  edges       Json
+  // Authoring vs. usable-by-runs. Future runs reference Flow.id; we block
+  // run.execute when the flow is unpublished or fails validation.
+  isPublished Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, name])
+  @@index([projectId, isPublished])
 }
 
 model ProviderCredential {

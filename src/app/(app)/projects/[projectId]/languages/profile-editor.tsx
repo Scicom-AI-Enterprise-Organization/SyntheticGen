@@ -37,7 +37,7 @@ interface Initial {
   allowParticles: boolean;
   bannedTokens: string[];
   bannedPatterns: string[];
-  requireBahasaBaku: boolean;
+  requireFormalMalay: boolean;
   englishLoanwordPolicy: "forbid" | "allowlist" | "free";
   loanwordAllowlist: string[];
   dialectHints: string[];
@@ -94,7 +94,7 @@ export function ProfileEditor({
         allowParticles: form.allowParticles,
         bannedTokens: parseCsv(bannedText),
         bannedPatterns: parseCsv(bannedPatternsText),
-        requireBahasaBaku: form.requireBahasaBaku,
+        requireFormalMalay: form.requireFormalMalay,
         englishLoanwordPolicy: form.englishLoanwordPolicy,
         loanwordAllowlist: parseCsv(allowText),
         dialectHints: parseCsv(dialectText),
@@ -130,7 +130,7 @@ export function ProfileEditor({
     if (s("register") && ["formal", "semi-formal", "colloquial", "mixed"].includes(s("register")!))
       set("register", s("register") as Initial["register"]);
     if (b("allowParticles") != null) set("allowParticles", b("allowParticles")!);
-    if (b("requireBahasaBaku") != null) set("requireBahasaBaku", b("requireBahasaBaku")!);
+    if (b("requireFormalMalay") != null) set("requireFormalMalay", b("requireFormalMalay")!);
     if (
       s("englishLoanwordPolicy") &&
       ["forbid", "allowlist", "free"].includes(s("englishLoanwordPolicy")!)
@@ -155,7 +155,7 @@ export function ProfileEditor({
           projectId={projectId}
           kind="language-profile"
           providers={providers}
-          placeholder="A formal Bahasa Baku profile for TM customer-support data: no Manglish particles, no SMS shortcuts, telco loanwords (router, modem, bil, bandwidth) allowed."
+          placeholder="A Formal Malay profile for TM customer-support data: no Manglish particles, no SMS shortcuts, telco loanwords (router, modem, bil, bandwidth) allowed."
           onApply={applyAi}
         />
       </div>
@@ -267,7 +267,7 @@ export function ProfileEditor({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="formal">Formal (Bahasa Baku)</SelectItem>
+                <SelectItem value="formal">Formal (Formal Malay)</SelectItem>
                 <SelectItem value="semi-formal">Semi-formal</SelectItem>
                 <SelectItem value="colloquial">Colloquial (Manglish OK)</SelectItem>
                 <SelectItem value="mixed">Mixed</SelectItem>
@@ -291,11 +291,11 @@ export function ProfileEditor({
           <div className="flex items-center gap-2">
             <Switch
               id="baku"
-              checked={form.requireBahasaBaku}
-              onCheckedChange={(v) => set("requireBahasaBaku", v)}
+              checked={form.requireFormalMalay}
+              onCheckedChange={(v) => set("requireFormalMalay", v)}
             />
             <Label htmlFor="baku" className="cursor-pointer">
-              Require Bahasa Baku (no SMS shortcuts: tak/je/dah/mcm)
+              Require Formal Malay (no SMS shortcuts: tak/je/dah/mcm)
             </Label>
           </div>
 

@@ -127,7 +127,7 @@ export function LoginForm({ callbackUrl, error, providers }: LoginFormProps) {
             </p>
             <div className="mt-8 flex gap-6">
               <Stat value="MS · EN · ZH · TA" label="Multilingual + Bahasa Rojak" />
-              <Stat value="Formality lock" label="Enterprise Bahasa Baku" />
+              <Stat value="Formality lock" label="Enterprise Formal Malay" />
             </div>
           </div>
         </div>

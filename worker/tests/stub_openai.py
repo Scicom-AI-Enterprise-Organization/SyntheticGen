@@ -1,6 +1,6 @@
 """Tiny OpenAI-compatible /chat/completions stub for end-to-end smoke tests.
 
-Returns a fixed Bahasa Baku formal MS reply so register-compliance validates clean,
+Returns a fixed Formal Malay formal MS reply so register-compliance validates clean,
 plus a Manglish reply when the request body asks for it via a magic word.
 """
 from __future__ import annotations

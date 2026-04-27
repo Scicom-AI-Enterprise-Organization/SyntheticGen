@@ -21,8 +21,8 @@ MANGLISH_PARTICLES: list[str] = [
     "eh", "mah", "deh", "geh", "bah",
 ]
 
-# SMS / colloquial shortcuts that fail Bahasa Baku spelling rules.
-BAHASA_BAKU_SHORTCUTS: list[str] = [
+# SMS / colloquial shortcuts that fail Formal Malay spelling rules.
+FORMAL_MALAY_SHORTCUTS: list[str] = [
     "tak", "je", "dah", "mcm", "byk", "dgn", "pd", "utk", "yg", "tu", "ni",
     "kt", "sbb", "skrg", "jgn", "tgk", "btw", "tq", "thx",
 ]
@@ -47,7 +47,7 @@ class LanguageProfilePreset:
     allow_particles: bool = False
     banned_tokens: list[str] = field(default_factory=list)
     banned_patterns: list[str] = field(default_factory=list)
-    require_bahasa_baku: bool = False
+    require_formal_malay: bool = False
     english_loanword_policy: str = "free"
     loanword_allowlist: list[str] = field(default_factory=list)
     dialect_hints: list[str] = field(default_factory=list)
@@ -67,13 +67,13 @@ LANGUAGE_PROFILE_PRESETS: list[LanguageProfilePreset] = [
         allow_particles=False,
         banned_tokens=list(MANGLISH_PARTICLES),
         banned_patterns=[],
-        require_bahasa_baku=True,
+        require_formal_malay=True,
         english_loanword_policy="allowlist",
         loanword_allowlist=list(TELCO_LOANWORD_ALLOWLIST),
         dialect_hints=[],
         formality_default="formal",
         notes=(
-            "Formal Bahasa Melayu Baku for telco / enterprise customer support. "
+            "Formal Malay for telco / enterprise customer support. "
             "No Manglish particles. Limited English loanwords for technical terms."
         ),
     ),
@@ -88,7 +88,7 @@ LANGUAGE_PROFILE_PRESETS: list[LanguageProfilePreset] = [
         allow_particles=True,
         banned_tokens=[],
         banned_patterns=[],
-        require_bahasa_baku=False,
+        require_formal_malay=False,
         english_loanword_policy="free",
         loanword_allowlist=[],
         dialect_hints=["manglish"],

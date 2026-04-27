@@ -247,7 +247,7 @@ export function RunWizard({
         </div>
         <p className="mb-3 text-xs text-muted-foreground">
           Overrides per-persona / per-profile formality for this run only. Use
-          <code className="mx-1">formal</code> to enforce Bahasa Baku enterprise output.
+          <code className="mx-1">formal</code> to enforce Formal Malay enterprise output.
         </p>
         <Select
           value={formalityPolicy}

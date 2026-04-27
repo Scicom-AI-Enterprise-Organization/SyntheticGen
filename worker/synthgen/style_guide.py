@@ -13,7 +13,7 @@ from dataclasses import dataclass
 class FormalityPolicy:
     register: str
     allow_particles: bool
-    require_bahasa_baku: bool
+    require_formal_malay: bool
     english_loanword_policy: str
     loanword_allowlist: list[str]
     primary: str
@@ -24,8 +24,8 @@ def style_guide(policy: FormalityPolicy) -> str:
 
     if policy.register == "formal":
         if policy.primary == "ms":
-            lines.append("Respond in formal Bahasa Melayu Baku.")
-            if policy.require_bahasa_baku:
+            lines.append("Respond in Formal Malay.")
+            if policy.require_formal_malay:
                 lines.append(
                     "Use full standard spelling (e.g. 'tidak' not 'tak', 'sahaja' not 'je', "
                     "'sudah' not 'dah'). Do not use SMS shortcuts."
