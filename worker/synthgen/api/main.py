@@ -5,15 +5,18 @@ Exposes only the internal endpoints Next.js calls. No public endpoints.
 from __future__ import annotations
 
 import asyncio
+import json as _json
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI, Header, HTTPException, status
+from fastapi.responses import StreamingResponse
 
 from pydantic import BaseModel
 
 from .. import db
-from ..ai_assist import ai_assist
+from ..ai_assist import ai_assist, ai_assist_stream
+from ..benchmarks.runner import execute_benchmark_run
 from ..bootstrap import bootstrap_project_defaults
 from ..config import get_settings
 from ..exporter import build_export
@@ -106,6 +109,17 @@ class AiAssistRequest(BaseModel):
     extraContext: str | None = None
 
 
+@app.post("/internal/benchmark-runs/{run_id}/start")
+async def start_benchmark_run(run_id: str, _=Depends(require_internal)):
+    """Kick off a benchmark run as a background task and return immediately.
+
+    The run drives a long-running asyncio task that streams progress into the
+    BenchmarkRun row; the UI polls (or subscribes via SSE) to track it.
+    """
+    asyncio.create_task(execute_benchmark_run(run_id))
+    return {"ok": True, "runId": run_id}
+
+
 @app.post("/internal/ai-assist")
 async def ai_assist_endpoint(req: AiAssistRequest, _=Depends(require_internal)):
     try:
@@ -119,6 +133,26 @@ async def ai_assist_endpoint(req: AiAssistRequest, _=Depends(require_internal)):
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
     return {"ok": True, **result}
+
+
+@app.post("/internal/ai-assist/stream")
+async def ai_assist_stream_endpoint(req: AiAssistRequest, _=Depends(require_internal)):
+    """NDJSON-streamed variant of /internal/ai-assist. Each line is one event."""
+
+    async def gen():
+        try:
+            async for event in ai_assist_stream(
+                kind=req.kind,
+                prompt=req.prompt,
+                provider_id=req.providerId,
+                model=req.model,
+                extra_context=req.extraContext,
+            ):
+                yield _json.dumps(event) + "\n"
+        except Exception as e:  # noqa: BLE001
+            yield _json.dumps({"type": "error", "error": str(e)}) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 def run() -> None:

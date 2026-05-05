@@ -67,9 +67,9 @@ export function ProjectSettingsForm({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="formal">Formal (Formal Malay)</SelectItem>
+              <SelectItem value="formal">Formal</SelectItem>
               <SelectItem value="semi-formal">Semi-formal</SelectItem>
-              <SelectItem value="colloquial">Colloquial (Manglish OK)</SelectItem>
+              <SelectItem value="colloquial">Colloquial</SelectItem>
               <SelectItem value="mixed">Mixed</SelectItem>
             </SelectContent>
           </Select>

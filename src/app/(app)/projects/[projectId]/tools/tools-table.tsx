@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useConfirm } from "@/components/confirm-dialog";
 import { deleteToolDef } from "./actions";
 
 interface Tool {
@@ -26,9 +27,15 @@ export function ToolsTable({
   tools: Tool[];
 }) {
   const [pending, start] = useTransition();
+  const confirm = useConfirm();
 
-  function onDelete(t: Tool) {
-    if (!confirm(`Delete tool "${t.name}"?`)) return;
+  async function onDelete(t: Tool) {
+    const ok = await confirm({
+      title: `Delete tool "${t.name}"?`,
+      body: "Future flow runs that reference this tool by name will fall back to a stub schema.",
+      destructive: true,
+    });
+    if (!ok) return;
     start(async () => {
       const res = await deleteToolDef(projectId, t.id);
       if ("error" in res && (res as { error?: string }).error)

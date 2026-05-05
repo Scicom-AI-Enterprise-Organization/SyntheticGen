@@ -120,7 +120,7 @@ export async function freezeDatasetVersion(input: z.infer<typeof freezeSchema>) 
 const exportSchema = z.object({
   projectId: z.string(),
   versionId: z.string(),
-  format: z.enum(["openai-jsonl"]).default("openai-jsonl"),
+  format: z.enum(["openai-jsonl", "function-call-bench"]).default("openai-jsonl"),
 });
 
 export async function buildDatasetExport(input: z.infer<typeof exportSchema>) {
@@ -139,7 +139,10 @@ export async function buildDatasetExport(input: z.infer<typeof exportSchema>) {
   // Reserve an artifact path the worker will write to.
   const safeDataset = version.dataset.name.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 60);
   const safeVersion = version.version.replace(/[^a-zA-Z0-9_.-]+/g, "_").slice(0, 40);
-  const storagePath = `${parsed.data.projectId}/${safeDataset}-${safeVersion}-${Date.now()}.jsonl`;
+  // Filename suffix encodes the format so multiple exports on the same version are
+  // distinguishable by name alone.
+  const suffix = parsed.data.format === "function-call-bench" ? "fcbench.jsonl" : "openai.jsonl";
+  const storagePath = `${parsed.data.projectId}/${safeDataset}-${safeVersion}-${Date.now()}-${suffix}`;
 
   const artifact = await prisma.exportArtifact.create({
     data: {

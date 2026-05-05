@@ -1,27 +1,44 @@
 # SyntheticGen
 
-Enterprise-grade synthetic dataset generator for LLM fine-tuning, with first-class
-support for **Malaysian languages and registers** — Bahasa Melayu, English, Mandarin,
-Tamil, code-switching (Bahasa Rojak), and a hard-enforced **formality lock** for
-enterprise customers (TM, banks, government) that need Formal Malay output
-with **no Manglish particles** (`lah / lor / meh / kan / kot / wei / doh / eh`).
+Enterprise-grade synthetic dataset generator for LLM fine-tuning, built around
+**localized realism** — any locale, any register, any formality regime.
 
-Built on top of an enterprise Next.js 16 + Auth.js v5 + Prisma + Postgres template,
-with a Python (FastAPI + asyncpg) science backend that owns LLM provider calls,
-validators, generation, and exports.
+The engine is locale-agnostic: `LanguageProfile` rows carry the language(s),
+script, code-switch policy, register, banned tokens, SMS-shortcut blocklist, and
+loanword allowlist. The validator + style-guide + worker read those fields; none
+of them know what language is involved.
+
+**Malaysia is the flagship**: every project ships with two seeded profiles —
+*Enterprise Formal (TM-style)* (Formal Malay, no Manglish particles `lah / lor /
+meh / kan / kot / wei / doh / eh`, telco loanword allowlist) and *Casual
+(Manglish OK)* (full Bahasa Rojak with intra-sentential code-switching). The
+same patterns are how you'd model **French** (`vous` formal vs. `tu` informal,
+ban anglicisms, reject SMS shortcuts like `tkt / svp / bcp`), **German**
+(`Sie` formal vs. `du` informal, anglicism + `lol/mfg/lg` SMS-shortcut bans),
+**Spanish** (`tú/usted/voseo`), **Italian** (`lei/tu`), or any other market —
+just by swapping the seeded data.
+
+Built on Next.js 16 + Auth.js v5 + Prisma + Postgres, with a Python
+(FastAPI + asyncpg) science backend that owns LLM provider calls, validators,
+generation, and exports.
 
 ## What it does
 
-- **Multilingual generation** — single-turn samples (multi-turn via Flows) in
-  Bahasa Melayu, English, Mandarin, Tamil, with first-class code-switching policy
-  (none / inter-sentential / intra-sentential / rojak) and configurable rate.
-- **Formality enforcement** — every project ships with two seeded `LanguageProfile`
-  presets:
+- **Multilingual generation** — single-turn samples (multi-turn via Flows) in any
+  language; code-switching is first-class (none / inter-sentential /
+  intra-sentential / rojak) at a configurable rate. Lang-ID is restricted per
+  project to the languages on the LanguageProfile so confidence scores stay sharp.
+- **Formality enforcement** — every project ships with two Malaysia-tuned
+  seeded `LanguageProfile` presets to demonstrate the pattern:
   - **Malaysia – Enterprise Formal (TM-style)** — Formal Malay, particle ban,
     SMS-shortcut rejection, English loanwords restricted to a telco-domain allowlist
     (`router`, `bil`, `bandwidth`, …).
   - **Malaysia – Casual (Manglish OK)** — full Bahasa Rojak with intra-sentential
     code-switching enabled.
+
+  The same fields model any locale — French formal-`vous` / banned anglicisms /
+  banned `tkt`/`svp` shortcuts, German formal-`Sie` / banned `lg`/`mfg`, etc.
+  Profile editor lets you author/clone these per project.
 - **Layered formality precedence** — Run > Persona > LanguageProfile > Project default.
   The Run wizard exposes a "Formality lock" toggle that overrides everything below it.
 - **Cheap-first validator pipeline** — JSON-Schema → lingua-py language ID →
@@ -47,8 +64,13 @@ validators, generation, and exports.
   top projects, validation-fail breakdown — pure-SVG, no chart-lib dependency.
 - **Dataset versioning** — frozen `DatasetVersion` snapshots are immutable, with
   full lineage (which conversations, from which run, with which judge verdicts).
-- **OpenAI fine-tune JSONL export** — one click per version. ShareGPT / Alpaca /
-  Parquet / HF Hub push planned for slice 2.
+- **Multiple export formats** — one click per dataset version:
+  - `openai-jsonl` — OpenAI fine-tune format (`{messages: [...]}` per line).
+  - `function-call-bench` — Scicom Function-Call benchmark format
+    ([repo](https://github.com/Scicom-AI-Enterprise-Organization/small-ablation/tree/main/function-call-benchmark)).
+    Each row is `{conversation: "<json>", functions: "<json>", language: "ms|en|zh|…"}`,
+    drop-in compatible with the benchmark's `datasets.load_dataset` loader.
+  - ShareGPT / Alpaca / Parquet / HF Hub push planned for slice 2.
 - **Invite-as-register** — invitation links land on a register form, not a generic
   /login. New users set a password, the invite consumes itself in one shot.
 - **Audit log** — every project / provider / run / dataset / flow action persisted.
@@ -179,6 +201,41 @@ env $(grep -v '^#' .env | xargs) \
 npm run dev
 ```
 
+#### Or: docker compose (db + api + worker + app together)
+
+```bash
+docker compose up --build
+```
+
+This brings up four services on one network:
+
+| Service | What | Port |
+|---|---|---|
+| `db` | Postgres 16 | `5434` (host) → `5432` |
+| `synthgen-api` | FastAPI internal endpoints | `8000` |
+| `synthgen-worker` | Job poller | — |
+| `app` | Next.js (production build) | `3000` |
+
+`AUTH_SECRET`, `APP_ENCRYPTION_KEY`, and `SYNTHGEN_INTERNAL_TOKEN` are read
+from your local `.env`. Migrations and the seed still run from the host
+against the dockerized db (they expect `5434`):
+
+```bash
+npm run db:migrate
+npm run db:seed
+```
+
+Exports are written to a shared `exports` volume so `app`, `synthgen-api`,
+and `synthgen-worker` all see the same `/data/exports`.
+
+For dev mode with hot-reload, skip `app` and run `npm run dev` on the host
+while leaving `db` / `synthgen-api` / `synthgen-worker` in compose:
+
+```bash
+docker compose up -d db synthgen-api synthgen-worker
+npm run db:migrate && npm run db:seed && npm run dev
+```
+
 Open http://localhost:3000 and sign in. Click **Projects → New project**.
 The two Malaysia LanguageProfile presets are seeded automatically by the Python
 worker on project creation; if the worker is offline you'll get a soft warning
@@ -298,22 +355,60 @@ Server-side gate: `requireProjectPermission(projectId, action)` — `src/lib/pro
   claim jobs atomically with `SELECT ... FOR UPDATE SKIP LOCKED`. State, queue,
   and lineage live in one place.
 
-## The Malaysia formality moat
+## Localized realism — Malaysia bundled, every locale supported
 
-This is the bit generic synth-data tools don't model. Three layers cooperate:
+This is the bit generic synth-data tools don't model. Three layers cooperate, and
+none of them are Malay-specific in code — only in seeded data:
 
 1. **System-prompt style guide** — `worker/synthgen/style_guide.py` auto-prepends
-   instructions like *"Respond in Formal Malay. Do not use Manglish
-   particles … Use full standard spelling (`tidak` not `tak` …)."* This is cheap
-   prevention; it reduces the rate of violations the model produces.
+   instructions derived from the resolved `LanguageProfile`. For Malaysia formal:
+   *"Respond in Formal Malay. Do not use Manglish particles … Use full standard
+   spelling (`tidak` not `tak` …)."* For French enterprise: *"Respond in formal
+   French using `vous`. Do not use anglicisms or SMS shortcuts (`tkt`, `svp`)."*
+   The copy is templated against profile fields, not hardcoded per-language.
 2. **Register-compliance validator** — `worker/synthgen/validators/register.py`.
-   Word-bounded, case-insensitive blocklist match for Manglish particles, regex
-   blocklist for project-defined patterns, Formal Malay enforcement that rejects
-   SMS shortcuts (`tak / je / dah / mcm`), allowlist policy for English loanwords.
-   Belt-and-braces: catches what the prompt missed.
-3. **Per-project tuning** — every field on `LanguageProfile` is editable. Telco
-   teams ship with `router / modem / bil / bandwidth` in their loanword allowlist;
-   bank teams ship with their own.
+   Word-bounded, case-insensitive blocklist match for the profile's banned tokens
+   (Manglish particles for MS, anglicisms for FR/DE — whatever you put on the
+   profile); regex blocklist for project-defined patterns; SMS-shortcut rejection
+   when `requireFormalRegister` is on; allowlist policy for foreign-language
+   loanwords. The validator never asks "which language is this?" — it just
+   enforces the data.
+3. **Per-project, per-locale tuning** — every field on `LanguageProfile` is
+   editable. Telco teams ship with `router / modem / bil / bandwidth` in their
+   loanword allowlist; bank teams ship with their own. Add a French formal
+   profile, a German Sie profile, a Spanish voseo profile, etc., as you need
+   them — same form, different data.
+
+### What's locale-agnostic vs. Malaysia-tuned today
+
+| Layer | Status |
+|---|---|
+| `LanguageProfile` schema (Prisma) | locale-agnostic |
+| Style-guide rendering pipeline | locale-agnostic |
+| Register-compliance validator | locale-agnostic |
+| n-gram / schema validators | locale-agnostic |
+| Generation worker + tool-call wiring | locale-agnostic |
+| Code-switch policy mechanism | locale-agnostic |
+| Formality precedence (Run > Persona > LP > Project) | locale-agnostic |
+| Seeded `LanguageProfile` presets | **Malaysia-only** (2 presets) |
+| Manglish particle list (`presets.MANGLISH_PARTICLES`) | **Malaysia-only** seed data |
+| Formal-Malay shortcut list (`presets.FORMAL_MALAY_SHORTCUTS`) | **Malaysia-only** seed data |
+| Function-word stoplist for lang-ID false-positive filter (`malay_words.py`) | **Malay-only** today |
+| Lang-ID language set | currently `ms / en / zh / ta / id` — extend per locale |
+
+### To ship out-of-the-box European support
+
+The engine doesn't change. What you'd add:
+- A few seeded `LanguageProfile` rows in `bootstrap.py` (e.g.
+  `France – Enterprise Formal`, `France – Casual`,
+  `Germany – Enterprise Formal (Sie)`, etc.) with the right banned-token /
+  shortcut / allowlist data per locale.
+- Extend the lang-ID language set in `validators/lang_id.py` to include
+  `fr / de / es / it / pt / nl` etc.
+- (Optional, advisory) Add small function-word stoplists per language to keep
+  the loanword-allowlist validator from false-flagging native words.
+
+That's it — no schema changes, no engine changes.
 
 ## Smoke tests
 
@@ -364,9 +459,13 @@ Both expect a smoke project named `smoke-proj-001` (created by the first run).
 **Next slice**
 - **Worker walks Flow graphs** — pick a path through the published flow, generate
   user/assistant turns turn-by-turn, mock-execute Action nodes' tools to produce
-  realistic shaped responses (MyKad / LHDN / Maybank format).
+  realistic shaped responses (MyKad / LHDN / Maybank format for MY; SIRET / IBAN /
+  IRS-equivalents for other locales).
 - **Mock tool executor** — generates valid-looking outputs from `mockResponseSchema`
   + `mockSeed` on each ToolDef.
+- **More locale seeds** — out-of-the-box `LanguageProfile` presets for FR-FR
+  formal/casual, DE-DE Sie/du, ES-ES tú/usted/voseo, IT-IT lei/tu, plus the
+  associated lang-ID extension and per-language function-word stoplists.
 - **Judge-LLM validators** — per-axis rubrics (correctness, naturalness, language
   fidelity, code-switch realism, tool-arg validity), sampled (e.g. 10%) to keep cost
   bounded, calibrated against a human-rated gold set.
@@ -376,7 +475,7 @@ Both expect a smoke project named `smoke-proj-001` (created by the first run).
 - **More exporters** — ShareGPT, Alpaca, Parquet, HF Hub push.
 - **Figma / Mermaid import** for flows.
 - **Cost budgets per team**, adversarial slice presets, diversity dashboards,
-  Jawi / Tamil / Hans generation paths.
+  non-Latin script generation paths (Jawi, Han, Tamil, Cyrillic, Greek).
 
 ## Tech stack
 

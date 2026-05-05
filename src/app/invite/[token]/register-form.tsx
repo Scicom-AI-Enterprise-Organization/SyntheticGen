@@ -54,8 +54,8 @@ export function RegisterForm({ token, inviteEmail, inviterLabel, roleName }: Pro
           <div>
             <h2 className="text-3xl font-bold text-white">You&apos;re invited</h2>
             <p className="mt-3 max-w-sm text-sm text-white/80">
-              Set up your account to start building Malaysia-focused synthetic datasets with
-              first-class formality enforcement and OpenAI-compatible providers.
+              Set up your account to start building localized synthetic datasets with
+              per-locale formality enforcement and OpenAI-compatible providers.
             </p>
             <div className="mt-8 grid grid-cols-2 gap-6 text-sm">
               <Stat label="Invited by">{inviterLabel}</Stat>

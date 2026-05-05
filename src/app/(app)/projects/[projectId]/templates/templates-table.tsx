@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useConfirm } from "@/components/confirm-dialog";
 import { deleteTemplate } from "./actions";
 
 interface T {
@@ -26,9 +27,15 @@ export function TemplatesTable({
   templates: T[];
 }) {
   const [pending, start] = useTransition();
+  const confirm = useConfirm();
 
-  function onDelete(t: T) {
-    if (!confirm(`Delete template "${t.name}"?`)) return;
+  async function onDelete(t: T) {
+    const ok = await confirm({
+      title: `Delete template "${t.name}"?`,
+      body: "Runs that have already used this template keep their snapshot, but new runs cannot select it.",
+      destructive: true,
+    });
+    if (!ok) return;
     start(async () => {
       const res = await deleteTemplate(projectId, t.id);
       if ("error" in res && (res as { error?: string }).error)

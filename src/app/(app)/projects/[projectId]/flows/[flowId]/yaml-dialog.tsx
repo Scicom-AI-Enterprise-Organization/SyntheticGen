@@ -16,6 +16,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { useConfirm } from "@/components/confirm-dialog";
 import { autoLayout } from "./auto-layout";
 import { coerceFlowGraph, toExportShape } from "./flow-coerce";
 import type { ToolOption } from "./tool-list-picker";
@@ -34,6 +35,7 @@ export function YamlDialog({ nodes, edges, tools, canWrite, onApply }: Props) {
   const [tab, setTab] = useState<"export" | "import">("export");
   const [pasteText, setPasteText] = useState("");
   const [pendingApply, startApply] = useTransition();
+  const confirm = useConfirm();
   const [copied, setCopied] = useState(false);
 
   // Re-serialize on dialog open so the export reflects the latest canvas.
@@ -60,43 +62,45 @@ export function YamlDialog({ nodes, edges, tools, canWrite, onApply }: Props) {
     }
   }
 
-  function applyImport() {
+  async function applyImport() {
     if (!pasteText.trim()) {
       toast.error("Paste a YAML graph first.");
       return;
     }
+    // Parse + validate up front so the confirm dialog can show real counts.
+    let parsedYaml: unknown;
+    try {
+      parsedYaml = yaml.load(pasteText);
+    } catch (e) {
+      toast.error(`YAML parse error: ${(e as Error).message}`);
+      return;
+    }
+    let coerced;
+    try {
+      coerced = coerceFlowGraph(parsedYaml, {
+        validToolIds: new Set(tools.map((t) => t.id)),
+        preservePositions: true,
+      });
+    } catch (e) {
+      toast.error((e as Error).message);
+      return;
+    }
+    const anyHasPosition = coerced.nodes.some(
+      (n) => n.position.x !== 0 || n.position.y !== 0,
+    );
+    const finalNodes = anyHasPosition
+      ? coerced.nodes
+      : autoLayout(coerced.nodes, coerced.edges);
+
+    const ok = await confirm({
+      title: "Replace the current flow?",
+      body: `Importing ${coerced.nodes.length} nodes / ${coerced.edges.length} edges. The DB version stays intact until you Save.`,
+      confirmText: "Apply to canvas",
+      destructive: true,
+    });
+    if (!ok) return;
+
     startApply(() => {
-      let parsed: unknown;
-      try {
-        parsed = yaml.load(pasteText);
-      } catch (e) {
-        toast.error(`YAML parse error: ${(e as Error).message}`);
-        return;
-      }
-      let coerced;
-      try {
-        coerced = coerceFlowGraph(parsed, {
-          validToolIds: new Set(tools.map((t) => t.id)),
-          preservePositions: true,
-        });
-      } catch (e) {
-        toast.error((e as Error).message);
-        return;
-      }
-      // Use auto-layout only when none of the imported nodes carry a real position.
-      const anyHasPosition = coerced.nodes.some(
-        (n) => n.position.x !== 0 || n.position.y !== 0,
-      );
-      const finalNodes = anyHasPosition ? coerced.nodes : autoLayout(coerced.nodes, coerced.edges);
-
-      if (
-        !confirm(
-          `Replace the current flow with the imported graph (${coerced.nodes.length} nodes, ${coerced.edges.length} edges)? You can still revert by not saving.`,
-        )
-      ) {
-        return;
-      }
-
       onApply(finalNodes, coerced.edges);
       setOpen(false);
       if (coerced.warnings.length > 0) {

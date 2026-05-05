@@ -15,6 +15,44 @@ services:
       timeout: 5s
       retries: 10
 
+  synthgen-api:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    command: uvicorn synthgen.api.main:app --host 0.0.0.0 --port 8000
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/enterprise?schema=public
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      SYNTHGEN_INTERNAL_TOKEN: ${SYNTHGEN_INTERNAL_TOKEN}
+      EXPORTS_DIR: /data/exports
+    ports:
+      - "8000:8000"
+    volumes:
+      - exports:/data/exports
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  synthgen-worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    command: python -m synthgen.jobworker.main
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@db:5432/enterprise?schema=public
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      SYNTHGEN_INTERNAL_TOKEN: ${SYNTHGEN_INTERNAL_TOKEN}
+      EXPORTS_DIR: /data/exports
+      WORKER_POLL_INTERVAL_SECONDS: ${WORKER_POLL_INTERVAL_SECONDS:-2}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+    volumes:
+      - exports:/data/exports
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
   app:
     build:
       context: .
@@ -26,10 +64,19 @@ services:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/enterprise?schema=public
       AUTH_URL: ${AUTH_URL:-http://localhost:3000}
       AUTH_SECRET: ${AUTH_SECRET:-dev-secret-change-me}
+      APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY}
+      SYNTHGEN_API_URL: http://synthgen-api:8000
+      SYNTHGEN_INTERNAL_TOKEN: ${SYNTHGEN_INTERNAL_TOKEN}
+      EXPORTS_DIR: /data/exports
+    volumes:
+      - exports:/data/exports
     depends_on:
       db:
         condition: service_healthy
+      synthgen-api:
+        condition: service_started
     restart: unless-stopped
 
 volumes:
   db-data:
+  exports:

@@ -32,8 +32,9 @@ export default async function NewLanguageProfilePage({
         <CardHeader>
           <CardTitle>Profile</CardTitle>
           <CardDescription>
-            Build a custom (language × script × register × code-switch) policy. For TM-style enterprise
-            data, set <code>register=formal</code>, turn off particles, and require Formal Malay.
+            Build a custom (language × script × register × code-switch) policy. For enterprise
+            customer-support data in any locale, set <code>register=formal</code>, turn off
+            colloquial particles, and enable the strict-spelling switch.
           </CardDescription>
         </CardHeader>
         <CardContent>

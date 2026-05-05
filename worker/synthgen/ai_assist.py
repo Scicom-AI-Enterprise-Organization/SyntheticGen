@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+import time
+from typing import Any, AsyncIterator
 
 from . import db
 from .crypto import decrypt_secret
-from .providers import chat_completion
+from .providers import chat_completion, chat_completion_stream
 from .presets import MANGLISH_PARTICLES, FORMAL_MALAY_SHORTCUTS, TELCO_LOANWORD_ALLOWLIST
 
 
@@ -39,8 +40,18 @@ PERSONA_FIELDS = """\
 
 TAXONOMY_NODE_FIELDS = """\
 {
-  "name": "Short topic name, 2-80 chars (e.g. 'modem troubleshooting', 'plan upgrade')"
+  "names": [
+    "Short topic name, 2-80 chars (e.g. 'modem troubleshooting')",
+    "Another short topic name (e.g. 'plan upgrade')",
+    "..."
+  ]
 }
+
+Return between 3 and 8 distinct topic noun-phrases that are NEW — none of them
+may duplicate (case-insensitively) any name from the "Existing nodes" list in
+the user message. Prefer concise lowercase-with-hyphens or short multi-word
+phrases. Cover complementary areas to the existing taxonomy, not near-synonyms
+of nodes that already exist.
 """
 
 LANGUAGE_PROFILE_FIELDS = f"""\
@@ -153,6 +164,20 @@ KIND_FIELDS: dict[str, str] = {
 }
 
 
+# Per-kind cap on completion tokens. Reasoning models (Qwen3 thinking,
+# DeepSeek-R1, etc.) can spend many tokens on chain-of-thought before producing
+# the final JSON — keep these generous so the answer doesn't truncate.
+DEFAULT_MAX_TOKENS = 4000
+KIND_MAX_TOKENS: dict[str, int] = {
+    "taxonomy-node": 4000,
+    "persona": 6000,
+    "prompt-template": 6000,
+    "tool-def": 6000,
+    "language-profile": 8000,
+    "flow-graph": 12000,
+}
+
+
 SYSTEM_TEMPLATE = """\
 You are a configuration assistant for SyntheticGen, a Malaysia-focused synthetic
 dataset generator. Your job is to translate the user's natural-language description
@@ -206,13 +231,26 @@ def _extract_json(text: str) -> dict[str, Any]:
 
 async def _load_provider(provider_id: str) -> dict[str, Any]:
     row = await db.fetch_one(
-        """SELECT "baseUrl", "encryptedApiKey", headers, "defaultModel"
+        """SELECT "baseUrl", "encryptedApiKey", headers, "defaultModel",
+                  "reasoningEffort", "chatTemplateKwargs"
            FROM "ProviderCredential" WHERE id = $1""",
         provider_id,
     )
     if not row:
         raise RuntimeError(f"provider not found: {provider_id}")
     return dict(row)
+
+
+def _as_dict(v: Any) -> dict[str, Any] | None:
+    if isinstance(v, dict):
+        return v if v else None
+    if isinstance(v, str) and v.strip():
+        try:
+            parsed = json.loads(v)
+        except Exception:
+            return None
+        return parsed if isinstance(parsed, dict) and parsed else None
+    return None
 
 
 async def ai_assist(
@@ -257,8 +295,10 @@ async def ai_assist(
             {"role": "user", "content": user_text},
         ],
         temperature=0.3,
-        max_tokens=1500,
+        max_tokens=KIND_MAX_TOKENS.get(kind, DEFAULT_MAX_TOKENS),
         extra_headers=extra_headers or None,
+        reasoning_effort=provider.get("reasoningEffort"),
+        chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")),
     )
 
     parsed = _extract_json(result.content)
@@ -269,4 +309,107 @@ async def ai_assist(
         "tokens_out": result.tokens_out,
         "cost_usd": result.cost_usd,
         "latency_ms": result.latency_ms,
+    }
+
+
+async def ai_assist_stream(
+    *,
+    kind: str,
+    prompt: str,
+    provider_id: str,
+    model: str | None = None,
+    extra_context: str | None = None,
+) -> AsyncIterator[dict[str, Any]]:
+    """Like `ai_assist`, but yields incremental events:
+      {"type":"delta","text":"..."} during generation,
+      {"type":"done","data":{...},"model":"...","tokens_in":..,"tokens_out":..,
+       "latency_ms":..} once the full response has been parsed,
+      {"type":"error","error":"..."} on failure.
+    """
+    fields = KIND_FIELDS.get(kind)
+    if fields is None:
+        yield {
+            "type": "error",
+            "error": f"unknown ai-assist kind '{kind}' (expected: {', '.join(KIND_FIELDS)})",
+        }
+        return
+
+    try:
+        provider = await _load_provider(provider_id)
+    except Exception as e:
+        yield {"type": "error", "error": str(e)}
+        return
+
+    api_key = decrypt_secret(provider["encryptedApiKey"])
+    base_url = provider["baseUrl"]
+    extra_headers = provider.get("headers")
+    if isinstance(extra_headers, str):
+        extra_headers = json.loads(extra_headers)
+    selected_model = model or provider.get("defaultModel") or "gpt-4o-mini"
+
+    system_text = SYSTEM_TEMPLATE.format(
+        kind=kind,
+        fields=fields,
+        particles=", ".join(MANGLISH_PARTICLES),
+    )
+    user_text = prompt
+    if extra_context:
+        user_text = f"{prompt}\n\nAdditional context:\n{extra_context}"
+
+    yield {"type": "start", "model": selected_model}
+
+    started = time.perf_counter()
+    full_text = ""
+    tokens_in = 0
+    tokens_out = 0
+    upstream_model = selected_model
+    try:
+        async for ev in chat_completion_stream(
+            base_url=base_url,
+            api_key=api_key,
+            model=selected_model,
+            messages=[
+                {"role": "system", "content": system_text},
+                {"role": "user", "content": user_text},
+            ],
+            temperature=0.3,
+            max_tokens=KIND_MAX_TOKENS.get(kind, DEFAULT_MAX_TOKENS),
+            extra_headers=extra_headers or None,
+            reasoning_effort=provider.get("reasoningEffort"),
+            chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")),
+        ):
+            if ev.done:
+                full_text = ev.full_text
+                tokens_in = ev.tokens_in
+                tokens_out = ev.tokens_out
+                upstream_model = ev.model or selected_model
+                break
+            if ev.delta:
+                yield {
+                    "type": "delta",
+                    "text": ev.delta,
+                    "reasoning": ev.reasoning,
+                }
+    except Exception as e:
+        yield {"type": "error", "error": str(e)}
+        return
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    try:
+        parsed = _extract_json(full_text)
+    except Exception as e:
+        yield {
+            "type": "error",
+            "error": f"failed to parse JSON from model output: {e}",
+            "raw": full_text[-2000:],
+        }
+        return
+
+    yield {
+        "type": "done",
+        "data": parsed,
+        "model": upstream_model,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "latency_ms": elapsed_ms,
     }

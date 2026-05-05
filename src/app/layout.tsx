@@ -19,7 +19,8 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "SyntheticGen",
-  description: "Malaysia-focused synthetic dataset generator for LLM fine-tuning",
+  description:
+    "Localized synthetic dataset generator for LLM fine-tuning — any language, any register, with formality-lock validators.",
 };
 
 export default function RootLayout({

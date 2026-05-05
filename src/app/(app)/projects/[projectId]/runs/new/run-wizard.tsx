@@ -88,7 +88,7 @@ export function RunWizard({
     if (!lp) return null;
     if (formalityPolicy === "inherit") return null;
     if (formalityPolicy === "formal" && lp.allowParticles) {
-      return `Run is locked to "formal" but the chosen profile permits Manglish particles — the run override will force formality.`;
+      return `Run is locked to "formal" but the chosen profile permits colloquial particles — the run override will force formality.`;
     }
     if (formalityPolicy === "colloquial" && !lp.allowParticles) {
       return `Run is set to "colloquial" but the chosen profile bans particles — the run override will permit them.`;
@@ -247,7 +247,7 @@ export function RunWizard({
         </div>
         <p className="mb-3 text-xs text-muted-foreground">
           Overrides per-persona / per-profile formality for this run only. Use
-          <code className="mx-1">formal</code> to enforce Formal Malay enterprise output.
+          <code className="mx-1">formal</code> to enforce a strict register for enterprise output.
         </p>
         <Select
           value={formalityPolicy}
@@ -260,7 +260,7 @@ export function RunWizard({
             <SelectItem value="inherit">Inherit (Persona → Profile → Project)</SelectItem>
             <SelectItem value="formal">Force formal (no particles)</SelectItem>
             <SelectItem value="semi-formal">Force semi-formal</SelectItem>
-            <SelectItem value="colloquial">Force colloquial (Manglish OK)</SelectItem>
+            <SelectItem value="colloquial">Force colloquial (particles OK)</SelectItem>
             <SelectItem value="mixed">Force mixed</SelectItem>
           </SelectContent>
         </Select>

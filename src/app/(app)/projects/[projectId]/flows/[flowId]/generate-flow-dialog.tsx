@@ -22,6 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useConfirm } from "@/components/confirm-dialog";
 import { autoLayout } from "./auto-layout";
 import { coerceFlowGraph, type CoercedGraph } from "./flow-coerce";
 import type { FlowEdge, FlowNode } from "./types";
@@ -50,6 +51,7 @@ export function GenerateFlowDialog({
   const [parsed, setParsed] = useState<CoercedGraph | null>(null);
   const [yamlPreview, setYamlPreview] = useState<string>("");
   const [pending, start] = useTransition();
+  const confirm = useConfirm();
 
   function reset() {
     setParsed(null);
@@ -116,15 +118,15 @@ export function GenerateFlowDialog({
     });
   }
 
-  function onApplyClick() {
+  async function onApplyClick() {
     if (!parsed) return;
-    if (
-      !confirm(
-        "Replace the current flow with the AI-generated graph? Existing nodes and edges will be removed (you can still undo by not saving).",
-      )
-    ) {
-      return;
-    }
+    const ok = await confirm({
+      title: "Replace the current flow?",
+      body: "Existing nodes and edges are wiped from the canvas. The DB version stays intact until you click Save — discard by navigating away if you change your mind.",
+      confirmText: "Apply to canvas",
+      destructive: true,
+    });
+    if (!ok) return;
     const laid = autoLayout(parsed.nodes, parsed.edges);
     onApply(laid, parsed.edges);
     setOpen(false);

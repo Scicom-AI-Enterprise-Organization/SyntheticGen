@@ -52,7 +52,7 @@ export default async function LanguagesPage({
           <CardDescription>
             <Sparkles className="mr-1 inline h-3 w-3" />
             Presets are highlighted. Edit any profile to customise banned tokens, loanword policy,
-            or Formal Malay enforcement.
+            or formal-register enforcement (e.g. Bahasa Baku, vouvoiement, Sie-form).
           </CardDescription>
         </CardHeader>
         <CardContent>

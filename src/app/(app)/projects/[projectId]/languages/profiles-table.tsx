@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Pencil, Trash2, ShieldCheck, ShieldOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useConfirm } from "@/components/confirm-dialog";
 import { deleteLanguageProfile } from "./actions";
 
 interface Profile {
@@ -34,9 +35,15 @@ export function LanguageProfilesTable({
   profiles: Profile[];
 }) {
   const [pending, start] = useTransition();
+  const confirm = useConfirm();
 
-  function onDelete(p: Profile) {
-    if (!confirm(`Delete language profile "${p.name}"?`)) return;
+  async function onDelete(p: Profile) {
+    const ok = await confirm({
+      title: `Delete language profile "${p.name}"?`,
+      body: "Personas or runs that reference this profile block deletion — you'll see an error if so.",
+      destructive: true,
+    });
+    if (!ok) return;
     start(async () => {
       const res = await deleteLanguageProfile(projectId, p.id);
       if ("error" in res && res.error) toast.error(res.error);

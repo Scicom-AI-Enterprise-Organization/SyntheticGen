@@ -228,7 +228,7 @@ export default async function DashboardPage() {
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
             {projectCount === 0
-              ? "Create your first project to start generating Malaysia-focused synthetic datasets."
+              ? "Create your first project to start generating localized synthetic datasets."
               : `Across ${projectCount} project${projectCount === 1 ? "" : "s"}.`}
           </p>
         </div>
@@ -312,8 +312,9 @@ export default async function DashboardPage() {
               Get started
             </CardTitle>
             <CardDescription>
-              Each project ships with two seeded language profiles: Enterprise Formal
-              (TM-style, no Manglish particles) and Casual (Manglish OK).
+              Each project ships with two seeded language profiles you can edit or replace:
+              an Enterprise Formal preset (formality-locked, banned-token enforced) and a
+              Casual preset (relaxed register, code-switching allowed).
             </CardDescription>
           </CardHeader>
           <CardContent>

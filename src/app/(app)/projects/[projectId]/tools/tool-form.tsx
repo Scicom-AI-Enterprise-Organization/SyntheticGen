@@ -21,7 +21,7 @@ const STARTER_PARAMS = `{
   "properties": {
     "account_number": {
       "type": "string",
-      "description": "12-digit Maybank account number"
+      "description": "Customer's bank account number (locale-specific format)"
     }
   },
   "required": ["account_number"]
@@ -93,7 +93,7 @@ export function ToolForm({
           projectId={projectId}
           kind="tool-def"
           providers={providers}
-          placeholder='A function that looks up a Maybank account balance by 12-digit account number. Returns balance in MYR and the last 5 transactions. Tag with "maybank".'
+          placeholder='A function that looks up a customer bank-account balance by account number. Returns the current balance and last 5 transactions. Tag with "banking" plus a country tag (e.g. "maybank", "barclays", "bnpparibas").'
           onApply={applyAi}
         />
       </div>
@@ -105,7 +105,7 @@ export function ToolForm({
             id="t-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="maybank_account_balance"
+            placeholder="bank_account_balance"
             pattern="^[a-zA-Z_][a-zA-Z0-9_]*$"
             title="snake_case identifier"
             required
@@ -120,7 +120,7 @@ export function ToolForm({
             id="t-presets"
             value={presets}
             onChange={(e) => setPresets(e.target.value)}
-            placeholder="maybank, banking"
+            placeholder="banking, telco, …"
           />
         </div>
       </div>
@@ -132,7 +132,7 @@ export function ToolForm({
           value={description}
           onChange={(e) => setDescription(e.target.value)}
           rows={2}
-          placeholder="Look up the current account balance and recent transactions for a Maybank account."
+          placeholder="Look up the current account balance and recent transactions for a customer bank account."
           required
         />
       </div>

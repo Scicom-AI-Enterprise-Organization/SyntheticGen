@@ -42,8 +42,8 @@ export default async function PersonasPage({
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Personas</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Malaysia-rich personas: ethnicity × region × urbanity × age, with optional dialect tags
-          and a default language profile.
+          Demographically-detailed personas: ethnicity × region × urbanity × age, with optional
+          dialect tags and a default language profile. Drives realism in generated conversations.
         </p>
       </div>
 

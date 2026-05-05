@@ -14,6 +14,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useConfirm } from "@/components/confirm-dialog";
 import { ToolListPicker, type ToolOption } from "./tool-list-picker";
 
 interface InspectorProps {
@@ -51,6 +52,7 @@ function EdgeInspector({
   onDeleteEdge,
 }: InspectorProps & { edge: Edge }) {
   const [label, setLabel] = useState(typeof edge.label === "string" ? edge.label : "");
+  const confirm = useConfirm();
 
   useEffect(() => {
     setLabel(typeof edge.label === "string" ? edge.label : "");
@@ -91,8 +93,12 @@ function EdgeInspector({
         <Button
           variant="outline"
           size="sm"
-          onClick={() => {
-            if (confirm("Delete this edge?")) onDeleteEdge(edge.id);
+          onClick={async () => {
+            const ok = await confirm({
+              title: "Delete this edge?",
+              destructive: true,
+            });
+            if (ok) onDeleteEdge(edge.id);
           }}
         >
           <Trash2 className="mr-2 h-3.5 w-3.5" />
@@ -113,6 +119,7 @@ function NodeFields({
   const data = (node.data ?? {}) as Record<string, unknown>;
   const isStart = node.type === "start";
   const isEnd = node.type === "end";
+  const confirm = useConfirm();
 
   return (
     <div className="space-y-3 p-4 text-xs">
@@ -128,10 +135,13 @@ function NodeFields({
             variant="ghost"
             size="icon"
             aria-label="Delete node"
-            onClick={() => {
-              if (confirm("Delete this node? Connected edges will also be removed.")) {
-                onDeleteNode(node.id);
-              }
+            onClick={async () => {
+              const ok = await confirm({
+                title: "Delete this node?",
+                body: "Connected edges are removed too.",
+                destructive: true,
+              });
+              if (ok) onDeleteNode(node.id);
             }}
           >
             <Trash2 className="h-4 w-4" />

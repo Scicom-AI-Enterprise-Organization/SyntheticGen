@@ -23,14 +23,15 @@ interface Provider {
   defaultModel: string | null;
 }
 
-const DEFAULT_USER_SEED = `Soalan pelanggan untuk operator telco di Malaysia.
+const DEFAULT_USER_SEED = `A realistic customer-support inquiry for a telco operator.
 
 Persona: {{persona.name}} ({{persona.region}}, {{persona.urbanity}}).
-Topik: {{taxonomy.path}}.
-Bahasa: {{language.primary}}.
-Tahap kesukaran: {{difficulty}}.
+Topic: {{taxonomy.path}}.
+Language: {{language.primary}}.
+Difficulty: {{difficulty}}.
 
-Tulis hanya satu soalan pelanggan yang realistik. Jangan termasuk jawapan operator.`;
+Write a single customer message in the persona's voice and language. Do NOT
+include the operator's reply — just the customer's turn.`;
 
 export function TemplateForm({
   projectId,
@@ -82,7 +83,7 @@ export function TemplateForm({
           projectId={projectId}
           kind="prompt-template"
           providers={providers}
-          placeholder="A user-seed template for telco customer-support inquiries about modem outages, in Formal Malay, that uses {{persona.name}} and {{taxonomy.path}}."
+          placeholder="A user-seed template for telco customer-support inquiries about modem outages, in the project's primary language and formal register, that uses {{persona.name}} and {{taxonomy.path}}."
           onApply={applyAi}
         />
       </div>

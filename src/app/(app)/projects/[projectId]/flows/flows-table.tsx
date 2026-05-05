@@ -6,6 +6,7 @@ import { toast } from "sonner";
 import { Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useConfirm } from "@/components/confirm-dialog";
 import { deleteFlow } from "./actions";
 
 interface Flow {
@@ -29,9 +30,15 @@ export function FlowsTable({
   flows: Flow[];
 }) {
   const [pending, start] = useTransition();
+  const confirm = useConfirm();
 
-  function onDelete(f: Flow) {
-    if (!confirm(`Delete flow "${f.name}"?`)) return;
+  async function onDelete(f: Flow) {
+    const ok = await confirm({
+      title: `Delete flow "${f.name}"?`,
+      body: "All nodes and edges are removed. This cannot be undone.",
+      destructive: true,
+    });
+    if (!ok) return;
     start(async () => {
       const res = await deleteFlow(projectId, f.id);
       if ("error" in res && (res as { error?: string }).error)

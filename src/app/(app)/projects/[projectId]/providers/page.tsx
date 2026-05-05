@@ -29,6 +29,8 @@ export default async function ProvidersPage({
       baseUrl: true,
       keyFingerprint: true,
       defaultModel: true,
+      reasoningEffort: true,
+      chatTemplateKwargs: true,
       createdAt: true,
     },
   });
@@ -71,6 +73,8 @@ export default async function ProvidersPage({
               baseUrl: p.baseUrl,
               keyFingerprint: p.keyFingerprint,
               defaultModel: p.defaultModel,
+              reasoningEffort: p.reasoningEffort,
+              chatTemplateKwargs: (p.chatTemplateKwargs ?? null) as Record<string, unknown> | null,
             }))}
           />
         </CardContent>

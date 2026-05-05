@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useTransition, useMemo } from "react";
+import { useCallback, useMemo, useState, useTransition } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Plus, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -62,6 +63,21 @@ export function PersonaForm({
   const [languageProfileId, setLanguageProfileId] = useState(NONE);
   const [pending, start] = useTransition();
 
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const suggestOpen = searchParams.get("suggest") === "1";
+  const setSuggestOpen = useCallback(
+    (next: boolean) => {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      if (next) params.set("suggest", "1");
+      else params.delete("suggest");
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
   const selectedLP = languageProfiles.find((p) => p.id === languageProfileId) ?? null;
 
   // Conflict warning: persona declares colloquial/manglish but LP forbids particles.
@@ -72,7 +88,7 @@ export function PersonaForm({
       return `Persona formality "${formality}" expects Manglish, but the language profile "${selectedLP.name}" bans particles. The validator will reject most outputs.`;
     }
     if (formality === "baku" && selectedLP.allowParticles) {
-      return `Persona is set to Formal Malay but the language profile permits particles — outputs may drift colloquial.`;
+      return `Persona is set to a formal register but the language profile permits colloquial particles — outputs may drift colloquial.`;
     }
     return null;
   }, [selectedLP, formality]);
@@ -138,8 +154,10 @@ export function PersonaForm({
           projectId={projectId}
           kind="persona"
           providers={providers}
-          placeholder="A 28-year-old Indian-Malaysian software engineer in KL who codeswitches MS↔EN, religion-aware (vegetarian)."
+          placeholder="A 32-year-old retail bank customer in Lyon who switches FR↔EN; or a Manchester telco subscriber on prepaid; or any locale-specific persona you need."
           onApply={applyAi}
+          open={suggestOpen}
+          onOpenChange={setSuggestOpen}
         />
       </div>
       <div className="grid gap-4 sm:grid-cols-2">
@@ -149,7 +167,7 @@ export function PersonaForm({
             id="p-name"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            placeholder="Aunty Faridah, KL retiree"
+            placeholder="e.g. Lyon retail-bank customer, KL telco retiree"
             required
           />
         </div>

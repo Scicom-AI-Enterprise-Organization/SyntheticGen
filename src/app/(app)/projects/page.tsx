@@ -51,8 +51,8 @@ export default async function ProjectsPage() {
           <CardHeader>
             <CardTitle>Create project</CardTitle>
             <CardDescription>
-              You become the OWNER. Two LanguageProfile presets are seeded automatically:
-              Enterprise Formal and Casual (Manglish OK).
+              You become the OWNER. Two LanguageProfile presets are seeded automatically —
+              edit them, clone them, or replace with profiles tuned for your locale.
             </CardDescription>
           </CardHeader>
           <CardContent>

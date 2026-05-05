@@ -44,13 +44,13 @@ export default async function ToolsPage({
         <h1 className="text-2xl font-bold tracking-tight">Tools</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Function/tool definitions in the OpenAI tools schema. Slice 1 captures the catalog;
-          generation runs will start passing tools to the model in a later slice. MY-local presets
-          like <Badge variant="outline" className="text-[10px]">mykad</Badge>{" "}
-          <Badge variant="outline" className="text-[10px]">lhdn</Badge>{" "}
-          <Badge variant="outline" className="text-[10px]">maybank</Badge>{" "}
-          <Badge variant="outline" className="text-[10px]">tng</Badge>{" "}
-          <Badge variant="outline" className="text-[10px]">duitnow</Badge>{" "}
-          tag a tool for the future mock-executor.
+          generation runs will start passing tools to the model in a later slice. Tag tools with
+          locale or domain presets like{" "}
+          <Badge variant="outline" className="text-[10px]">banking</Badge>{" "}
+          <Badge variant="outline" className="text-[10px]">telco</Badge>{" "}
+          <Badge variant="outline" className="text-[10px]">government</Badge>{" "}
+          (or country-scoped tags like <code>mykad</code>, <code>siret</code>, <code>iban</code>)
+          to wire them into the future mock-executor.
         </p>
       </div>
 
@@ -60,7 +60,8 @@ export default async function ToolsPage({
             <CardTitle>New tool</CardTitle>
             <CardDescription>
               Catalog: <code>{catalog.name}</code>. Use AI-assist to draft a tool from a sentence
-              like &ldquo;a function that looks up a Maybank account balance by account number.&rdquo;
+              — e.g. &ldquo;look up a bank account balance by account number&rdquo; or
+              &ldquo;check the status of a delivery by tracking number.&rdquo;
             </CardDescription>
           </CardHeader>
           <CardContent>

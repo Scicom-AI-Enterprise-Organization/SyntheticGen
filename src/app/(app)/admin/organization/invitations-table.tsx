@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Copy, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useConfirm } from "@/components/confirm-dialog";
 import { revokeInvitation } from "./actions";
 
 interface Invite {
@@ -35,14 +36,23 @@ export function InvitationsTable({
   baseUrl: string;
 }) {
   const [pending, start] = useTransition();
+  const confirm = useConfirm();
 
   function copy(token: string) {
     navigator.clipboard.writeText(`${baseUrl}/invite/${token}`);
     toast.success("Link copied");
   }
 
-  function onRevoke(i: Invite) {
-    if (!confirm("Revoke this invitation?")) return;
+  async function onRevoke(i: Invite) {
+    const ok = await confirm({
+      title: "Revoke this invitation?",
+      body: i.email
+        ? `${i.email} will no longer be able to accept this link.`
+        : "Anyone with the link will no longer be able to accept it.",
+      confirmText: "Revoke",
+      destructive: true,
+    });
+    if (!ok) return;
     start(async () => {
       try {
         await revokeInvitation(i.id);

@@ -123,11 +123,11 @@ export function LoginForm({ callbackUrl, error, providers }: LoginFormProps) {
             <h2 className="text-3xl font-bold text-white">Welcome back</h2>
             <p className="mt-3 max-w-sm text-sm text-white/80">
               Sign in to manage projects, kick off generation runs, and review
-              Malaysia-focused synthetic datasets.
+              localized synthetic datasets.
             </p>
             <div className="mt-8 flex gap-6">
-              <Stat value="MS · EN · ZH · TA" label="Multilingual + Bahasa Rojak" />
-              <Stat value="Formality lock" label="Enterprise Formal Malay" />
+              <Stat value="Any locale" label="Multilingual + code-switching" />
+              <Stat value="Formality lock" label="Per-locale register enforcement" />
             </div>
           </div>
         </div>

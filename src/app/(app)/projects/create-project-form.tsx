@@ -41,7 +41,7 @@ export function CreateProjectForm() {
           <Label htmlFor="proj-name">Name</Label>
           <Input
             id="proj-name"
-            placeholder="TM Customer Support — Formal Malay"
+            placeholder="Customer Support — Enterprise Formal"
             value={name}
             onChange={(e) => setName(e.target.value)}
             required

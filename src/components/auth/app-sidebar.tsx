@@ -10,6 +10,7 @@ import {
   ChevronRight,
   Database,
   FileCode,
+  FlaskConical,
   FolderKanban,
   GitBranch,
   Home,
@@ -21,7 +22,6 @@ import {
   Play,
   Settings,
   ShieldCheck,
-  UserCog,
   Users,
   Users2,
   Wrench,
@@ -57,6 +57,7 @@ const PROJECT_NAV: { label: string; segment: string; icon: LucideIcon }[] = [
   { label: "Runs", segment: "runs", icon: Play },
   { label: "Conversations", segment: "conversations", icon: MessagesSquare },
   { label: "Datasets", segment: "datasets", icon: Database },
+  { label: "Benchmarks", segment: "benchmarks", icon: FlaskConical },
   { label: "Settings", segment: "settings", icon: Settings },
 ];
 
@@ -193,14 +194,6 @@ export function AppSidebar({
               </div>
             )}
           </div>
-
-          <SidebarSectionView
-            section={{
-              items: [{ label: "Profile", href: "/profile", icon: UserCog }],
-            }}
-            isOpen={isOpen}
-            pathname={pathname}
-          />
 
           {isAdmin && (
             <SidebarSectionView

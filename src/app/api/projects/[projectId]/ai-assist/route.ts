@@ -60,6 +60,44 @@ export async function POST(
     return Response.json({ error: "provider not found in this project" }, { status: 404 });
   }
 
+  const wantStream = new URL(req.url).searchParams.get("stream") === "1";
+  if (wantStream) {
+    const baseUrl = process.env.SYNTHGEN_API_URL ?? "http://localhost:8000";
+    const internalToken = process.env.SYNTHGEN_INTERNAL_TOKEN ?? "";
+    const upstream = await fetch(`${baseUrl}/internal/ai-assist/stream`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-internal-token": internalToken,
+      },
+      body: JSON.stringify({
+        kind: parsed.data.kind,
+        prompt: parsed.data.prompt,
+        providerId: parsed.data.providerId,
+        model: parsed.data.model ?? null,
+        extraContext: parsed.data.extraContext ?? null,
+      }),
+      cache: "no-store",
+      // Propagate client cancellation upstream so the Python service stops generating.
+      signal: req.signal,
+    });
+    if (!upstream.ok || !upstream.body) {
+      const body = await upstream.text().catch(() => "");
+      return Response.json(
+        { error: body.slice(0, 500) || `upstream ${upstream.status}` },
+        { status: upstream.status || 502 },
+      );
+    }
+    return new Response(upstream.body, {
+      status: 200,
+      headers: {
+        "content-type": "application/x-ndjson",
+        "cache-control": "no-store",
+        "x-accel-buffering": "no",
+      },
+    });
+  }
+
   try {
     const result = await aiAssist({
       kind: parsed.data.kind as AiAssistKind,

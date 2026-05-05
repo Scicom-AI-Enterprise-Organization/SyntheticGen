@@ -155,7 +155,7 @@ export function ProfileEditor({
           projectId={projectId}
           kind="language-profile"
           providers={providers}
-          placeholder="A Formal Malay profile for TM customer-support data: no Manglish particles, no SMS shortcuts, telco loanwords (router, modem, bil, bandwidth) allowed."
+          placeholder="An enterprise formal profile for customer-support data: ban colloquial particles and SMS shortcuts; allow domain loanwords (router, modem, bandwidth, etc.). Works for any locale — describe the language(s) and rules."
           onApply={applyAi}
         />
       </div>
@@ -227,7 +227,7 @@ export function ProfileEditor({
               <SelectItem value="none">None — pure primary language</SelectItem>
               <SelectItem value="inter-sentential">Inter-sentential — switch between sentences</SelectItem>
               <SelectItem value="intra-sentential">Intra-sentential — switch within sentences</SelectItem>
-              <SelectItem value="rojak">Rojak — full Bahasa Rojak</SelectItem>
+              <SelectItem value="rojak">Rojak — fully mixed (frequent intra-word/phrase switching)</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -255,7 +255,7 @@ export function ProfileEditor({
       <div className="space-y-3 rounded-md border border-border bg-muted/30 p-4">
         <div className="text-sm font-semibold">Formality lock</div>
         <p className="text-xs text-muted-foreground">
-          The differentiator for enterprise (TM-style) datasets. Both the system-prompt style guide
+          The differentiator for enterprise datasets in any locale. Both the system-prompt style guide
           and the <code>register-compliance</code> validator enforce these.
         </p>
 
@@ -267,9 +267,9 @@ export function ProfileEditor({
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="formal">Formal (Formal Malay)</SelectItem>
+                <SelectItem value="formal">Formal</SelectItem>
                 <SelectItem value="semi-formal">Semi-formal</SelectItem>
-                <SelectItem value="colloquial">Colloquial (Manglish OK)</SelectItem>
+                <SelectItem value="colloquial">Colloquial</SelectItem>
                 <SelectItem value="mixed">Mixed</SelectItem>
               </SelectContent>
             </Select>
@@ -283,7 +283,7 @@ export function ProfileEditor({
                 onCheckedChange={(v) => set("allowParticles", v)}
               />
               <Label htmlFor="allowParticles" className="cursor-pointer">
-                Allow Manglish particles (lah / lor / meh / kan)
+                Allow colloquial particles (e.g. Manglish lah/lor/meh, French quoi/bah, German halt/ja)
               </Label>
             </div>
           </div>
@@ -295,7 +295,7 @@ export function ProfileEditor({
               onCheckedChange={(v) => set("requireFormalMalay", v)}
             />
             <Label htmlFor="baku" className="cursor-pointer">
-              Require Formal Malay (no SMS shortcuts: tak/je/dah/mcm)
+              Require strict spelling (no SMS shortcuts — tak/je/dah/mcm for MS, tkt/svp for FR, lg/mfg for DE, etc.)
             </Label>
           </div>
 

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
+import { useConfirm } from "@/components/confirm-dialog";
 import { setUserRoles, deleteUser } from "./actions";
 
 interface User {
@@ -16,6 +17,7 @@ interface User {
 
 export function UsersTable({ users, allRoles }: { users: User[]; allRoles: string[] }) {
   const [pending, start] = useTransition();
+  const confirm = useConfirm();
 
   function toggleRole(user: User, role: string, checked: boolean) {
     const next = checked ? [...user.roles, role] : user.roles.filter((r) => r !== role);
@@ -29,8 +31,14 @@ export function UsersTable({ users, allRoles }: { users: User[]; allRoles: strin
     });
   }
 
-  function onDelete(user: User) {
-    if (!confirm(`Delete ${user.email}?`)) return;
+  async function onDelete(user: User) {
+    const ok = await confirm({
+      title: `Delete ${user.email}?`,
+      body: "This permanently removes the user account.",
+      confirmText: "Delete user",
+      destructive: true,
+    });
+    if (!ok) return;
     start(async () => {
       try {
         await deleteUser(user.id);

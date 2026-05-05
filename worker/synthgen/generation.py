@@ -51,7 +51,8 @@ async def _load_run(run_id: str) -> dict[str, Any]:
 
 async def _load_provider(provider_id: str) -> dict[str, Any]:
     row = await db.fetch_one(
-        """SELECT "baseUrl", "encryptedApiKey", headers, "defaultModel", kind
+        """SELECT "baseUrl", "encryptedApiKey", headers, "defaultModel", kind,
+                  "reasoningEffort", "chatTemplateKwargs"
            FROM "ProviderCredential" WHERE id = $1""",
         provider_id,
     )
@@ -222,6 +223,8 @@ async def execute_job(job_id: str) -> str:
             max_tokens=sampling.get("max_tokens", 1024),
             seed=sampling.get("seed"),
             extra_headers=extra_headers,
+            reasoning_effort=provider.get("reasoningEffort"),
+            chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")) or None,
         )
     except Exception as e:  # noqa: BLE001
         log.exception("provider call failed for job=%s", job_id)

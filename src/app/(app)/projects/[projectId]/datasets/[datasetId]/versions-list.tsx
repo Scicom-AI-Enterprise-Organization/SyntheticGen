@@ -3,7 +3,7 @@
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { Download, Package } from "lucide-react";
+import { Download, FlaskConical, Package } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { buildDatasetExport } from "../actions";
@@ -42,12 +42,14 @@ export function VersionsList({
   const router = useRouter();
   const [pending, start] = useTransition();
 
-  function build(versionId: string) {
+  function build(versionId: string, format: "openai-jsonl" | "function-call-bench") {
     start(async () => {
-      const res = await buildDatasetExport({ projectId, versionId, format: "openai-jsonl" });
+      const res = await buildDatasetExport({ projectId, versionId, format });
       if ("error" in res && res.error) toast.error(res.error);
       else if (res.ok) {
-        toast.success("Export built");
+        toast.success(
+          format === "function-call-bench" ? "Benchmark JSONL built" : "Export built",
+        );
         router.refresh();
       }
     });
@@ -77,10 +79,27 @@ export function VersionsList({
               )}
             </div>
             {canExport && (
-              <Button size="sm" variant="outline" disabled={pending} onClick={() => build(v.id)}>
-                <Download className="mr-2 h-4 w-4" />
-                Build OpenAI JSONL
-              </Button>
+              <div className="flex shrink-0 gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => build(v.id, "openai-jsonl")}
+                >
+                  <Download className="mr-2 h-4 w-4" />
+                  OpenAI JSONL
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => build(v.id, "function-call-bench")}
+                  title="Scicom Function-Call benchmark format (HF dataset rows with stringified conversation + functions)"
+                >
+                  <FlaskConical className="mr-2 h-4 w-4" />
+                  Function-call bench
+                </Button>
+              </div>
             )}
           </div>
 

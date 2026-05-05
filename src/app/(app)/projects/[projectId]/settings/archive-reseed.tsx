@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { Archive, RefreshCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useConfirm } from "@/components/confirm-dialog";
 import { archiveProject, reseedDefaults } from "../../actions";
 
 export function ArchiveAndReseed({
@@ -16,6 +17,7 @@ export function ArchiveAndReseed({
 }) {
   const router = useRouter();
   const [pending, start] = useTransition();
+  const confirm = useConfirm();
 
   function onReseed() {
     start(async () => {
@@ -25,8 +27,14 @@ export function ArchiveAndReseed({
     });
   }
 
-  function onArchive() {
-    if (!confirm("Archive this project? It will be hidden from the projects list.")) return;
+  async function onArchive() {
+    const ok = await confirm({
+      title: "Archive this project?",
+      body: "It will be hidden from the projects list. All data is preserved; you can unarchive from the database if needed.",
+      confirmText: "Archive",
+      destructive: true,
+    });
+    if (!ok) return;
     start(async () => {
       const res = await archiveProject(projectId);
       if ("error" in res && (res as { error?: string }).error) {

@@ -28,7 +28,11 @@ export type ProjectAction =
   | "conversations.annotate"
   | "datasets.read"
   | "datasets.freeze"
-  | "datasets.export";
+  | "datasets.export"
+  | "benchmarks.read"
+  | "benchmarks.write"
+  | "benchmarks.execute"
+  | "benchmarks.cancel";
 
 const ROLE_ACTIONS: Record<ProjectRole, ProjectAction[]> = {
   OWNER: [
@@ -43,6 +47,7 @@ const ROLE_ACTIONS: Record<ProjectRole, ProjectAction[]> = {
     "runs.read", "runs.execute", "runs.cancel",
     "conversations.read", "conversations.annotate",
     "datasets.read", "datasets.freeze", "datasets.export",
+    "benchmarks.read", "benchmarks.write", "benchmarks.execute", "benchmarks.cancel",
   ],
   EDITOR: [
     "project.read",
@@ -56,6 +61,7 @@ const ROLE_ACTIONS: Record<ProjectRole, ProjectAction[]> = {
     "runs.read", "runs.execute", "runs.cancel",
     "conversations.read", "conversations.annotate",
     "datasets.read", "datasets.freeze", "datasets.export",
+    "benchmarks.read", "benchmarks.write", "benchmarks.execute", "benchmarks.cancel",
   ],
   ANNOTATOR: [
     "project.read",
@@ -63,12 +69,14 @@ const ROLE_ACTIONS: Record<ProjectRole, ProjectAction[]> = {
     "templates.read", "flows.read", "runs.read",
     "conversations.read", "conversations.annotate",
     "datasets.read",
+    "benchmarks.read",
   ],
   VIEWER: [
     "project.read",
     "taxonomy.read", "personas.read", "languages.read", "tools.read",
     "templates.read", "flows.read", "runs.read",
     "conversations.read", "datasets.read",
+    "benchmarks.read",
   ],
 };
 

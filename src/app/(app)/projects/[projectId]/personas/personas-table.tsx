@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { useConfirm } from "@/components/confirm-dialog";
 import { deletePersona } from "./actions";
 
 interface Persona {
@@ -29,9 +30,15 @@ export function PersonasTable({
   personas: Persona[];
 }) {
   const [pending, start] = useTransition();
+  const confirm = useConfirm();
 
-  function onDelete(p: Persona) {
-    if (!confirm(`Delete persona "${p.name}"?`)) return;
+  async function onDelete(p: Persona) {
+    const ok = await confirm({
+      title: `Delete persona "${p.name}"?`,
+      body: "Conversations already labelled with this persona keep the label.",
+      destructive: true,
+    });
+    if (!ok) return;
     start(async () => {
       const res = await deletePersona(projectId, p.id);
       if ("error" in res && (res as { error?: string }).error)

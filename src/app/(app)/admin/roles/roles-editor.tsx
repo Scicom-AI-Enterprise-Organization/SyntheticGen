@@ -6,6 +6,7 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
+import { useConfirm } from "@/components/confirm-dialog";
 import { setRolePermissions, createRole, deleteRole } from "./actions";
 
 interface Role {
@@ -28,6 +29,7 @@ export function RolesEditor({
 }) {
   const [pending, start] = useTransition();
   const [newRole, setNewRole] = useState("");
+  const confirm = useConfirm();
 
   function togglePerm(role: Role, key: string, checked: boolean) {
     const next = checked
@@ -57,8 +59,13 @@ export function RolesEditor({
     });
   }
 
-  function onDelete(role: Role) {
-    if (!confirm(`Delete role "${role.name}"?`)) return;
+  async function onDelete(role: Role) {
+    const ok = await confirm({
+      title: `Delete role "${role.name}"?`,
+      body: "Users currently assigned to this role lose it. This cannot be undone.",
+      destructive: true,
+    });
+    if (!ok) return;
     start(async () => {
       try {
         await deleteRole(role.id);

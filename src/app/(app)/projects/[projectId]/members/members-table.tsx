@@ -11,6 +11,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useConfirm } from "@/components/confirm-dialog";
 import { addProjectMember, removeProjectMember } from "../../actions";
 
 interface Member {
@@ -30,6 +31,7 @@ export function MembersTable({
   members: Member[];
 }) {
   const [pending, start] = useTransition();
+  const confirm = useConfirm();
 
   function changeRole(m: Member, role: Member["role"]) {
     start(async () => {
@@ -39,8 +41,14 @@ export function MembersTable({
     });
   }
 
-  function remove(m: Member) {
-    if (!confirm(`Remove ${m.email} from this project?`)) return;
+  async function remove(m: Member) {
+    const ok = await confirm({
+      title: `Remove ${m.email}?`,
+      body: "They lose access to this project. Their account is unaffected.",
+      confirmText: "Remove",
+      destructive: true,
+    });
+    if (!ok) return;
     start(async () => {
       const res = await removeProjectMember(projectId, m.userId);
       if ("error" in res && (res as { error?: string }).error)

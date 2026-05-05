@@ -6,9 +6,10 @@ same code path serves every backend.
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, AsyncIterator, Optional
 
 import httpx
 from tenacity import (
@@ -56,6 +57,28 @@ def estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
     return (tokens_in * in_rate + tokens_out * out_rate) / 1_000_000
 
 
+def _apply_reasoning_controls(
+    payload: dict[str, Any],
+    reasoning_effort: Optional[str],
+    chat_template_kwargs: Optional[dict[str, Any]],
+) -> None:
+    """Mutate `payload` in place with provider reasoning controls.
+
+    - `reasoning_effort` → top-level `reasoning_effort` (OpenAI o-series convention).
+    - `chat_template_kwargs` → forwarded verbatim under `chat_template_kwargs`.
+      For vLLM Qwen3 the user typically configures `{"enable_thinking": false}`;
+      we mirror that boolean to the top-level `include_reasoning` field so the
+      server also drops `delta.reasoning` chunks (vLLM needs both knobs to fully
+      suppress thinking).
+    """
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
+    if isinstance(chat_template_kwargs, dict) and chat_template_kwargs:
+        payload["chat_template_kwargs"] = dict(chat_template_kwargs)
+        if "enable_thinking" in chat_template_kwargs:
+            payload["include_reasoning"] = bool(chat_template_kwargs["enable_thinking"])
+
+
 @retry(
     reraise=True,
     stop=stop_after_attempt(3),
@@ -75,6 +98,8 @@ async def chat_completion(
     tools: list[dict[str, Any]] | None = None,
     timeout: float = 120.0,
     extra_headers: Optional[dict[str, str]] = None,
+    reasoning_effort: Optional[str] = None,
+    chat_template_kwargs: Optional[dict[str, Any]] = None,
 ) -> ChatResult:
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
@@ -96,6 +121,7 @@ async def chat_completion(
         payload["seed"] = seed
     if tools:
         payload["tools"] = tools
+    _apply_reasoning_controls(payload, reasoning_effort, chat_template_kwargs)
 
     started = time.perf_counter()
     async with httpx.AsyncClient(timeout=timeout) as client:
@@ -128,4 +154,104 @@ async def chat_completion(
         latency_ms=elapsed_ms,
         model=raw.get("model") or model,
         finish_reason=finish_reason,
+    )
+
+
+@dataclass
+class StreamEvent:
+    delta: str = ""
+    reasoning: bool = False
+    done: bool = False
+    full_text: str = ""
+    tokens_in: int = 0
+    tokens_out: int = 0
+    model: str = ""
+    error: str = ""
+
+
+async def chat_completion_stream(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    temperature: float = 0.7,
+    max_tokens: int | None = 1500,
+    extra_headers: Optional[dict[str, str]] = None,
+    timeout: float = 180.0,
+    reasoning_effort: Optional[str] = None,
+    chat_template_kwargs: Optional[dict[str, Any]] = None,
+) -> AsyncIterator[StreamEvent]:
+    """Stream OpenAI-compat chat completion deltas. Yields delta events, then a final
+    done event with `full_text` and usage stats."""
+    url = base_url.rstrip("/") + "/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    }
+    if extra_headers:
+        headers.update(extra_headers)
+
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "temperature": temperature,
+        "stream": True,
+    }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
+    _apply_reasoning_controls(payload, reasoning_effort, chat_template_kwargs)
+
+    full: list[str] = []
+    tokens_in = 0
+    tokens_out = 0
+    upstream_model = model
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        async with client.stream("POST", url, json=payload, headers=headers) as resp:
+            if resp.status_code >= 400:
+                body = await resp.aread()
+                raise httpx.HTTPStatusError(
+                    f"upstream {resp.status_code}: {body.decode('utf-8', 'replace')[:500]}",
+                    request=resp.request,
+                    response=resp,
+                )
+            async for line in resp.aiter_lines():
+                if not line or line.startswith(":"):
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                payload_str = line[len("data:"):].strip()
+                if payload_str == "[DONE]":
+                    break
+                try:
+                    event = json.loads(payload_str)
+                except json.JSONDecodeError:
+                    continue
+                if mdl := event.get("model"):
+                    upstream_model = mdl
+                choices = event.get("choices") or []
+                if choices:
+                    delta_obj = choices[0].get("delta") or {}
+                    # Reasoning models (Qwen thinking, DeepSeek-R1, OpenAI o-series via
+                    # some proxies) stream chain-of-thought as `delta.reasoning` first,
+                    # then the actual answer as `delta.content`. Surface both for UX,
+                    # but only `content` counts toward the final parsed payload.
+                    reasoning_text = delta_obj.get("reasoning") or delta_obj.get("reasoning_content") or ""
+                    if reasoning_text:
+                        yield StreamEvent(delta=reasoning_text, reasoning=True)
+                    delta_text = delta_obj.get("content") or ""
+                    if delta_text:
+                        full.append(delta_text)
+                        yield StreamEvent(delta=delta_text)
+                usage = event.get("usage")
+                if usage:
+                    tokens_in = int(usage.get("prompt_tokens") or 0)
+                    tokens_out = int(usage.get("completion_tokens") or 0)
+    yield StreamEvent(
+        done=True,
+        full_text="".join(full),
+        tokens_in=tokens_in,
+        tokens_out=tokens_out,
+        model=upstream_model,
     )
