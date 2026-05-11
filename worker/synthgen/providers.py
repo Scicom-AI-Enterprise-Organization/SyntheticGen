@@ -198,6 +198,9 @@ async def chat_completion_stream(
         "messages": messages,
         "temperature": temperature,
         "stream": True,
+        # Without this, vLLM / OpenAI omit `usage` from streamed responses and
+        # we end up persisting tokensIn=0 / tokensOut=0 for every conversation.
+        "stream_options": {"include_usage": True},
     }
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens

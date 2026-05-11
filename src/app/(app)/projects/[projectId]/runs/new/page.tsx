@@ -18,7 +18,7 @@ export default async function NewRunPage({
   const { projectId } = await params;
   await requireProjectPermission(projectId, "runs.execute");
 
-  const [taxonomy, personas, languageProfiles, providers, templates] = await Promise.all([
+  const [taxonomy, personas, languageProfiles, providers, templates, tools] = await Promise.all([
     prisma.taxonomy.findFirst({
       where: { projectId },
       include: { nodes: { orderBy: { path: "asc" } } },
@@ -48,6 +48,11 @@ export default async function NewRunPage({
       where: { projectId, kind: { in: ["user-seed", "system"] } },
       orderBy: { name: "asc" },
       select: { id: true, name: true, kind: true },
+    }),
+    prisma.toolDef.findMany({
+      where: { catalog: { projectId } },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, description: true, localePresets: true },
     }),
   ]);
 
@@ -101,6 +106,12 @@ export default async function NewRunPage({
             languageProfiles={languageProfiles}
             providers={providers}
             templates={templates}
+            tools={tools.map((t) => ({
+              id: t.id,
+              name: t.name,
+              description: t.description,
+              localePresets: t.localePresets,
+            }))}
           />
         </CardContent>
       </Card>

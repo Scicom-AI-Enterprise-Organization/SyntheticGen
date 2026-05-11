@@ -43,7 +43,8 @@ export type AiAssistKind =
   | "language-profile"
   | "prompt-template"
   | "tool-def"
-  | "flow-graph";
+  | "flow-graph"
+  | "benchmark-rubric";
 
 export interface AiAssistResult {
   ok: boolean;

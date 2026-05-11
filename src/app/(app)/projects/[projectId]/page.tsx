@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowRight, Languages, Users2, FileCode, Play, MessagesSquare, Database } from "lucide-react";
+import { ArrowRight, Languages, Users2, FileCode, Play, MessagesSquare, Database, BookOpen } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission } from "@/lib/project-rbac";
 import {
@@ -28,6 +28,7 @@ export default async function ProjectOverviewPage({
       prisma.generationRun.count({ where: { projectId } }),
       prisma.conversation.count({ where: { projectId } }),
       prisma.dataset.count({ where: { projectId } }),
+      prisma.knowledgeBaseEntry.count({ where: { projectId } }),
     ]),
     prisma.generationRun.findMany({
       where: { projectId },
@@ -43,12 +44,13 @@ export default async function ProjectOverviewPage({
     }),
   ]);
 
-  const [personas, languages, templates, providers, runs, convos, datasets] = counts;
+  const [personas, languages, templates, providers, runs, convos, datasets, knowledge] = counts;
 
   const cards: { label: string; value: number; href: string; icon: typeof Languages }[] = [
     { label: "Personas", value: personas, href: `/projects/${projectId}/personas`, icon: Users2 },
     { label: "Language profiles", value: languages, href: `/projects/${projectId}/languages`, icon: Languages },
     { label: "Templates", value: templates, href: `/projects/${projectId}/templates`, icon: FileCode },
+    { label: "Knowledge base", value: knowledge, href: `/projects/${projectId}/knowledge`, icon: BookOpen },
     { label: "Providers", value: providers, href: `/projects/${projectId}/providers`, icon: Play },
     { label: "Runs", value: runs, href: `/projects/${projectId}/runs`, icon: Play },
     { label: "Conversations", value: convos, href: `/projects/${projectId}/conversations`, icon: MessagesSquare },

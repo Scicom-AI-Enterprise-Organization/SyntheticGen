@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
-import type { Prisma } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission } from "@/lib/project-rbac";
 import { logAudit } from "@/lib/audit";
@@ -18,6 +18,8 @@ const upsertToolSchema = z.object({
   description: z.string().min(1).max(2000),
   parametersJson: z.string().min(2),
   localePresets: z.array(z.string()).default([]),
+  // Optional synthetic argument examples produced by AI-assist self-verify.
+  examples: z.array(z.record(z.string(), z.unknown())).optional().nullable(),
 });
 
 export async function createToolDef(input: z.infer<typeof upsertToolSchema>) {
@@ -42,6 +44,10 @@ export async function createToolDef(input: z.infer<typeof upsertToolSchema>) {
       description: parsed.data.description,
       parameters,
       localePresets: parsed.data.localePresets,
+      examples:
+        parsed.data.examples && parsed.data.examples.length > 0
+          ? (parsed.data.examples as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
     },
   });
 

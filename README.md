@@ -233,7 +233,7 @@ while leaving `db` / `synthgen-api` / `synthgen-worker` in compose:
 
 ```bash
 docker compose up -d db synthgen-api synthgen-worker
-npm run db:migrate && npm run db:seed && npm run dev
+npm run db:migrate && npm run db:seed && rm -rf .next && npm run dev
 ```
 
 Open http://localhost:3000 and sign in. Click **Projects → New project**.

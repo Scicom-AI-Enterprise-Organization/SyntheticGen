@@ -1,8 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { Sparkles } from "lucide-react";
-import { toast } from "sonner";
+import { useRef, useState, useTransition } from "react";
+import { Loader2, Sparkles } from "lucide-react";
 import yaml from "js-yaml";
 import { Button } from "@/components/ui/button";
 import {
@@ -34,6 +33,14 @@ interface ProviderOption {
   defaultModel: string | null;
 }
 
+const EXAMPLE_PROMPT = `A TM modem outage triage flow:
+- greet
+- ask account number
+- look up account + modem status (parallel)
+- if outage in area → inform + offer ETA
+- if modem offline → ask user to restart, check again
+- if still broken → escalate to ticket`;
+
 export function GenerateFlowDialog({
   projectId,
   providers,
@@ -50,38 +57,46 @@ export function GenerateFlowDialog({
   const [providerId, setProviderId] = useState(providers[0]?.id ?? "");
   const [parsed, setParsed] = useState<CoercedGraph | null>(null);
   const [yamlPreview, setYamlPreview] = useState<string>("");
+  const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
+  const [randomizing, setRandomizing] = useState(false);
+  const randomizeAbortRef = useRef<AbortController | null>(null);
   const [pending, start] = useTransition();
   const confirm = useConfirm();
 
   function reset() {
     setParsed(null);
     setYamlPreview("");
+    setError(null);
+    setInfo(null);
+  }
+
+  function toolCatalogContext(): string {
+    const lines =
+      tools.length === 0
+        ? "(none configured)"
+        : tools
+            .map(
+              (t) =>
+                `- id: ${t.id}\n  name: ${t.name}${t.description ? `\n  desc: ${t.description.slice(0, 120)}` : ""}`,
+            )
+            .join("\n");
+    return `AVAILABLE_TOOLS:\n${lines}`;
   }
 
   function onGenerate() {
+    setError(null);
+    setInfo(null);
     if (!prompt.trim()) {
-      toast.error("Describe what the flow should do.");
+      setError("Describe what the flow should do.");
       return;
     }
     if (!providerId) {
-      toast.error("No provider configured. Add one under Providers.");
+      setError("No provider configured. Add one under Providers.");
       return;
     }
     start(async () => {
       try {
-        // Tell the LLM exactly which tool IDs are available so action.toolIds
-        // stays in-bounds. Names + descriptions help it pick relevant ones.
-        const toolCatalog =
-          tools.length === 0
-            ? "(none configured)"
-            : tools
-                .map(
-                  (t) =>
-                    `- id: ${t.id}\n  name: ${t.name}${t.description ? `\n  desc: ${t.description.slice(0, 120)}` : ""}`,
-                )
-                .join("\n");
-        const extraContext = `AVAILABLE_TOOLS:\n${toolCatalog}`;
-
         const res = await fetch(`/api/projects/${projectId}/ai-assist`, {
           method: "POST",
           headers: { "content-type": "application/json" },
@@ -89,7 +104,7 @@ export function GenerateFlowDialog({
             kind: "flow-graph",
             prompt,
             providerId,
-            extraContext,
+            extraContext: toolCatalogContext(),
           }),
         });
         if (!res.ok) {
@@ -98,7 +113,6 @@ export function GenerateFlowDialog({
         }
         const json = (await res.json()) as { data: unknown };
         const validToolIds = new Set(tools.map((t) => t.id));
-        // AI-generated graphs never carry positions — auto-layout owns that.
         const graph = coerceFlowGraph(json.data, { validToolIds, preservePositions: false });
         setParsed(graph);
         setYamlPreview(
@@ -107,15 +121,94 @@ export function GenerateFlowDialog({
             { indent: 2, lineWidth: 120 },
           ),
         );
-        if (graph.warnings.length > 0) {
-          toast.warning(`Generated with ${graph.warnings.length} warning(s) — see preview.`);
-        } else {
-          toast.success(`Generated ${graph.nodes.length} nodes / ${graph.edges.length} edges.`);
-        }
+        setInfo(
+          graph.warnings.length > 0
+            ? `Generated with ${graph.warnings.length} warning(s) — see preview.`
+            : `Generated ${graph.nodes.length} nodes / ${graph.edges.length} edges.`,
+        );
       } catch (e) {
-        toast.error((e as Error).message);
+        setError((e as Error).message);
       }
     });
+  }
+
+  async function onRandomize() {
+    setError(null);
+    setInfo(null);
+    if (!providerId) {
+      setError("Pick a provider before randomizing.");
+      return;
+    }
+    setRandomizing(true);
+    setPrompt("");
+    const controller = new AbortController();
+    randomizeAbortRef.current = controller;
+    try {
+      const res = await fetch(
+        `/api/projects/${projectId}/random-prompt?stream=1`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            providerId,
+            description:
+              "Invent ONE concise prompt for an LLM to draft a conversation flow graph. Pick a realistic domain (Malaysian telco support, retail banking, hospital, ride-hailing, e-commerce returns, etc.). Sketch 5–10 steps in bullet form covering greeting, intent capture, tool lookups (parallel when independent), conditional branches on tool results, and an end state. Mention which AVAILABLE_TOOLS might apply. ONE short prompt — used as input to a downstream form-filling LLM.",
+            extraContext: toolCatalogContext(),
+            maxTokens: 4000,
+          }),
+          signal: controller.signal,
+        },
+      );
+      if (!res.ok || !res.body) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `http ${res.status}`);
+      }
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let liveContent = "";
+      let finalText: string | null = null;
+
+      outer: while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          let evt: Record<string, unknown>;
+          try { evt = JSON.parse(trimmed); } catch { continue; }
+          const type = evt.type as string;
+          if (type === "delta") {
+            if (!evt.reasoning) {
+              liveContent += (evt.text as string) ?? "";
+              setPrompt(liveContent);
+            }
+          } else if (type === "done") {
+            finalText = (evt.text as string) ?? liveContent;
+            break outer;
+          } else if (type === "error") {
+            throw new Error((evt.error as string) || "Randomize failed");
+          }
+        }
+      }
+      if (finalText) setPrompt(finalText.trim());
+      else if (!liveContent) throw new Error("Randomize returned an empty prompt.");
+    } catch (e) {
+      const err = e as Error;
+      if (err.name !== "AbortError" && !controller.signal.aborted) {
+        setError(err.message);
+      }
+    } finally {
+      if (randomizeAbortRef.current === controller) randomizeAbortRef.current = null;
+      setRandomizing(false);
+    }
+  }
+
+  function onStopRandomize() {
+    randomizeAbortRef.current?.abort();
   }
 
   async function onApplyClick() {
@@ -132,7 +225,6 @@ export function GenerateFlowDialog({
     setOpen(false);
     setPrompt("");
     reset();
-    toast.success("Applied — click Save to persist.");
   }
 
   if (providers.length === 0) {
@@ -179,21 +271,51 @@ export function GenerateFlowDialog({
 
           <div className="space-y-3">
             <div className="space-y-2">
-              <Label htmlFor="gf-prompt">Prompt</Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="gf-prompt">Prompt</Label>
+                <div className="flex gap-1">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setPrompt(EXAMPLE_PROMPT)}
+                    disabled={pending || randomizing}
+                    title="Fill with an example flow prompt"
+                  >
+                    Use example
+                  </Button>
+                  {randomizing ? (
+                    <Button type="button" variant="destructive" size="sm" onClick={onStopRandomize}>
+                      Stop
+                    </Button>
+                  ) : (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={onRandomize}
+                      disabled={pending}
+                      title="Ask the LLM to invent a flow prompt"
+                    >
+                      Randomize
+                    </Button>
+                  )}
+                </div>
+              </div>
               <Textarea
                 id="gf-prompt"
                 rows={6}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                placeholder={`A TM modem outage triage flow:
-- greet
-- ask account number
-- look up account + modem status (parallel)
-- if outage in area → inform + offer ETA
-- if modem offline → ask user to restart, check again
-- if still broken → escalate to ticket`}
-                disabled={pending}
+                placeholder={EXAMPLE_PROMPT}
+                disabled={pending || randomizing}
               />
+              {randomizing && (
+                <p className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  Streaming prompt…
+                </p>
+              )}
             </div>
 
             <div className="space-y-2">
@@ -241,11 +363,18 @@ export function GenerateFlowDialog({
             )}
           </div>
 
+          {error && (
+            <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+              {error}
+            </p>
+          )}
+          {info && !error && <p className="text-xs text-muted-foreground">{info}</p>}
+
           <DialogFooter className="gap-2">
             <Button variant="ghost" onClick={() => setOpen(false)} disabled={pending}>
               Cancel
             </Button>
-            <Button variant="outline" onClick={onGenerate} disabled={pending}>
+            <Button variant="outline" onClick={onGenerate} disabled={pending || randomizing}>
               {pending ? "Generating…" : parsed ? "Regenerate" : "Generate"}
             </Button>
             <Button onClick={onApplyClick} disabled={!parsed || pending}>

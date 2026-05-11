@@ -4,6 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  BookOpen,
   Building2,
   ChevronDown,
   ChevronLeft,
@@ -13,6 +14,7 @@ import {
   FlaskConical,
   FolderKanban,
   GitBranch,
+  Gauge,
   Home,
   KeySquare,
   Languages,
@@ -51,6 +53,7 @@ const PROJECT_NAV: { label: string; segment: string; icon: LucideIcon }[] = [
   { label: "Personas", segment: "personas", icon: Users2 },
   { label: "Languages", segment: "languages", icon: Languages },
   { label: "Templates", segment: "templates", icon: FileCode },
+  { label: "Knowledge", segment: "knowledge", icon: BookOpen },
   { label: "Flows", segment: "flows", icon: GitBranch },
   { label: "Tools", segment: "tools", icon: Wrench },
   { label: "Providers", segment: "providers", icon: KeySquare },
@@ -58,6 +61,7 @@ const PROJECT_NAV: { label: string; segment: string; icon: LucideIcon }[] = [
   { label: "Conversations", segment: "conversations", icon: MessagesSquare },
   { label: "Datasets", segment: "datasets", icon: Database },
   { label: "Benchmarks", segment: "benchmarks", icon: FlaskConical },
+  { label: "Rubrics", segment: "rubrics", icon: Gauge },
   { label: "Settings", segment: "settings", icon: Settings },
 ];
 

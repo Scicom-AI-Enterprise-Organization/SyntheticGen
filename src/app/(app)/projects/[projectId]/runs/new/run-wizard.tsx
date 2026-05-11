@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState, useTransition } from "react";
-import { toast } from "sonner";
 import { Play, AlertTriangle, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,6 +45,12 @@ interface Template {
   name: string;
   kind: string;
 }
+interface Tool {
+  id: string;
+  name: string;
+  description: string | null;
+  localePresets: string[];
+}
 
 const DIFFICULTIES = ["easy", "medium", "hard"];
 
@@ -56,6 +61,7 @@ export function RunWizard({
   languageProfiles,
   providers,
   templates,
+  tools,
 }: {
   projectId: string;
   taxonomy: Node[];
@@ -63,6 +69,7 @@ export function RunWizard({
   languageProfiles: LP[];
   providers: Provider[];
   templates: Template[];
+  tools: Tool[];
 }) {
   const [name, setName] = useState("Run " + new Date().toISOString().slice(0, 16).replace("T", " "));
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
@@ -80,6 +87,10 @@ export function RunWizard({
     "inherit",
   );
   const [temperature, setTemperature] = useState(0.7);
+  const [maxTokens, setMaxTokens] = useState(8192);
+  const [relatedTopics, setRelatedTopics] = useState(0);
+  const [toolIds, setToolIds] = useState<string[]>([]);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
   const totalCells = nodeIds.length * personaIds.length * difficulties.length * rowsPerCell;
@@ -103,8 +114,9 @@ export function RunWizard({
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setSubmitError(null);
     if (totalCells === 0) {
-      toast.error("Pick at least one taxonomy node, persona, and difficulty");
+      setSubmitError("Pick at least one taxonomy node, persona, and difficulty.");
       return;
     }
     start(async () => {
@@ -121,13 +133,15 @@ export function RunWizard({
         difficulties,
         rowsPerCell,
         turns,
+        relatedTopics,
+        toolIds,
         formalityPolicy,
         temperature,
         topP: 1.0,
-        maxTokens: 1024,
+        maxTokens,
         seed: null,
       });
-      if (res && "error" in res && res.error) toast.error(res.error);
+      if (res && "error" in res && res.error) setSubmitError(res.error);
       // Successful path redirects in the action.
     });
   }
@@ -218,15 +232,25 @@ export function RunWizard({
         </div>
 
         <div className="space-y-2">
-          <Label>Temperature</Label>
-          <Input
-            type="number"
+          <div className="flex items-center justify-between">
+            <Label htmlFor="r-temp">Temperature</Label>
+            <span className="font-mono text-xs text-muted-foreground">
+              {temperature.toFixed(2)}
+            </span>
+          </div>
+          <input
+            id="r-temp"
+            type="range"
             min={0}
             max={2}
             step={0.05}
             value={temperature}
             onChange={(e) => setTemperature(Number(e.target.value))}
+            className="w-full accent-primary"
           />
+          <p className="text-xs text-muted-foreground">
+            0 = deterministic, 1 = balanced, 2 = wildly creative.
+          </p>
         </div>
 
         <div className="space-y-2">
@@ -242,6 +266,29 @@ export function RunWizard({
         </div>
 
         <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Label htmlFor="r-maxtok">Max output tokens</Label>
+            <span className="font-mono text-xs text-muted-foreground">
+              {maxTokens.toLocaleString()}
+            </span>
+          </div>
+          <input
+            id="r-maxtok"
+            type="range"
+            min={256}
+            max={64000}
+            step={256}
+            value={maxTokens}
+            onChange={(e) => setMaxTokens(Number(e.target.value))}
+            className="w-full accent-primary"
+          />
+          <p className="text-xs text-muted-foreground">
+            Sent as <code>max_tokens</code> on every generation call. Bump higher
+            for reasoning models so thinking + answer both fit.
+          </p>
+        </div>
+
+        <div className="space-y-2">
           <Label>Turns per conversation</Label>
           <Input
             type="number"
@@ -252,9 +299,25 @@ export function RunWizard({
             required
           />
           <p className="text-xs text-muted-foreground">
-            How many user↔assistant exchanges per conversation. Slice 1's
-            single-turn worker honours <code>1</code>; use <strong>Flows</strong>{" "}
-            for richer multi-turn graphs.
+            Only meaningful for the single-turn pipeline. Pick a <strong>Flow</strong>{" "}
+            once that integration lands to drive richer multi-turn conversations
+            graph-style. Slice 1 honours <code>1</code>.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <Label>Related topics per conversation</Label>
+          <Input
+            type="number"
+            min={0}
+            max={6}
+            value={relatedTopics}
+            onChange={(e) => setRelatedTopics(Number(e.target.value))}
+          />
+          <p className="text-xs text-muted-foreground">
+            Inject N additional taxonomy node names per conversation as{" "}
+            <code>{"{{taxonomy.related}}"}</code> in the template. Conversation is
+            still tagged with the primary node only. <code>0</code> = strictly single-topic.
           </p>
         </div>
       </div>
@@ -368,6 +431,59 @@ export function RunWizard({
 
       <div>
         <div className="mb-2 flex items-center justify-between">
+          <Label>Tools ({toolIds.length} selected)</Label>
+          {tools.length > 0 && (
+            <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+              <Checkbox
+                checked={
+                  toolIds.length === tools.length
+                    ? true
+                    : toolIds.length === 0
+                      ? false
+                      : "indeterminate"
+                }
+                onCheckedChange={(v) =>
+                  setToolIds(v === true ? tools.map((t) => t.id) : [])
+                }
+              />
+              {toolIds.length === tools.length ? "Unselect all" : "Select all"}
+            </label>
+          )}
+        </div>
+        {tools.length === 0 ? (
+          <p className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+            No tools in this project's catalog yet. Add some under{" "}
+            <strong>Tools</strong> to expose function-calling.
+          </p>
+        ) : (
+          <div className="grid grid-cols-1 gap-2 rounded-md border border-border p-3 sm:grid-cols-2">
+            {tools.map((t) => (
+              <label key={t.id} className="flex items-start gap-2 text-xs">
+                <Checkbox
+                  checked={toolIds.includes(t.id)}
+                  onCheckedChange={() => setToolIds((arr) => toggleArr(arr, t.id))}
+                />
+                <span className="min-w-0">
+                  <span className="font-mono">{t.name}</span>
+                  {t.localePresets.length > 0 && (
+                    <span className="ml-1 text-muted-foreground">
+                      [{t.localePresets.join(", ")}]
+                    </span>
+                  )}
+                  {t.description && (
+                    <span className="block truncate text-muted-foreground">
+                      {t.description}
+                    </span>
+                  )}
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div>
+        <div className="mb-2 flex items-center justify-between">
           <Label>Difficulties ({difficulties.length} selected)</Label>
           <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
             <Checkbox
@@ -409,10 +525,17 @@ export function RunWizard({
         )}
       </div>
 
-      <Button type="submit" disabled={pending || totalCells === 0 || totalCells > 1000} size="lg">
-        <Play className="mr-2 h-4 w-4" />
-        {pending ? "Starting…" : `Start run (${totalCells} samples)`}
-      </Button>
+      <div className="space-y-2">
+        {submitError && (
+          <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+            {submitError}
+          </p>
+        )}
+        <Button type="submit" disabled={pending || totalCells === 0 || totalCells > 1000} size="lg">
+          <Play className="mr-2 h-4 w-4" />
+          {pending ? "Starting…" : `Start run (${totalCells} samples)`}
+        </Button>
+      </div>
     </form>
   );
 }

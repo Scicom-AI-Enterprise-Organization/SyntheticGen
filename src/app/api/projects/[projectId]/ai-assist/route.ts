@@ -14,6 +14,8 @@ const KIND_TO_ACTION = {
   "prompt-template": "templates.write",
   "tool-def": "tools.write",
   "flow-graph": "flows.write",
+  "benchmark-rubric": "benchmarks.write",
+  "knowledge-entry": "knowledge.write",
 } as const;
 
 const bodySchema = z.object({
@@ -24,12 +26,15 @@ const bodySchema = z.object({
     "prompt-template",
     "tool-def",
     "flow-graph",
+    "benchmark-rubric",
+    "knowledge-entry",
   ]),
   prompt: z.string().min(3).max(4000),
   providerId: z.string(),
   model: z.string().optional().nullable(),
-  // flow-graph passes the project's tool catalog as extraContext, which can be larger.
-  extraContext: z.string().max(16000).optional().nullable(),
+  // knowledge-entry ships the full extracted doc as extraContext (much bigger
+  // than the flow-graph's tool catalog).
+  extraContext: z.string().max(100_000).optional().nullable(),
   maxTokens: z.number().int().min(256).max(64000).optional().nullable(),
 });
 

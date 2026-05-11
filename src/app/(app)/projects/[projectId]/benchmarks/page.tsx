@@ -21,27 +21,46 @@ export default async function BenchmarksPage({
   const { role } = await requireProjectPermission(projectId, "benchmarks.read");
   const canWrite = role ? projectRoleAllows(role, "benchmarks.write") : false;
 
-  const benchmarks = await prisma.benchmark.findMany({
-    where: { projectId },
-    orderBy: { createdAt: "desc" },
-    include: {
-      _count: { select: { runs: true } },
-      runs: {
-        orderBy: { createdAt: "desc" },
-        take: 1,
-        select: { status: true, model: true, createdAt: true, metrics: true },
+  const [benchmarks, runs, rubrics] = await Promise.all([
+    prisma.benchmark.findMany({
+      where: { projectId },
+      orderBy: { createdAt: "desc" },
+      include: {
+        _count: { select: { runs: true } },
+        runs: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { status: true, model: true, createdAt: true, metrics: true },
+        },
       },
-    },
-  });
+    }),
+    prisma.generationRun.findMany({
+      where: { projectId, acceptedCount: { gt: 0 } },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: {
+        id: true,
+        name: true,
+        model: true,
+        acceptedCount: true,
+        createdAt: true,
+      },
+    }),
+    prisma.rubric.findMany({
+      where: { projectId },
+      orderBy: [{ isPreset: "desc" }, { name: "asc" }],
+      select: { id: true, name: true, isPreset: true },
+    }),
+  ]);
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Benchmarks</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Evaluate any OpenAI-compatible model against a published dataset. Counterpart to Runs:
-          Runs <em>generate</em> data, Benchmarks <em>consume</em> it to score models. Each run
-          targets one (Provider × Model); compare runs to build a leaderboard.
+          Replay project-generated conversations through a candidate model and score against the
+          reference assistant turns with deterministic validators + an LLM judge. Each run targets
+          one (Provider × Model); compare runs to build a leaderboard.
         </p>
       </div>
 
@@ -50,13 +69,23 @@ export default async function BenchmarksPage({
           <CardHeader>
             <CardTitle>New benchmark</CardTitle>
             <CardDescription>
-              Point at a HuggingFace dataset like{" "}
-              <code className="font-mono">hf:Scicom-intl/Function-Call</code> and pick which
-              splits to evaluate.
+              Freeze a slice of project-generated conversations as the eval set. Each run replays
+              the recorded user turns through a candidate model and the rubric-driven LLM judge
+              scores it against the original assistant turns.
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <CreateBenchmarkForm projectId={projectId} />
+            <CreateBenchmarkForm
+              projectId={projectId}
+              runs={runs.map((r) => ({
+                id: r.id,
+                name: r.name,
+                model: r.model,
+                acceptedCount: r.acceptedCount,
+                createdAt: r.createdAt.toISOString(),
+              }))}
+              rubrics={rubrics}
+            />
           </CardContent>
         </Card>
       )}

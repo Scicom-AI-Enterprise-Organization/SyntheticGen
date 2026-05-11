@@ -48,9 +48,11 @@ export async function GET(
         id: m.id,
         role: m.role,
         content: m.content,
+        reasoningContent: m.reasoningContent,
         ordinal: m.ordinal,
         language: m.language,
         tokenCount: m.tokenCount,
+        latencyMs: m.latencyMs,
         model: m.model,
       })),
       validations: c.validations.map((v) => ({

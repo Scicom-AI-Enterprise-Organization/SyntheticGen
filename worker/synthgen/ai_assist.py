@@ -97,10 +97,18 @@ TOOL_DEF_FIELDS = """\
     },
     "required": ["<arg_name>", ...]
   },
-  "localePresets": ["short tags like mykad, lhdn, maybank, cimb, tng, duitnow, banking, telco — use one or more when relevant"]
+  "localePresets": ["short tags like mykad, lhdn, maybank, cimb, tng, duitnow, banking, telco — use one or more when relevant"],
+  "examples": [
+    { "<arg_name>": "<realistic locale-appropriate value>" },
+    { "<arg_name>": "<another distinct example>" },
+    { "<arg_name>": "<third example>" }
+  ]
 }
 
 `parameters` MUST be a valid JSON Schema object describing the function arguments.
+`examples` MUST be an array of 2–4 objects, EACH object satisfying that JSON
+Schema (correct types, all required keys present, locale-appropriate values —
+e.g. valid 12-digit MyKad, MYR amounts in numbers, ISO dates).
 """
 
 FLOW_GRAPH_FIELDS = """\
@@ -154,6 +162,50 @@ Modeling guidance:
 - Prefer clarity over completeness — 5-15 nodes is usually right.
 """
 
+BENCHMARK_RUBRIC_FIELDS = """\
+A rubric defines the axes an LLM-as-judge scores a candidate model's output on
+when benchmarking against project-generated reference conversations. Return
+ONLY this JSON object:
+
+{
+  "name": "Short rubric name, 2-120 chars (e.g. 'Malaysian Casual Telco Support')",
+  "description": "1-2 sentences describing what this rubric measures",
+  "axes": [
+    {
+      "key": "snake_case_identifier",
+      "name": "Human-readable axis name",
+      "description": "1-2 sentence definition of what high scores look like",
+      "scale": 5,
+      "weight": 1.0,
+      "examples": [
+        { "score": 5, "output": "Short illustrative excerpt", "reason": "Why this is a 5" },
+        { "score": 2, "output": "Short failing excerpt",     "reason": "Why this is a 2" }
+      ]
+    }
+  ]
+}
+
+Constraints:
+- Return 3-6 axes — enough to cover the dimensions the user cares about, not so
+  many that the judge gets diluted.
+- Every axis MUST have key, name, description, scale, weight. `examples` is
+  optional but strongly recommended (2-3 anchors).
+- `scale` MUST be an integer in [2, 10]. Default to 5 unless the user asks
+  otherwise.
+- `weight` is a positive float. Use 1.0 unless the user is explicit; uneven
+  weights should sum to roughly the number of axes (so averages stay readable).
+- Pick concise lowercase `key` values that read like field names, e.g.
+  `language_fidelity`, `register_match`, `helpfulness`, `faithfulness_to_reference`,
+  `tool_call_accuracy`, `safety`.
+- For Malaysia-focused projects, default axes should include language fidelity
+  (target = primary language of the reference set) and register match
+  (formal/colloquial/manglish).
+- DO NOT invent axes the user didn't hint at. Stay grounded in their prompt and
+  the EXISTING_RUBRICS context if provided.
+- DO NOT wrap the JSON in prose, markdown fences, or comments.
+"""
+
+
 KIND_FIELDS: dict[str, str] = {
     "persona": PERSONA_FIELDS,
     "taxonomy-node": TAXONOMY_NODE_FIELDS,
@@ -161,6 +213,7 @@ KIND_FIELDS: dict[str, str] = {
     "prompt-template": PROMPT_TEMPLATE_FIELDS,
     "tool-def": TOOL_DEF_FIELDS,
     "flow-graph": FLOW_GRAPH_FIELDS,
+    "benchmark-rubric": BENCHMARK_RUBRIC_FIELDS,
 }
 
 
@@ -175,6 +228,7 @@ KIND_MAX_TOKENS: dict[str, int] = {
     "tool-def": 6000,
     "language-profile": 16000,
     "flow-graph": 16000,
+    "benchmark-rubric": 8000,
 }
 
 
@@ -201,6 +255,42 @@ Defaults / hints:
 
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
+
+
+def _verify_tool_examples(parsed: dict[str, Any]) -> dict[str, Any]:
+    """For kind='tool-def', validate `examples` against `parameters` JSON Schema.
+    Drops invalid examples, attaches the validation errors as `_examplesWarnings`.
+    """
+    schema = parsed.get("parameters")
+    examples = parsed.get("examples")
+    if not isinstance(schema, dict) or not isinstance(examples, list):
+        return parsed
+
+    try:
+        from jsonschema import Draft202012Validator  # noqa: WPS433
+    except Exception:  # noqa: BLE001
+        return parsed  # jsonschema is already a dep, but fail soft if absent.
+
+    try:
+        validator = Draft202012Validator(schema)
+    except Exception as e:  # invalid schema — let the form surface this
+        parsed["_examplesWarnings"] = [f"parameters schema invalid: {e}"]
+        return parsed
+
+    valid: list[Any] = []
+    warnings: list[str] = []
+    for i, ex in enumerate(examples):
+        errs = list(validator.iter_errors(ex))
+        if not errs:
+            valid.append(ex)
+        else:
+            for err in errs:
+                path = ".".join(str(p) for p in err.absolute_path) or "<root>"
+                warnings.append(f"example[{i}] at {path}: {err.message}")
+    parsed["examples"] = valid
+    if warnings:
+        parsed["_examplesWarnings"] = warnings
+    return parsed
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -303,6 +393,8 @@ async def ai_assist(
     )
 
     parsed = _extract_json(result.content)
+    if kind == "tool-def":
+        parsed = _verify_tool_examples(parsed)
     return {
         "data": parsed,
         "model": result.model,
@@ -565,6 +657,9 @@ async def ai_assist_stream(
             "raw": full_text[-2000:],
         }
         return
+
+    if kind == "tool-def":
+        parsed = _verify_tool_examples(parsed)
 
     yield {
         "type": "done",

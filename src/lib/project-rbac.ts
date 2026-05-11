@@ -17,6 +17,8 @@ export type ProjectAction =
   | "languages.write"
   | "tools.read"
   | "tools.write"
+  | "knowledge.read"
+  | "knowledge.write"
   | "templates.read"
   | "templates.write"
   | "flows.read"
@@ -42,6 +44,7 @@ const ROLE_ACTIONS: Record<ProjectRole, ProjectAction[]> = {
     "personas.read", "personas.write",
     "languages.read", "languages.write",
     "tools.read", "tools.write",
+    "knowledge.read", "knowledge.write",
     "templates.read", "templates.write",
     "flows.read", "flows.write",
     "runs.read", "runs.execute", "runs.cancel",
@@ -56,6 +59,7 @@ const ROLE_ACTIONS: Record<ProjectRole, ProjectAction[]> = {
     "personas.read", "personas.write",
     "languages.read", "languages.write",
     "tools.read", "tools.write",
+    "knowledge.read", "knowledge.write",
     "templates.read", "templates.write",
     "flows.read", "flows.write",
     "runs.read", "runs.execute", "runs.cancel",
@@ -66,6 +70,7 @@ const ROLE_ACTIONS: Record<ProjectRole, ProjectAction[]> = {
   ANNOTATOR: [
     "project.read",
     "taxonomy.read", "personas.read", "languages.read", "tools.read",
+    "knowledge.read",
     "templates.read", "flows.read", "runs.read",
     "conversations.read", "conversations.annotate",
     "datasets.read",
@@ -74,6 +79,7 @@ const ROLE_ACTIONS: Record<ProjectRole, ProjectAction[]> = {
   VIEWER: [
     "project.read",
     "taxonomy.read", "personas.read", "languages.read", "tools.read",
+    "knowledge.read",
     "templates.read", "flows.read", "runs.read",
     "conversations.read", "datasets.read",
     "benchmarks.read",

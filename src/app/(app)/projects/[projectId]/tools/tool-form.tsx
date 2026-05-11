@@ -44,6 +44,8 @@ export function ToolForm({
   const [description, setDescription] = useState("");
   const [parametersJson, setParametersJson] = useState(STARTER_PARAMS);
   const [presets, setPresets] = useState("");
+  const [examples, setExamples] = useState<Record<string, unknown>[]>([]);
+  const [exampleWarnings, setExampleWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -70,7 +72,6 @@ export function ToolForm({
     if (data["parameters"] && typeof data["parameters"] === "object") {
       setParametersJson(JSON.stringify(data["parameters"], null, 2));
     } else if (s("parametersJson")) {
-      // Some models return the JSON Schema as a string under this key.
       setParametersJson(s("parametersJson")!);
     }
     if (Array.isArray(data["localePresets"])) {
@@ -79,6 +80,24 @@ export function ToolForm({
           .filter((x): x is string => typeof x === "string")
           .join(", "),
       );
+    }
+    if (Array.isArray(data["examples"])) {
+      const cleaned = (data["examples"] as unknown[]).filter(
+        (x): x is Record<string, unknown> =>
+          x !== null && typeof x === "object" && !Array.isArray(x),
+      );
+      setExamples(cleaned);
+    } else {
+      setExamples([]);
+    }
+    if (Array.isArray(data["_examplesWarnings"])) {
+      setExampleWarnings(
+        (data["_examplesWarnings"] as unknown[]).filter(
+          (x): x is string => typeof x === "string",
+        ),
+      );
+    } else {
+      setExampleWarnings([]);
     }
   }
 
@@ -97,6 +116,7 @@ export function ToolForm({
           .split(/[,\n]+/)
           .map((s) => s.trim())
           .filter(Boolean),
+        examples: examples.length > 0 ? examples : null,
       });
       if ("error" in res && res.error) {
         setError(res.error);
@@ -106,6 +126,8 @@ export function ToolForm({
         setDescription("");
         setParametersJson(STARTER_PARAMS);
         setPresets("");
+        setExamples([]);
+        setExampleWarnings([]);
       }
     });
   }
@@ -121,15 +143,20 @@ export function ToolForm({
           onApply={applyAi}
           open={suggestOpen}
           onOpenChange={setSuggestOpen}
+          extraContext={
+            existingTools && existingTools.length > 0
+              ? `DO NOT duplicate or near-duplicate any of these existing tools in this project's catalog (different name AND different functional intent):\n${existingTools.map((t) => `- ${t}`).join("\n")}`
+              : null
+          }
           randomizePrompt={{
             description:
-              "Invent ONE concise prompt for an LLM to draft a ToolDef. Pick a realistic domain (Malaysian retail banking, telco postpaid, healthcare appointment, government e-filing, e-commerce returns, ride-hailing, food delivery, etc.) and describe a specific function the customer-support assistant could call (lookup, status check, update, mock action). Mention 2–4 concrete arguments by name (with locale-appropriate formats like MyKad / IBAN / SIRET / tracking ID) and one or two locale presets to tag it with. ONE or TWO sentences — used as input to a downstream form-filling LLM.",
+              "Invent ONE concise prompt for an LLM to draft a ToolDef. Pick a realistic domain (Malaysian retail banking, telco postpaid, healthcare appointment, government e-filing, e-commerce returns, ride-hailing, food delivery, etc.) and describe a specific function the customer-support assistant could call (lookup, status check, update, mock action). The function MUST NOT overlap (in name OR intent) with any existing tool listed below. Mention 2–4 concrete arguments by name (with locale-appropriate formats like MyKad / IBAN / SIRET / tracking ID) and one or two locale presets to tag it with. ONE or TWO sentences — used as input to a downstream form-filling LLM.",
             context: [
               taxonomyNodes && taxonomyNodes.length > 0
                 ? `Project taxonomy topics (pick one when relevant):\n${taxonomyNodes.map((t) => `- ${t}`).join("\n")}`
                 : null,
               existingTools && existingTools.length > 0
-                ? `Existing tools in this catalog (avoid duplicates; pick a complementary function):\n${existingTools.map((t) => `- ${t}`).join("\n")}`
+                ? `Existing tools in this catalog (the new tool must NOT duplicate any of these):\n${existingTools.map((t) => `- ${t}`).join("\n")}`
                 : null,
             ]
               .filter(Boolean)
@@ -177,20 +204,74 @@ export function ToolForm({
         />
       </div>
 
-      <div className="space-y-2">
-        <Label htmlFor="t-params">Parameters (JSON Schema)</Label>
-        <Textarea
-          id="t-params"
-          value={parametersJson}
-          onChange={(e) => setParametersJson(e.target.value)}
-          rows={10}
-          className="font-mono text-xs"
-          required
-        />
-        <p className="text-[11px] text-muted-foreground">
-          Standard OpenAI function-calling parameter shape. Must be a JSON object.
-        </p>
-      </div>
+      <details open className="rounded-md border border-border bg-muted/10">
+        <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium">
+          Parameters
+          <span className="ml-2 text-[10px] font-normal text-muted-foreground">
+            JSON Schema · {examples.length} synthetic example
+            {examples.length === 1 ? "" : "s"}
+            {exampleWarnings.length > 0 && (
+              <span className="ml-2 rounded-md bg-amber-500/20 px-1.5 py-0.5 text-amber-700 dark:text-amber-400">
+                {exampleWarnings.length} warning{exampleWarnings.length === 1 ? "" : "s"}
+              </span>
+            )}
+          </span>
+        </summary>
+
+        <div className="space-y-4 border-t border-border p-3">
+          <div className="space-y-2">
+            <Label htmlFor="t-params" className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              JSON Schema
+            </Label>
+            <Textarea
+              id="t-params"
+              value={parametersJson}
+              onChange={(e) => setParametersJson(e.target.value)}
+              rows={10}
+              className="font-mono text-xs"
+              required
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Standard OpenAI function-calling parameter shape. Must be a JSON object.
+            </p>
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-[11px] uppercase tracking-wide text-muted-foreground">
+              Synthetic examples
+            </Label>
+            {examples.length === 0 ? (
+              <p className="rounded-md border border-dashed border-border bg-background/40 p-2 text-[11px] text-muted-foreground">
+                None yet. Use <strong>Fill with AI</strong> — the LLM is asked to
+                emit 2-4 synthetic argument objects, the worker validates each
+                one against the schema above, and drops invalid ones.
+              </p>
+            ) : (
+              <>
+                <p className="text-[11px] text-muted-foreground">
+                  Auto-generated and validated against the JSON Schema above.
+                  Saved with the tool def for later replay / mock-executor seed.
+                </p>
+                {examples.map((ex, i) => (
+                  <pre
+                    key={i}
+                    className="overflow-auto rounded-md border border-border/70 bg-background/60 p-2 font-mono text-[11px]"
+                  >
+                    {JSON.stringify(ex, null, 2)}
+                  </pre>
+                ))}
+              </>
+            )}
+            {exampleWarnings.length > 0 && (
+              <ul className="rounded-md border border-amber-500/40 bg-amber-500/10 p-2 text-[10px] text-amber-700 dark:text-amber-400">
+                {exampleWarnings.map((w, i) => (
+                  <li key={i}>• {w}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </div>
+      </details>
 
       <div className="space-y-2">
         <Button type="submit" disabled={pending}>

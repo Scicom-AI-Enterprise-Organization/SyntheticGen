@@ -10,7 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { StartRunForm } from "./start-run-form";
 import { RunsTable } from "./runs-table";
 import { DeleteBenchmarkButton } from "./delete-benchmark-button";
@@ -26,10 +26,11 @@ export default async function BenchmarkDetailPage({
   const canWrite = role ? projectRoleAllows(role, "benchmarks.write") : false;
   const canCancel = role ? projectRoleAllows(role, "benchmarks.cancel") : false;
 
-  const [benchmark, providers] = await Promise.all([
+  const [benchmark, providers, rubrics] = await Promise.all([
     prisma.benchmark.findUnique({
       where: { id: benchmarkId },
       include: {
+        defaultRubric: { select: { id: true, name: true } },
         runs: {
           orderBy: { createdAt: "desc" },
           take: 50,
@@ -42,8 +43,21 @@ export default async function BenchmarkDetailPage({
       orderBy: { name: "asc" },
       select: { id: true, name: true, kind: true, defaultModel: true },
     }),
+    prisma.rubric.findMany({
+      where: { projectId },
+      orderBy: [{ isPreset: "desc" }, { name: "asc" }],
+      select: { id: true, name: true, isPreset: true },
+    }),
   ]);
   if (!benchmark || benchmark.projectId !== projectId) notFound();
+
+  const isChatReplay = benchmark.kind === "project-chat-replay";
+  const benchmarkConfig =
+    (benchmark.config as { mode?: string; filter?: Record<string, unknown> } | null) ?? null;
+  const defaultMode =
+    benchmarkConfig?.mode === "single-turn" || benchmarkConfig?.mode === "multi-turn"
+      ? benchmarkConfig.mode
+      : null;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -57,12 +71,21 @@ export default async function BenchmarkDetailPage({
           <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
             <FlaskConical className="h-5 w-5" />
             {benchmark.name}
+            <Badge variant="outline" className="text-[10px]">
+              {benchmark.kind}
+            </Badge>
           </h1>
           <p className="mt-1 text-sm text-muted-foreground">
             <span className="font-mono">{benchmark.source}</span>
-            {" · "}
-            splits: {benchmark.splits.join(" / ")}
+            {benchmark.splits.length > 0 && <> {" · "}splits: {benchmark.splits.join(" / ")}</>}
             {benchmark.maxRowsPerSplit && ` · capped at ${benchmark.maxRowsPerSplit}/split`}
+            {isChatReplay && benchmark.frozenConversationIds.length > 0 && (
+              <> {" · "}{benchmark.frozenConversationIds.length} frozen conversations</>
+            )}
+            {isChatReplay && defaultMode && <> {" · "}mode: {defaultMode}</>}
+            {isChatReplay && benchmark.defaultRubric && (
+              <> {" · "}rubric: <span className="font-mono">{benchmark.defaultRubric.name}</span></>
+            )}
           </p>
           {benchmark.description && (
             <p className="mt-1 text-xs text-muted-foreground">{benchmark.description}</p>
@@ -76,8 +99,9 @@ export default async function BenchmarkDetailPage({
           <CardHeader>
             <CardTitle>Start a run</CardTitle>
             <CardDescription>
-              Pick a provider and model. The Python worker fetches the dataset, walks rows,
-              calls the model with the row&apos;s tools, and scores predicted vs. expected.
+              Pick a candidate provider + model and a judge. The worker replays each frozen
+              conversation through the candidate, then asks the judge to score it against the
+              reference assistant turns using the rubric you select.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -89,7 +113,11 @@ export default async function BenchmarkDetailPage({
               <StartRunForm
                 projectId={projectId}
                 benchmarkId={benchmark.id}
+                benchmarkKind={benchmark.kind}
+                defaultMode={defaultMode}
+                defaultRubricId={benchmark.defaultRubricId}
                 providers={providers}
+                rubrics={rubrics}
               />
             )}
           </CardContent>
@@ -105,6 +133,7 @@ export default async function BenchmarkDetailPage({
           <RunsTable
             projectId={projectId}
             benchmarkId={benchmark.id}
+            benchmarkKind={benchmark.kind}
             canCancel={canCancel}
             runs={benchmark.runs.map((r) => ({
               id: r.id,

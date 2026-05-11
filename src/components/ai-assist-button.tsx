@@ -494,8 +494,8 @@ export function AiAssistButton({
                 Cancel
               </Button>
             )}
-            <Button onClick={onRun} disabled={pending}>
-              {pending ? "Generating…" : "Fill"}
+            <Button onClick={onRun} disabled={pending || randomizing}>
+              {pending ? "Generating…" : randomizing ? "Randomizing…" : "Fill"}
             </Button>
           </DialogFooter>
         </DialogContent>

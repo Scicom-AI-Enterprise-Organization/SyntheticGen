@@ -25,6 +25,7 @@ from typing import Any
 from .. import db
 from ..crypto import decrypt_secret
 from ..providers import chat_completion
+from .chat_replay import execute_chat_replay_run
 from .scoring import aggregate_metrics, evaluate_multiple_tool_calls
 
 
@@ -172,8 +173,22 @@ async def _set_status(run_id: str, **fields: Any) -> None:
 
 
 async def execute_benchmark_run(run_id: str) -> None:
-    """Top-level entry. Idempotent against an already-running run id (the SQL
-    UPDATE for `running` filters on prior status)."""
+    """Top-level entry. Dispatches by Benchmark.kind so function-call benchmarks
+    use the legacy HF-dataset runner and project chat-replay benchmarks use the
+    new replay+judge pipeline. Idempotent against an already-running run id
+    (the SQL UPDATE for `running` filters on prior status)."""
+    kind_row = await db.fetch_one(
+        """
+        SELECT b.kind FROM "BenchmarkRun" br
+        JOIN "Benchmark" b ON b.id = br."benchmarkId"
+        WHERE br.id = $1
+        """,
+        run_id,
+    )
+    if kind_row and kind_row["kind"] == "project-chat-replay":
+        await execute_chat_replay_run(run_id)
+        return
+
     try:
         run = await _load_run(run_id)
     except Exception:

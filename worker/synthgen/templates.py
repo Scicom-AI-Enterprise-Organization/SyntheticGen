@@ -43,6 +43,10 @@ class RenderContext:
     taxonomy: dict[str, Any]
     language: dict[str, Any]
     difficulty: str
+    # Markdown block of all matching knowledge-base entries for this run.
+    # Templates can reference it as `{{knowledge}}`. Empty string when nothing
+    # matched — the renderer treats missing keys and empty strings the same.
+    knowledge: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,4 +54,5 @@ class RenderContext:
             "taxonomy": self.taxonomy,
             "language": self.language,
             "difficulty": self.difficulty,
+            "knowledge": self.knowledge,
         }

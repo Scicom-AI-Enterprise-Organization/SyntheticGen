@@ -21,10 +21,12 @@ const startRunSchema = z.object({
   difficulties: z.array(z.string()).min(1),
   rowsPerCell: z.number().int().min(1).max(200),
   turns: z.number().int().min(1).max(20).default(1),
+  relatedTopics: z.number().int().min(0).max(6).default(0),
+  toolIds: z.array(z.string()).default([]),
   formalityPolicy: z.enum(["inherit", "formal", "semi-formal", "colloquial", "mixed"]).default("inherit"),
   temperature: z.number().min(0).max(2).default(0.7),
   topP: z.number().min(0).max(1).default(1.0),
-  maxTokens: z.number().int().min(16).max(8000).default(1024),
+  maxTokens: z.number().int().min(16).max(64000).default(1024),
   seed: z.number().int().optional().nullable(),
 });
 
@@ -49,6 +51,7 @@ export async function createAndStartRun(input: z.infer<typeof startRunSchema>) {
     max_tokens: data.maxTokens,
     seed: data.seed ?? null,
     turns: data.turns,
+    relatedTopics: data.relatedTopics,
   };
 
   const gridSpec = {
@@ -66,6 +69,7 @@ export async function createAndStartRun(input: z.infer<typeof startRunSchema>) {
     samplingParams,
     grid: gridSpec,
     formalityPolicy: data.formalityPolicy,
+    toolIds: data.toolIds,
     validation: { judgeSampleRate: 0 }, // slice 1: no judge
   };
 

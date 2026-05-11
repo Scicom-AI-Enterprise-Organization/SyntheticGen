@@ -25,16 +25,17 @@ model User {
   invitesSent     Invitation[] @relation("InvitedBy")
   invitesAccepted Invitation[] @relation("AcceptedBy")
 
-  projectsCreated     Project[]            @relation("ProjectCreatedBy")
-  projectMemberships  ProjectMember[]
-  projectMembersAdded ProjectMember[]      @relation("ProjectMemberAddedBy")
-  providersCreated    ProviderCredential[]
-  runsCreated         GenerationRun[]
-  datasetVersions     DatasetVersion[]
-  exportsCreated      ExportArtifact[]
-  benchmarksCreated   Benchmark[]
+  projectsCreated      Project[]            @relation("ProjectCreatedBy")
+  projectMemberships   ProjectMember[]
+  projectMembersAdded  ProjectMember[]      @relation("ProjectMemberAddedBy")
+  providersCreated     ProviderCredential[]
+  runsCreated          GenerationRun[]
+  datasetVersions      DatasetVersion[]
+  exportsCreated       ExportArtifact[]
+  benchmarksCreated    Benchmark[]
   benchmarkRunsCreated BenchmarkRun[]
-  auditLog            AuditLogEntry[]
+  rubricsCreated       Rubric[]
+  auditLog             AuditLogEntry[]
 }
 
 model Account {
@@ -103,9 +104,9 @@ model Invitation {
 }
 
 model Permission {
-  id          String   @id @default(cuid())
+  id          String  @id @default(cuid())
   // Convention: "<resource>:<action>" e.g. "users:read", "users:write".
-  key         String   @unique
+  key         String  @unique
   description String?
 
   roles RolePermission[]
@@ -167,10 +168,63 @@ model Project {
   conversations    Conversation[]
   datasets         Dataset[]
   benchmarks       Benchmark[]
+  rubrics          Rubric[]
   auditLog         AuditLogEntry[]
+  knowledgeBase    KnowledgeBaseEntry[]
+  knowledgeCrawls  KnowledgeCrawl[]
 
   @@index([createdById])
   @@index([archivedAt])
+}
+
+// Cached result of a "Add from URL" crawl. Pages stay around so the user can
+// re-import them later, or re-crawl with the same params without re-fetching
+// everything from scratch.
+model KnowledgeCrawl {
+  id             String    @id @default(cuid())
+  projectId      String
+  startUrl       String
+  depth          Int
+  maxPages       Int
+  sameOriginOnly Boolean   @default(true)
+  // running | completed | failed | cancelled
+  status         String    @default("running")
+  // Array of { url, depth, title, content, contentChars, truncated, bytes }.
+  pages          Json?
+  pagesCount     Int       @default(0)
+  errorMessage   String?
+  createdById    String?
+  startedAt      DateTime  @default(now())
+  completedAt    DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, startedAt])
+}
+
+// Project-scoped knowledge the generation worker stuffs into the system prompt
+// before each conversation. Entries are linked to one or more taxonomy nodes;
+// when the run picks a node, all matching KB entries are loaded, joined into a
+// "Knowledge base" block, and exposed to the template as {{knowledge}}.
+model KnowledgeBaseEntry {
+  id              String   @id @default(cuid())
+  projectId       String
+  title           String
+  // Body of the entry. Plain text or markdown — fed to the model as-is.
+  content         String
+  tags            String[]
+  // Which taxonomy nodes this entry is relevant to. Empty array = matches all
+  // nodes in the project (catch-all entries).
+  taxonomyNodeIds String[]
+  sourceUrl       String?
+  createdById     String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([projectId, createdAt])
 }
 
 model ProjectMember {
@@ -228,7 +282,7 @@ model TaxonomyNode {
 // First-class language/script/code-switch policy.
 // Personas reference one; runs may override.
 model LanguageProfile {
-  id        String  @id @default(cuid())
+  id        String   @id @default(cuid())
   projectId String
   name      String
   // ISO primary language: ms, en, zh, ta.
@@ -236,36 +290,36 @@ model LanguageProfile {
   // Secondary languages used in code-switching.
   secondary String[]
   // latin | jawi | hans | hant | tamil
-  script    String  @default("latin")
+  script    String   @default("latin")
 
   // none | inter-sentential | intra-sentential | rojak
-  codeSwitchPolicy String  @default("none")
+  codeSwitchPolicy String @default("none")
   codeSwitchRate   Float?
 
   // formal | semi-formal | colloquial | mixed
-  register             String  @default("formal")
+  register              String   @default("formal")
   // Master switch — when false, particles are stripped/banned.
-  allowParticles       Boolean @default(false)
+  allowParticles        Boolean  @default(false)
   // Manglish/Bahasa Rojak particle blocklist applied when allowParticles=false.
-  bannedTokens         String[]
+  bannedTokens          String[]
   // Regex blocklist for harder cases.
-  bannedPatterns       String[]
+  bannedPatterns        String[]
   // When true, validator additionally rejects spelling shortcuts (tak/je/dah/mcm).
-  requireFormalMalay   Boolean @default(false) @map("requireBahasaBaku")
+  requireFormalMalay    Boolean  @default(false) @map("requireBahasaBaku")
   // forbid | allowlist | free
-  englishLoanwordPolicy String @default("free")
+  englishLoanwordPolicy String   @default("free")
   // Allowlist of English loanwords permitted when policy=allowlist (e.g. router, bil).
-  loanwordAllowlist    String[]
+  loanwordAllowlist     String[]
 
-  dialectHints       String[]
-  formalityDefault   String?
-  notes              String?
-  isPreset           Boolean @default(false)
+  dialectHints     String[]
+  formalityDefault String?
+  notes            String?
+  isPreset         Boolean  @default(false)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  project  Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project  Project         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   personas Persona[]
   runs     GenerationRun[]
 
@@ -280,19 +334,19 @@ model Persona {
   description String?
 
   // malay | chinese | indian | iban | kadazan | orang-asli | mixed | other
-  ethnicity String?
+  ethnicity     String?
   // kl | selangor | penang | johor | kelantan | terengganu | kedah | perak | sabah | sarawak | ...
-  region    String?
+  region        String?
   // urban | suburban | kampung
-  urbanity  String?
+  urbanity      String?
   // 13-17 | 18-24 | 25-34 | 35-49 | 50-64 | 65+
-  ageRange  String?
-  gender    String?
-  occupation String?
+  ageRange      String?
+  gender        String?
+  occupation    String?
   // baku | colloquial | manglish | mixed
-  formality String?
+  formality     String?
   // Flag rather than storing religion; gates halal/prayer-time content.
-  religionAware Boolean @default(false)
+  religionAware Boolean  @default(false)
   dialectTags   String[]
 
   languageProfileId String?
@@ -327,16 +381,19 @@ model ToolCatalog {
 }
 
 model ToolDef {
-  id          String  @id @default(cuid())
-  catalogId   String
+  id                 String   @id @default(cuid())
+  catalogId          String
   // Function name (mykad_lookup, lhdn_efile_status, maybank2u_transfer).
-  name        String
-  description String
-  parameters  Json
+  name               String
+  description        String
+  parameters         Json
   // Schema for the fake executor to generate realistic responses.
   mockResponseSchema Json?
   // Example response keyed values (e.g. valid MyKad pattern, MYR formatting).
   mockSeed           Json?
+  // Synthetic argument examples that satisfy `parameters` JSON Schema. Populated
+  // by the AI-assist "tool-def" path; each entry is an object of valid args.
+  examples           Json?
   // Tags like mykad, lhdn, maybank, tng, duitnow.
   localePresets      String[]
   // Bumps on schema change so old runs replay deterministically.
@@ -350,16 +407,16 @@ model ToolDef {
 }
 
 model PromptTemplate {
-  id              String  @id @default(cuid())
-  projectId       String
-  name            String
-  description     String?
+  id               String  @id @default(cuid())
+  projectId        String
+  name             String
+  description      String?
   // system | user-seed | judge | conversation-driver
-  kind            String  @default("user-seed")
-  body            String
-  variableSchema  Json?
-  fewShotExamples Json?
-  version         Int     @default(1)
+  kind             String  @default("user-seed")
+  body             String
+  variableSchema   Json?
+  fewShotExamples  Json?
+  version          Int     @default(1)
   parentTemplateId String?
 
   createdAt DateTime @default(now())
@@ -403,18 +460,18 @@ model Flow {
 }
 
 model ProviderCredential {
-  id              String   @id @default(cuid())
-  projectId       String
-  name            String
+  id                 String   @id @default(cuid())
+  projectId          String
+  name               String
   // openai | vllm | together | openrouter | sglang | anthropic-proxy | custom
-  kind            String   @default("openai")
-  baseUrl         String
+  kind               String   @default("openai")
+  baseUrl            String
   // AES-256-GCM ciphertext of the API key (nonce | tag | ct).
-  encryptedApiKey Bytes
+  encryptedApiKey    Bytes
   // Last-4 + hash for UI display.
-  keyFingerprint  String
-  defaultModel    String?
-  headers         Json?
+  keyFingerprint     String
+  defaultModel       String?
+  headers            Json?
   // Reasoning controls. Sent when non-null:
   //   reasoningEffort    -> top-level `reasoning_effort` (OpenAI o-series convention).
   //   chatTemplateKwargs -> sent as `chat_template_kwargs` on every request and as
@@ -422,15 +479,16 @@ model ProviderCredential {
   //                         when present so vLLM Qwen3 fully suppresses reasoning).
   reasoningEffort    String?
   chatTemplateKwargs Json?
-  createdById     String
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  createdById        String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
   project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
   createdBy User    @relation(fields: [createdById], references: [id], onDelete: Restrict)
 
-  runs          GenerationRun[]
-  benchmarkRuns BenchmarkRun[]
+  runs               GenerationRun[]
+  benchmarkRuns      BenchmarkRun[]  @relation("BenchmarkRunCandidate")
+  benchmarkJudgeRuns BenchmarkRun[]  @relation("BenchmarkRunJudge")
 
   @@unique([projectId, name])
 }
@@ -458,14 +516,14 @@ model GenerationRun {
   // formal | semi-formal | colloquial | mixed | inherit
   formalityPolicy      String  @default("inherit")
 
-  targetCount   Int       @default(0)
-  producedCount Int       @default(0)
-  acceptedCount Int       @default(0)
-  costUsd       Decimal?  @db.Decimal(12, 6)
-  tokensIn      BigInt    @default(0)
-  tokensOut     BigInt    @default(0)
-  startedAt     DateTime?
-  completedAt   DateTime?
+  targetCount     Int       @default(0)
+  producedCount   Int       @default(0)
+  acceptedCount   Int       @default(0)
+  costUsd         Decimal?  @db.Decimal(12, 6)
+  tokensIn        BigInt    @default(0)
+  tokensOut       BigInt    @default(0)
+  startedAt       DateTime?
+  completedAt     DateTime?
   // Last enqueued cursor for resume.
   checkpointState Json?
 
@@ -509,20 +567,20 @@ model RunPersona {
 
 // One cell of the grid; resumable unit of work.
 model GenerationJob {
-  id      String  @id @default(cuid())
-  runId   String
+  id             String    @id @default(cuid())
+  runId          String
   // taxonomy:abc|persona:xyz|difficulty:hard|idx:7 — unique within run.
-  cellKey String
+  cellKey        String
   // pending | running | succeeded | failed | skipped
-  status  String  @default("pending")
-  attempts Int    @default(0)
-  lastError String?
+  status         String    @default("pending")
+  attempts       Int       @default(0)
+  lastError      String?
   // Rendered prompt + tool catalog + persona context for replay.
   inputContext   Json?
   conversationId String?
-  tokensIn       Int     @default(0)
-  tokensOut      Int     @default(0)
-  costUsd        Decimal? @db.Decimal(10, 6)
+  tokensIn       Int       @default(0)
+  tokensOut      Int       @default(0)
+  costUsd        Decimal?  @db.Decimal(10, 6)
   latencyMs      Int?
   startedAt      DateTime?
   finishedAt     DateTime?
@@ -532,17 +590,36 @@ model GenerationJob {
 
   run          GenerationRun @relation(fields: [runId], references: [id], onDelete: Cascade)
   conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  events       JobEvent[]
 
   @@unique([runId, cellKey])
   @@index([runId, status])
 }
 
+// Step-by-step trace of how a GenerationJob built its conversation: prompt
+// rendering, provider request, reasoning/content stream timing, validator
+// verdicts. Surfaced in the conversation drawer's Trace tab.
+model JobEvent {
+  id      String   @id @default(cuid())
+  jobId   String
+  ts      DateTime @default(now())
+  // job.start | context.loaded | prompt.rendered | provider.request |
+  // provider.stream.reasoning.start | provider.stream.content.start |
+  // provider.response | validator.run | conversation.persisted | job.error
+  kind    String
+  payload Json?
+
+  job GenerationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, ts])
+}
+
 model Conversation {
-  id              String  @id @default(cuid())
-  projectId       String
-  runId           String?
-  taxonomyNodeId  String?
-  personaId       String?
+  id             String  @id @default(cuid())
+  projectId      String
+  runId          String?
+  taxonomyNodeId String?
+  personaId      String?
 
   // Denormalized for query performance — populated by lang-ID validator.
   primaryLanguage String?
@@ -552,22 +629,22 @@ model Conversation {
   tokenCount      Int     @default(0)
 
   // generated | accepted | rejected | flagged | annotated
-  status   String   @default("generated")
+  status    String  @default("generated")
   // Content hash for cheap exact-dup detection.
   dedupHash String?
-  metadata Json?
+  metadata  Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  project      Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project      Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   run          GenerationRun? @relation(fields: [runId], references: [id], onDelete: SetNull)
-  taxonomyNode TaxonomyNode? @relation(fields: [taxonomyNodeId], references: [id], onDelete: SetNull)
-  persona      Persona?      @relation(fields: [personaId], references: [id], onDelete: SetNull)
+  taxonomyNode TaxonomyNode?  @relation(fields: [taxonomyNodeId], references: [id], onDelete: SetNull)
+  persona      Persona?       @relation(fields: [personaId], references: [id], onDelete: SetNull)
 
-  messages    Message[]
-  validations Validation[]
-  jobs        GenerationJob[]
+  messages     Message[]
+  validations  Validation[]
+  jobs         GenerationJob[]
   versionLinks DatasetVersionConversation[]
 
   @@index([projectId, status, createdAt(sort: Desc)])
@@ -582,23 +659,23 @@ model Message {
   ordinal        Int
 
   // system | user | assistant | tool
-  role        String
-  content     String?
+  role                String
+  content             String?
   // Captured chain-of-thought for reasoning models (Qwen3-thinking, DeepSeek-R1,
   // OpenAI o-series via some proxies). Not used for validation, kept for tracing.
-  reasoningContent String?
+  reasoningContent    String?
   // [{id, name, arguments}]
-  toolCalls   Json?
-  toolCallId  String?
+  toolCalls           Json?
+  toolCallId          String?
   // Dominant language tag (auto-filled by lang-ID validator).
-  language    String?
+  language            String?
   // [{start, end, lang, script}] for code-switch lineage.
-  languageSpans Json?
-  script      String?
-  tokenCount  Int?
-  latencyMs   Int?
+  languageSpans       Json?
+  script              String?
+  tokenCount          Int?
+  latencyMs           Int?
   // Per-turn provenance for mixed-model traces.
-  model       String?
+  model               String?
   // Full API response for replay/debugging.
   rawProviderResponse Json?
 
@@ -613,21 +690,21 @@ model Message {
 }
 
 model Validation {
-  id             String  @id @default(cuid())
-  conversationId String
+  id                    String   @id @default(cuid())
+  conversationId        String
   // schema | langid | regex | ngram-repetition | profanity | judge-llm | tool-arg-schema | register-compliance
-  validatorKind  String
+  validatorKind         String
   // correctness | naturalness | language-fidelity | code-switch-realism | tool-arg-validity | safety | register
-  axis           String
+  axis                  String
   // pass | fail | warn
-  verdict        String
-  score          Float?
+  verdict               String
+  score                 Float?
   // Diagnostic payload (e.g. detected vs target language, failed JSON Schema path, judge rationale).
-  details        Json?
-  judgeModel     String?
+  details               Json?
+  judgeModel            String?
   judgePromptTemplateId String?
-  costUsd        Decimal? @db.Decimal(10, 6)
-  latencyMs      Int?
+  costUsd               Decimal? @db.Decimal(10, 6)
+  latencyMs             Int?
 
   createdAt DateTime @default(now())
 
@@ -667,13 +744,13 @@ model DatasetVersion {
   // Counts by language/persona/difficulty captured at freeze time.
   stats           Json?
 
-  dataset       Dataset                       @relation("DatasetVersions", fields: [datasetId], references: [id], onDelete: Cascade)
-  frozenBy      User                          @relation(fields: [frozenById], references: [id], onDelete: Restrict)
-  parentVersion DatasetVersion?               @relation("DatasetVersionLineage", fields: [parentVersionId], references: [id], onDelete: SetNull)
-  children      DatasetVersion[]              @relation("DatasetVersionLineage")
+  dataset       Dataset                      @relation("DatasetVersions", fields: [datasetId], references: [id], onDelete: Cascade)
+  frozenBy      User                         @relation(fields: [frozenById], references: [id], onDelete: Restrict)
+  parentVersion DatasetVersion?              @relation("DatasetVersionLineage", fields: [parentVersionId], references: [id], onDelete: SetNull)
+  children      DatasetVersion[]             @relation("DatasetVersionLineage")
   conversations DatasetVersionConversation[]
   exports       ExportArtifact[]
-  pinnedBy      Dataset?                      @relation("DatasetCurrentVersion")
+  pinnedBy      Dataset?                     @relation("DatasetCurrentVersion")
 
   @@unique([datasetId, version])
 }
@@ -691,18 +768,18 @@ model DatasetVersionConversation {
 }
 
 model ExportArtifact {
-  id               String   @id @default(cuid())
+  id               String  @id @default(cuid())
   datasetVersionId String
   // openai-jsonl | sharegpt | alpaca | parquet | hf-hub
   format           String
   // local | s3 | hf
-  storageKind      String   @default("local")
+  storageKind      String  @default("local")
   storagePath      String
   byteSize         BigInt?
   rowCount         Int?
   checksumSha256   String?
   // building | ready | failed
-  status           String   @default("building")
+  status           String  @default("building")
   createdById      String
 
   createdAt DateTime @default(now())
@@ -740,52 +817,89 @@ model AuditLogEntry {
 // ---------------------------------------------------------------------------
 
 model Benchmark {
-  id          String  @id @default(cuid())
-  projectId   String
-  name        String
-  description String?
+  id                    String   @id @default(cuid())
+  projectId             String
+  name                  String
+  description           String?
+  // Discriminator for what shape of evaluation this benchmark drives.
+  //   hf-function-call   — external HuggingFace dataset, tool-call accuracy scoring.
+  //   project-chat-replay — replay frozen project-generated conversations against a
+  //                         candidate model, score with validators + LLM judge against
+  //                         the recorded assistant turns.
+  kind                  String   @default("hf-function-call")
   // Source URI:
   //   hf:<org>/<dataset>           e.g. hf:Scicom-intl/Function-Call
   //   file:<storagePath>           uploaded JSONL (slice 2)
-  source      String
+  //   project-run:<runId>          replay every accepted conversation from one Run
+  //   project-filter               replay a deterministic filter slice; see config
+  source                String
   // Splits to evaluate, in load_dataset's `name`/`config` sense:
   //   ["english", "mandarin", "malay"] for Scicom Function-Call.
-  splits      String[]
+  // For project-chat-replay benchmarks, this is the list of language buckets
+  // detected in the frozen sample (used purely for grouped reporting).
+  splits                String[]
   // Cap rows per split for fast smoke runs. Null = full split.
-  maxRowsPerSplit Int?
-  // Format-specific knobs:
-  //   { kind: "function-call",
-  //     conversationField: "conversation", functionsField: "functions" }
+  maxRowsPerSplit       Int?
+  // Format-specific knobs.
+  //   hf-function-call:    { conversationField, functionsField }
+  //   project-chat-replay: { mode: "single-turn" | "multi-turn",
+  //                          filter?: { runIds, personaIds, taxonomyNodeIds, status, limit, seed } }
   // Stored loosely so new benchmark kinds don't need a migration.
-  config Json?
+  config                Json?
+  // Snapshot of conversation IDs (project-chat-replay) frozen at creation time
+  // so every BenchmarkRun evaluates the same items even if the source filter
+  // would now return different rows. Empty for hf-function-call.
+  frozenConversationIds String[] @default([])
+  // Default rubric for chat-replay scoring. Each run inherits this; the run
+  // can override with its own rubricId for one-off experiments.
+  defaultRubricId       String?
 
   createdById String
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdBy User    @relation(fields: [createdById], references: [id], onDelete: Restrict)
-  runs      BenchmarkRun[]
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy     User           @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  defaultRubric Rubric?        @relation("BenchmarkDefaultRubric", fields: [defaultRubricId], references: [id], onDelete: SetNull)
+  runs          BenchmarkRun[]
 
   @@unique([projectId, name])
   @@index([projectId])
+  @@index([projectId, kind])
 }
 
 model BenchmarkRun {
-  id                   String  @id @default(cuid())
+  id                   String @id @default(cuid())
   benchmarkId          String
-  // Which provider + model we're scoring. The benchmark itself doesn't pin a
-  // model — that's how multiple runs against the same benchmark compare.
+  // Which provider + model we're scoring (the *candidate*). The benchmark itself
+  // doesn't pin a model — that's how multiple runs against the same benchmark compare.
   providerCredentialId String
   model                String
   // queued | running | completed | failed | cancelled
-  status               String  @default("queued")
+  status               String @default("queued")
+  // Replay mode for chat-replay benchmarks:
+  //   single-turn  — replay only the first user message, score the candidate's reply.
+  //   multi-turn   — feed each recorded user message in order; candidate produces
+  //                  each assistant turn; reference assistant turns are NEVER fed back.
+  //   function-call — legacy hf-function-call benchmarks (default for backward compat).
+  mode                 String @default("function-call")
 
-  // Aggregate metrics, keyed by split + an "overall" rollup. Mirrors the
-  // benchmark's existing JSON output:
-  //   { splits: { english: {...}, mandarin: {...}, malay: {...} },
-  //     overall: { function_accuracy, parameter_accuracy, turn_level_perfect,
-  //                argument_similarity, total_turns, total_calls } }
+  // Judge (LLM-as-judge) used for chat-replay scoring. Null for function-call mode.
+  judgeProviderCredentialId String?
+  judgeModel                String?
+  // Snapshot of which rubric this run was scored against. Falls back to the
+  // benchmark's defaultRubricId at queue time. Storing it on the run lets us
+  // compare apples-to-apples even if the rubric is later edited or deleted.
+  rubricId                  String?
+  // Sampling controls for the candidate replay. { temperature, top_p, max_tokens, seed }
+  samplingParams            Json?
+
+  // Aggregate metrics, keyed by split + an "overall" rollup.
+  //   function-call: { splits: {...}, overall: { function_accuracy, parameter_accuracy, ... } }
+  //   chat-replay:   { splits: {...}, overall: { axes: { language_fidelity: 4.2, ... },
+  //                                              validators: { langid: 0.95, ... },
+  //                                              functionCallAccuracy?: 0.83,
+  //                                              totalItems, completedItems } }
   metrics Json?
 
   // Live counters surfaced via SSE.
@@ -805,9 +919,11 @@ model BenchmarkRun {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  benchmark          Benchmark          @relation(fields: [benchmarkId], references: [id], onDelete: Cascade)
-  providerCredential ProviderCredential @relation(fields: [providerCredentialId], references: [id], onDelete: Restrict)
-  createdBy          User               @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  benchmark          Benchmark           @relation(fields: [benchmarkId], references: [id], onDelete: Cascade)
+  providerCredential ProviderCredential  @relation("BenchmarkRunCandidate", fields: [providerCredentialId], references: [id], onDelete: Restrict)
+  judgeProvider      ProviderCredential? @relation("BenchmarkRunJudge", fields: [judgeProviderCredentialId], references: [id], onDelete: Restrict)
+  rubric             Rubric?             @relation(fields: [rubricId], references: [id], onDelete: SetNull)
+  createdBy          User                @relation(fields: [createdById], references: [id], onDelete: Restrict)
   results            BenchmarkResult[]
 
   @@index([benchmarkId, createdAt(sort: Desc)])
@@ -817,20 +933,52 @@ model BenchmarkRun {
 model BenchmarkResult {
   id      String @id @default(cuid())
   runId   String
+  // For chat-replay results, `split` is the language tag of the source conversation
+  // (e.g. "ms", "en") so reporting can group by language. Defaults to "default"
+  // when no natural split exists.
   split   String
   rowIdx  Int
   turnNum Int
+  // function-call | chat-replay — discriminator for which fields below are populated.
+  kind    String @default("function-call")
 
-  // Raw expected and predicted tool_calls arrays.
-  expected Json
-  predicted Json
+  // ── function-call fields (hf-function-call benchmarks) ────────────────────
+  // Raw expected and predicted tool_calls arrays. Null for chat-replay.
+  expected      Json?
+  predicted     Json?
+  // match | missing | extra. Null for chat-replay.
+  resultType    String?
+  funcMatch     Boolean?
+  paramAccuracy Float?
+  similarity    Float?
 
-  // match | missing | extra
-  resultType    String
-  funcMatch     Boolean
-  paramAccuracy Float
-  similarity    Float
-  apiFailed     Boolean @default(false)
+  // ── chat-replay fields (project-chat-replay benchmarks) ───────────────────
+  // The source conversation this row was replayed from.
+  conversationId    String?
+  // The reference assistant turns from the original (project-generated) conversation.
+  // Shape: [{ ordinal, role, content, toolCalls? }]
+  referenceMessages Json?
+  // The candidate model's produced assistant turns (one per replayed user turn).
+  candidateMessages Json?
+  // Per-validator results on the candidate output:
+  //   { langid: {verdict, score, details}, register: {...}, ngram: {...} }
+  validatorScores   Json?
+  // Per-axis rubric scores from the LLM judge.
+  //   { language_fidelity: 4, register: 5, helpfulness: 4, faithfulness: 3 }
+  judgeScores       Json?
+  // pass | warn | fail (judge's overall verdict).
+  judgeVerdict      String?
+  // Free-text reasoning from the judge, for drill-down.
+  judgeRationale    String?
+  // Per-turn tool-call comparison for chat-replay:
+  //   [{ turn, expected, predicted, funcMatch, paramAccuracy, similarity }]
+  functionCallScore Json?
+
+  // Cost accounting (filled by both kinds — chat-replay aggregates candidate + judge).
+  apiFailed Boolean  @default(false)
+  tokensIn  BigInt   @default(0)
+  tokensOut BigInt   @default(0)
+  costUsd   Decimal? @db.Decimal(12, 6)
 
   createdAt DateTime @default(now())
 
@@ -838,4 +986,44 @@ model BenchmarkResult {
 
   @@index([runId, split])
   @@index([runId, funcMatch])
+  @@index([runId, kind])
+  @@index([runId, judgeVerdict])
+}
+
+// ---------------------------------------------------------------------------
+// Rubrics: reusable scoring schemes for chat-replay benchmarks. Each rubric is a
+// list of axes the LLM judge scores on a 1–N scale; the run's aggregate metrics
+// roll up means per axis. Users can hand-write a rubric or generate one from a
+// natural-language prompt via the AI-assist `benchmark-rubric` kind.
+// ---------------------------------------------------------------------------
+
+model Rubric {
+  id          String  @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+  // Axes the judge scores on, in display order:
+  //   [{ key: "language_fidelity",
+  //      name: "Language Fidelity",
+  //      description: "Does the candidate stay in the target language?",
+  //      scale: 5,
+  //      weight: 1.0,
+  //      examples?: [{ score: 5, output: "...example...", reason: "..." }, ...] }]
+  axes        Json
+  // System-provided default rubric. Read-only in the UI; cloned when edited.
+  isPreset    Boolean @default(false)
+  // Created via the AI-assist builder (vs hand-written). Used purely for analytics.
+  aiDrafted   Boolean @default(false)
+
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy     User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
+  benchmarks    Benchmark[]    @relation("BenchmarkDefaultRubric")
+  benchmarkRuns BenchmarkRun[]
+
+  @@unique([projectId, name])
+  @@index([projectId])
 }

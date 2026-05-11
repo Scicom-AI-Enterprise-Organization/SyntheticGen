@@ -98,6 +98,94 @@ async def _load_taxonomy_node(node_id: str) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+async def _load_knowledge_entries(
+    project_id: str, node_id: str | None
+) -> list[dict[str, Any]]:
+    """Return KB entries that should be injected for this generation:
+    - any entry with empty taxonomyNodeIds (project-wide catch-all), OR
+    - entries whose taxonomyNodeIds contains the primary node_id.
+    Sorted newest-first; capped at 20 so the system prompt doesn't explode.
+    """
+    rows = await db.fetch_all(
+        '''
+        SELECT id, title, content, "sourceUrl", tags, "taxonomyNodeIds"
+        FROM "KnowledgeBaseEntry"
+        WHERE "projectId" = $1
+          AND (
+            cardinality("taxonomyNodeIds") = 0
+            OR ($2::text IS NOT NULL AND $2 = ANY("taxonomyNodeIds"))
+          )
+        ORDER BY "createdAt" DESC
+        LIMIT 20
+        ''',
+        project_id,
+        node_id,
+    )
+    return [dict(r) for r in rows]
+
+
+def _format_knowledge_block(entries: list[dict[str, Any]]) -> str:
+    if not entries:
+        return ""
+    parts: list[str] = ["## Knowledge base", ""]
+    for i, e in enumerate(entries, start=1):
+        src = f" [source: {e['sourceUrl']}]" if e.get("sourceUrl") else ""
+        parts.append(f"### {i}. {e['title']}{src}")
+        parts.append(str(e.get("content") or "").strip())
+        parts.append("")
+    return "\n".join(parts).strip()
+
+
+async def _pick_related_nodes(
+    project_id: str, exclude_id: str | None, n: int
+) -> list[str]:
+    """Random sample N taxonomy node names from the project (excluding the
+    primary). Used by the lightweight multi-topic conversation knob."""
+    if n <= 0:
+        return []
+    rows = await db.fetch_all(
+        """SELECT tn.name FROM "TaxonomyNode" tn
+           JOIN "Taxonomy" t ON t.id = tn."taxonomyId"
+           WHERE t."projectId" = $1
+             AND ($2::text IS NULL OR tn.id <> $2)
+           ORDER BY random()
+           LIMIT $3""",
+        project_id,
+        exclude_id,
+        n,
+    )
+    return [r["name"] for r in rows]
+
+
+def _snapshot_persona(p: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not p:
+        return None
+    return {
+        "id": p.get("id"),
+        "name": p.get("name"),
+        "ethnicity": p.get("ethnicity"),
+        "region": p.get("region"),
+        "urbanity": p.get("urbanity"),
+        "ageRange": p.get("ageRange"),
+        "formality": p.get("formality"),
+        "dialectTags": list(p.get("dialectTags") or []),
+    }
+
+
+async def _log_event(job_id: str, kind: str, payload: dict[str, Any] | None = None) -> None:
+    """Append a step in the job's trace timeline. Best-effort — never throws."""
+    try:
+        await db.execute(
+            'INSERT INTO "JobEvent" (id, "jobId", kind, payload, ts) VALUES ($1, $2, $3, $4::jsonb, NOW())',
+            cuid_like(),
+            job_id,
+            kind,
+            json.dumps(payload) if payload else None,
+        )
+    except Exception:  # noqa: BLE001
+        log.exception("failed to log job event %s for %s", kind, job_id)
+
+
 async def _load_template(template_id: str) -> dict[str, Any]:
     row = await db.fetch_one(
         """SELECT id, name, kind, body FROM "PromptTemplate" WHERE id = $1""",
@@ -167,15 +255,96 @@ async def execute_job(job_id: str) -> str:
     node_id = ctx_blob.get("taxonomyNodeId")
     difficulty = ctx_blob.get("difficulty") or "medium"
 
+    await _log_event(
+        job_id,
+        "job.start",
+        {"cellKey": job.get("cellKey"), "runId": run["id"], "inputContext": ctx_blob},
+    )
+
     persona = await _load_persona(persona_id) if persona_id else None
     node = await _load_taxonomy_node(node_id) if node_id else None
     lp = await _load_language_profile(run["languageProfileId"])
     template = await _load_template(run["templateId"])
     provider = await _load_provider(run["providerCredentialId"])
 
+    # Lightweight multi-topic: pick N additional sibling node names that the
+    # template can weave into `{{taxonomy.related}}`. The conversation's primary
+    # node FK doesn't change.
+    related_count = int(sampling.get("relatedTopics", 0) or 0)
+    related_names = (
+        await _pick_related_nodes(run["projectId"], node_id, related_count)
+        if related_count > 0
+        else []
+    )
+
+    # Knowledge base: deterministic fetch by taxonomyNodeIds + project-wide
+    # catch-alls. Becomes the {{knowledge}} template variable AND is appended
+    # to the system prompt so the model sees it even if the template doesn't
+    # reference {{knowledge}} explicitly.
+    kb_entries = await _load_knowledge_entries(run["projectId"], node_id)
+    knowledge_text = _format_knowledge_block(kb_entries)
+
     api_key = decrypt_secret(provider["encryptedApiKey"])
     base_url = provider["baseUrl"]
     extra_headers = _as_dict(provider.get("headers"))
+
+    await _log_event(
+        job_id,
+        "context.loaded",
+        {
+            "persona": _snapshot_persona(persona),
+            "taxonomy": (
+                {
+                    "id": node.get("id") if node else None,
+                    "name": node.get("name") if node else None,
+                    "path": node.get("path") if node else None,
+                    "related": related_names,
+                }
+                if node
+                else None
+            ),
+            "languageProfile": {
+                "id": lp.get("id"),
+                "name": lp.get("name"),
+                "primary": lp.get("primary"),
+                "register": lp.get("register"),
+                "allowParticles": lp.get("allowParticles"),
+            },
+            "template": {
+                "id": template.get("id"),
+                "name": template.get("name"),
+                "kind": template.get("kind"),
+            },
+            "provider": {
+                "kind": provider.get("kind"),
+                "baseUrl": provider.get("baseUrl"),
+                "defaultModel": provider.get("defaultModel"),
+            },
+            "model": run["model"],
+            "relatedTopicsCount": related_count,
+            "knowledgeBaseMatches": len(kb_entries),
+        },
+    )
+
+    if kb_entries:
+        await _log_event(
+            job_id,
+            "knowledge.loaded",
+            {
+                "count": len(kb_entries),
+                "entries": [
+                    {
+                        "id": e["id"],
+                        "title": e["title"],
+                        "taxonomyNodeIds": list(e.get("taxonomyNodeIds") or []),
+                        "tags": list(e.get("tags") or []),
+                        "sourceUrl": e.get("sourceUrl"),
+                        "contentChars": len(str(e.get("content") or "")),
+                    }
+                    for e in kb_entries
+                ],
+            },
+        )
 
     # Build the formality-aware system prompt.
     policy = _resolve_formality(
@@ -185,16 +354,30 @@ async def execute_job(job_id: str) -> str:
     )
     system_text = style_guide(policy)
 
+    taxonomy_ctx: dict[str, Any] = dict(node or {})
+    # Lightweight multi-topic: list of sibling node names available as
+    # `{{taxonomy.related}}` (renders as comma-joined string).
+    taxonomy_ctx["related"] = related_names
+
     rctx = RenderContext(
         persona=(persona or {}),
-        taxonomy=(node or {}),
+        taxonomy=taxonomy_ctx,
         language={
             "primary": lp.get("primary"),
             "script": lp.get("script"),
             "register": policy.register,
         },
         difficulty=difficulty,
+        knowledge=knowledge_text,
     )
+
+    # If the template didn't opt into {{knowledge}} but we have KB entries, the
+    # model would never see them. Always append to system_text so the entries
+    # land in front of the model regardless of how the template is authored.
+    if knowledge_text:
+        system_text = (
+            f"{system_text}\n\n{knowledge_text}" if system_text else knowledge_text
+        )
 
     user_text = render(template["body"], rctx.to_dict())
 
@@ -202,6 +385,20 @@ async def execute_job(job_id: str) -> str:
     if system_text:
         messages.append({"role": "system", "content": system_text})
     messages.append({"role": "user", "content": user_text})
+
+    await _log_event(
+        job_id,
+        "prompt.rendered",
+        {
+            "systemText": system_text or "",
+            "userText": user_text,
+            "formality": {
+                "register": policy.register,
+                "allowParticles": policy.allow_particles,
+                "requireFormalMalay": policy.require_formal_malay,
+            },
+        },
+    )
 
     started_marker = await db.execute(
         """
@@ -218,10 +415,29 @@ async def execute_job(job_id: str) -> str:
     # reasoning=true; only content deltas accumulate into the final answer.
     content_parts: list[str] = []
     reasoning_parts: list[str] = []
+    reasoning_started = False
+    content_started = False
     tokens_in = 0
     tokens_out = 0
     upstream_model = run["model"]
     started = __import__("time").perf_counter()
+    await _log_event(
+        job_id,
+        "provider.request",
+        {
+            "url": (provider.get("baseUrl") or "").rstrip("/") + "/chat/completions",
+            "model": run["model"],
+            "stream": True,
+            "samplingParams": {
+                "temperature": sampling.get("temperature"),
+                "top_p": sampling.get("top_p"),
+                "max_tokens": sampling.get("max_tokens"),
+                "seed": sampling.get("seed"),
+            },
+            "reasoningEffort": provider.get("reasoningEffort"),
+            "chatTemplateKwargs": _as_dict(provider.get("chatTemplateKwargs")) or None,
+        },
+    )
     try:
         async with db.acquire() as ncon:
             await ncon.execute(
@@ -246,8 +462,20 @@ async def execute_job(job_id: str) -> str:
                 break
             if ev.delta:
                 if ev.reasoning:
+                    if not reasoning_started:
+                        reasoning_started = True
+                        await _log_event(
+                            job_id, "provider.stream.reasoning.start", {}
+                        )
                     reasoning_parts.append(ev.delta)
                 else:
+                    if not content_started:
+                        content_started = True
+                        await _log_event(
+                            job_id,
+                            "provider.stream.content.start",
+                            {"afterReasoningChars": sum(len(x) for x in reasoning_parts)},
+                        )
                     content_parts.append(ev.delta)
                 async with db.acquire() as ncon:
                     await ncon.execute(
@@ -262,6 +490,7 @@ async def execute_job(job_id: str) -> str:
                     )
     except Exception as e:  # noqa: BLE001
         log.exception("provider call failed for job=%s", job_id)
+        await _log_event(job_id, "job.error", {"error": str(e)[:1000]})
         await db.execute(
             """
             UPDATE "GenerationJob"
@@ -288,6 +517,19 @@ async def execute_job(job_id: str) -> str:
     result.latency_ms = elapsed_ms
     result.model = upstream_model
     result.raw = {"streamed": True, "model": upstream_model}
+
+    await _log_event(
+        job_id,
+        "provider.response",
+        {
+            "model": upstream_model,
+            "tokensIn": tokens_in,
+            "tokensOut": tokens_out,
+            "latencyMs": elapsed_ms,
+            "contentChars": len(result.content),
+            "reasoningChars": len(result.reasoning_content or ""),
+        },
+    )
 
     async with db.acquire() as ncon:
         await ncon.execute(
@@ -317,6 +559,18 @@ async def execute_job(job_id: str) -> str:
         code_switch_rate=lp.get("codeSwitchRate"),
     )
     verdicts = run_pipeline(result.content, vctx)
+    for v in verdicts:
+        await _log_event(
+            job_id,
+            "validator.run",
+            {
+                "validatorKind": v.validator_kind,
+                "axis": v.axis,
+                "verdict": v.verdict,
+                "score": v.score,
+                "details": v.details,
+            },
+        )
     has_fail = any(v.verdict == "fail" for v in verdicts)
     primary_lang = vctx.detected_language or vctx.primary_language
 
@@ -424,5 +678,17 @@ async def execute_job(job_id: str) -> str:
                 "SELECT pg_notify('synthgen_run', $1)",
                 json.dumps({"runId": run["id"], "event": "job.done", "jobId": job_id}),
             )
+
+    await _log_event(
+        job_id,
+        "conversation.persisted",
+        {
+            "conversationId": conv_id,
+            "status": "rejected" if has_fail else "accepted",
+            "primaryLanguage": primary_lang,
+            "turnCount": 1,
+            "tokenCount": (result.tokens_in or 0) + (result.tokens_out or 0),
+        },
+    )
 
     return conv_id
