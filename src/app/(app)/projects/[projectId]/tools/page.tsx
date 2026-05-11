@@ -32,11 +32,18 @@ export default async function ToolsPage({
     });
   }
 
-  const providers = await prisma.providerCredential.findMany({
-    where: { projectId },
-    orderBy: { name: "asc" },
-    select: { id: true, name: true, defaultModel: true },
-  });
+  const [providers, taxonomyNodes] = await Promise.all([
+    prisma.providerCredential.findMany({
+      where: { projectId },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, defaultModel: true },
+    }),
+    prisma.taxonomyNode.findMany({
+      where: { taxonomy: { projectId } },
+      orderBy: { name: "asc" },
+      select: { name: true },
+    }),
+  ]);
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -65,7 +72,13 @@ export default async function ToolsPage({
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <ToolForm projectId={projectId} catalogId={catalog.id} providers={providers} />
+            <ToolForm
+              projectId={projectId}
+              catalogId={catalog.id}
+              providers={providers}
+              taxonomyNodes={taxonomyNodes.map((t) => t.name)}
+              existingTools={catalog.tools.map((t) => `${t.name}${t.description ? ` — ${t.description.slice(0, 80)}` : ""}`)}
+            />
           </CardContent>
         </Card>
       )}

@@ -19,7 +19,7 @@ export default async function TemplatesPage({
   const { role } = await requireProjectPermission(projectId, "templates.read");
   const canWrite = role ? projectRoleAllows(role, "templates.write") : false;
 
-  const [templates, providers] = await Promise.all([
+  const [templates, providers, taxonomyNodes, languageProfiles] = await Promise.all([
     prisma.promptTemplate.findMany({
       where: { projectId },
       orderBy: [{ kind: "asc" }, { name: "asc" }],
@@ -28,6 +28,16 @@ export default async function TemplatesPage({
       where: { projectId },
       orderBy: { name: "asc" },
       select: { id: true, name: true, defaultModel: true },
+    }),
+    prisma.taxonomyNode.findMany({
+      where: { taxonomy: { projectId } },
+      orderBy: { name: "asc" },
+      select: { name: true },
+    }),
+    prisma.languageProfile.findMany({
+      where: { projectId },
+      orderBy: { name: "asc" },
+      select: { name: true, primary: true, register: true },
     }),
   ]);
 
@@ -48,7 +58,15 @@ export default async function TemplatesPage({
             <CardTitle>New template</CardTitle>
           </CardHeader>
           <CardContent>
-            <TemplateForm projectId={projectId} providers={providers} />
+            <TemplateForm
+              projectId={projectId}
+              providers={providers}
+              taxonomyNodes={taxonomyNodes.map((t) => t.name)}
+              existingTemplates={templates.map((t) => `${t.name} (${t.kind})`)}
+              languageProfiles={languageProfiles.map(
+                (p) => `${p.name} (primary=${p.primary}, register=${p.register})`,
+              )}
+            />
           </CardContent>
         </Card>
       )}

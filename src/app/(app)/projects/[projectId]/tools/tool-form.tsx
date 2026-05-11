@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { toast } from "sonner";
+import { useCallback, useState, useTransition } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,16 +31,37 @@ export function ToolForm({
   projectId,
   catalogId,
   providers,
+  taxonomyNodes,
+  existingTools,
 }: {
   projectId: string;
   catalogId: string;
   providers: Provider[];
+  taxonomyNodes?: string[];
+  existingTools?: string[];
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [parametersJson, setParametersJson] = useState(STARTER_PARAMS);
   const [presets, setPresets] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [pending, start] = useTransition();
+
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const suggestOpen = searchParams.get("suggest") === "1";
+  const setSuggestOpen = useCallback(
+    (next: boolean) => {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      if (next) params.set("suggest", "1");
+      else params.delete("suggest");
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
 
   function applyAi(data: Record<string, unknown>) {
     const s = (k: string) => (typeof data[k] === "string" ? (data[k] as string) : null);
@@ -63,6 +84,8 @@ export function ToolForm({
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setError(null);
+    setSuccess(null);
     start(async () => {
       const res = await createToolDef({
         projectId,
@@ -75,9 +98,10 @@ export function ToolForm({
           .map((s) => s.trim())
           .filter(Boolean),
       });
-      if ("error" in res && res.error) toast.error(res.error);
-      else if (res.ok) {
-        toast.success("Tool created");
+      if ("error" in res && res.error) {
+        setError(res.error);
+      } else if (res.ok) {
+        setSuccess(`Tool “${name}” created.`);
         setName("");
         setDescription("");
         setParametersJson(STARTER_PARAMS);
@@ -95,6 +119,22 @@ export function ToolForm({
           providers={providers}
           placeholder='A function that looks up a customer bank-account balance by account number. Returns the current balance and last 5 transactions. Tag with "banking" plus a country tag (e.g. "maybank", "barclays", "bnpparibas").'
           onApply={applyAi}
+          open={suggestOpen}
+          onOpenChange={setSuggestOpen}
+          randomizePrompt={{
+            description:
+              "Invent ONE concise prompt for an LLM to draft a ToolDef. Pick a realistic domain (Malaysian retail banking, telco postpaid, healthcare appointment, government e-filing, e-commerce returns, ride-hailing, food delivery, etc.) and describe a specific function the customer-support assistant could call (lookup, status check, update, mock action). Mention 2–4 concrete arguments by name (with locale-appropriate formats like MyKad / IBAN / SIRET / tracking ID) and one or two locale presets to tag it with. ONE or TWO sentences — used as input to a downstream form-filling LLM.",
+            context: [
+              taxonomyNodes && taxonomyNodes.length > 0
+                ? `Project taxonomy topics (pick one when relevant):\n${taxonomyNodes.map((t) => `- ${t}`).join("\n")}`
+                : null,
+              existingTools && existingTools.length > 0
+                ? `Existing tools in this catalog (avoid duplicates; pick a complementary function):\n${existingTools.map((t) => `- ${t}`).join("\n")}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join("\n\n") || null,
+          }}
         />
       </div>
 
@@ -152,10 +192,18 @@ export function ToolForm({
         </p>
       </div>
 
-      <Button type="submit" disabled={pending}>
-        <Plus className="mr-2 h-4 w-4" />
-        {pending ? "Creating…" : "Create tool"}
-      </Button>
+      <div className="space-y-2">
+        <Button type="submit" disabled={pending}>
+          <Plus className="mr-2 h-4 w-4" />
+          {pending ? "Creating…" : "Create tool"}
+        </Button>
+        {error && (
+          <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+            {error}
+          </p>
+        )}
+        {success && <p className="text-xs text-green-600">{success}</p>}
+      </div>
     </form>
   );
 }

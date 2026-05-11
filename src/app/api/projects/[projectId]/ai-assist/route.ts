@@ -30,6 +30,7 @@ const bodySchema = z.object({
   model: z.string().optional().nullable(),
   // flow-graph passes the project's tool catalog as extraContext, which can be larger.
   extraContext: z.string().max(16000).optional().nullable(),
+  maxTokens: z.number().int().min(256).max(64000).optional().nullable(),
 });
 
 export async function POST(
@@ -76,6 +77,7 @@ export async function POST(
         providerId: parsed.data.providerId,
         model: parsed.data.model ?? null,
         extraContext: parsed.data.extraContext ?? null,
+        maxTokens: parsed.data.maxTokens ?? null,
       }),
       cache: "no-store",
       // Propagate client cancellation upstream so the Python service stops generating.

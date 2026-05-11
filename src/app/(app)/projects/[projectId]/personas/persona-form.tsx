@@ -46,10 +46,12 @@ export function PersonaForm({
   projectId,
   languageProfiles,
   providers,
+  taxonomyNodes,
 }: {
   projectId: string;
   languageProfiles: LP[];
   providers: Provider[];
+  taxonomyNodes?: string[];
 }) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -158,6 +160,14 @@ export function PersonaForm({
           onApply={applyAi}
           open={suggestOpen}
           onOpenChange={setSuggestOpen}
+          randomizePrompt={{
+            description:
+              "Invent ONE concise persona for a Malaysia-focused synthetic-data project. Vary demographics each call (age, ethnicity — malay/chinese/indian/iban/kadazan/orang-asli/mixed, region — KL/Selangor/Penang/Johor/Kelantan/Sabah/Sarawak/etc., urbanity, formality — baku/colloquial/manglish). Include a specific need or topic the persona is contacting customer support about, plus their preferred language register and any code-switch behaviour. ONE or TWO sentences only — this text will be used as the prompt to a downstream form-filling LLM.",
+            context:
+              taxonomyNodes && taxonomyNodes.length > 0
+                ? `Pick the topic (or related topic) from this project's taxonomy:\n${taxonomyNodes.map((n) => `- ${n}`).join("\n")}`
+                : null,
+          }}
         />
       </div>
       <div className="grid gap-4 sm:grid-cols-2">

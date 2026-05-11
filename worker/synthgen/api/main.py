@@ -15,7 +15,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from .. import db
-from ..ai_assist import ai_assist, ai_assist_stream
+from ..ai_assist import ai_assist, ai_assist_stream, random_prompt, random_prompt_stream
 from ..benchmarks.runner import execute_benchmark_run
 from ..bootstrap import bootstrap_project_defaults
 from ..config import get_settings
@@ -107,6 +107,7 @@ class AiAssistRequest(BaseModel):
     providerId: str
     model: str | None = None
     extraContext: str | None = None
+    maxTokens: int | None = None
 
 
 @app.post("/internal/benchmark-runs/{run_id}/start")
@@ -129,10 +130,52 @@ async def ai_assist_endpoint(req: AiAssistRequest, _=Depends(require_internal)):
             provider_id=req.providerId,
             model=req.model,
             extra_context=req.extraContext,
+            max_tokens=req.maxTokens,
         )
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
     return {"ok": True, **result}
+
+
+class RandomPromptRequest(BaseModel):
+    providerId: str
+    description: str
+    extraContext: str | None = None
+    maxTokens: int | None = None
+
+
+@app.post("/internal/random-prompt")
+async def random_prompt_endpoint(req: RandomPromptRequest, _=Depends(require_internal)):
+    try:
+        result = await random_prompt(
+            provider_id=req.providerId,
+            description=req.description,
+            extra_context=req.extraContext,
+            max_tokens=req.maxTokens or 4000,
+        )
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(e)) from e
+    return {"ok": True, **result}
+
+
+@app.post("/internal/random-prompt/stream")
+async def random_prompt_stream_endpoint(req: RandomPromptRequest, _=Depends(require_internal)):
+    """NDJSON-streamed Randomize. Same event shape as /internal/ai-assist/stream
+    plus a final {"type":"done","text":"..."} carrying the cleaned prompt."""
+
+    async def gen():
+        try:
+            async for event in random_prompt_stream(
+                provider_id=req.providerId,
+                description=req.description,
+                extra_context=req.extraContext,
+                max_tokens=req.maxTokens or 4000,
+            ):
+                yield _json.dumps(event) + "\n"
+        except Exception as e:  # noqa: BLE001
+            yield _json.dumps({"type": "error", "error": str(e)}) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 @app.post("/internal/ai-assist/stream")
@@ -147,6 +190,7 @@ async def ai_assist_stream_endpoint(req: AiAssistRequest, _=Depends(require_inte
                 provider_id=req.providerId,
                 model=req.model,
                 extra_context=req.extraContext,
+                max_tokens=req.maxTokens,
             ):
                 yield _json.dumps(event) + "\n"
         except Exception as e:  # noqa: BLE001

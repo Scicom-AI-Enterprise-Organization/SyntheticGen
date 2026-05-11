@@ -20,6 +20,7 @@ const startRunSchema = z.object({
   personaIds: z.array(z.string()).min(1),
   difficulties: z.array(z.string()).min(1),
   rowsPerCell: z.number().int().min(1).max(200),
+  turns: z.number().int().min(1).max(20).default(1),
   formalityPolicy: z.enum(["inherit", "formal", "semi-formal", "colloquial", "mixed"]).default("inherit"),
   temperature: z.number().min(0).max(2).default(0.7),
   topP: z.number().min(0).max(1).default(1.0),
@@ -47,6 +48,7 @@ export async function createAndStartRun(input: z.infer<typeof startRunSchema>) {
     top_p: data.topP,
     max_tokens: data.maxTokens,
     seed: data.seed ?? null,
+    turns: data.turns,
   };
 
   const gridSpec = {

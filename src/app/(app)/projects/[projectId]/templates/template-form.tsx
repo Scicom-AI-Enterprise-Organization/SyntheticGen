@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { toast } from "sonner";
+import { useCallback, useState, useTransition } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -36,15 +36,38 @@ include the operator's reply — just the customer's turn.`;
 export function TemplateForm({
   projectId,
   providers,
+  taxonomyNodes,
+  existingTemplates,
+  languageProfiles,
 }: {
   projectId: string;
   providers: Provider[];
+  taxonomyNodes?: string[];
+  existingTemplates?: string[];
+  languageProfiles?: string[];
 }) {
   const [name, setName] = useState("");
   const [kind, setKind] = useState<"system" | "user-seed" | "judge" | "conversation-driver">("user-seed");
   const [description, setDescription] = useState("");
   const [body, setBody] = useState(DEFAULT_USER_SEED);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [pending, start] = useTransition();
+
+  const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const suggestOpen = searchParams.get("suggest") === "1";
+  const setSuggestOpen = useCallback(
+    (next: boolean) => {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      if (next) params.set("suggest", "1");
+      else params.delete("suggest");
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
 
   function applyAi(data: Record<string, unknown>) {
     const s = (k: string) => (typeof data[k] === "string" ? (data[k] as string) : null);
@@ -59,6 +82,8 @@ export function TemplateForm({
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setError(null);
+    setSuccess(null);
     start(async () => {
       const res = await createTemplate({
         projectId,
@@ -67,9 +92,10 @@ export function TemplateForm({
         description: description || null,
         body,
       });
-      if ("error" in res && res.error) toast.error(res.error);
-      else {
-        toast.success("Template created");
+      if ("error" in res && res.error) {
+        setError(res.error);
+      } else {
+        setSuccess(`Template “${name}” created.`);
         setName("");
         setDescription("");
       }
@@ -85,6 +111,25 @@ export function TemplateForm({
           providers={providers}
           placeholder="A user-seed template for telco customer-support inquiries about modem outages, in the project's primary language and formal register, that uses {{persona.name}} and {{taxonomy.path}}."
           onApply={applyAi}
+          open={suggestOpen}
+          onOpenChange={setSuggestOpen}
+          randomizePrompt={{
+            description:
+              "Invent ONE concise prompt for an LLM to generate a PromptTemplate. Pick a kind (user-seed / system / judge / conversation-driver) and a domain (telco support, retail banking, hospital scheduling, government enquiries, e-commerce returns, etc.). Mention the formality register, primary language, code-switch behaviour if any, and which Mustache variables it should reference ({{persona.name}}, {{persona.region}}, {{persona.urbanity}}, {{taxonomy.path}}, {{language.primary}}, {{difficulty}}). ONE or TWO sentences — used as input to a downstream form-filling LLM.",
+            context: [
+              taxonomyNodes && taxonomyNodes.length > 0
+                ? `Project taxonomy topics (pick one when relevant):\n${taxonomyNodes.map((t) => `- ${t}`).join("\n")}`
+                : null,
+              languageProfiles && languageProfiles.length > 0
+                ? `Available language profiles in this project:\n${languageProfiles.map((p) => `- ${p}`).join("\n")}`
+                : null,
+              existingTemplates && existingTemplates.length > 0
+                ? `Existing templates (avoid near-duplicates):\n${existingTemplates.map((t) => `- ${t}`).join("\n")}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join("\n\n") || null,
+          }}
         />
       </div>
       <div className="grid gap-4 sm:grid-cols-[1fr_180px]">
@@ -141,10 +186,18 @@ export function TemplateForm({
         </p>
       </div>
 
-      <Button type="submit" disabled={pending}>
-        <Plus className="mr-2 h-4 w-4" />
-        {pending ? "Creating…" : "Create template"}
-      </Button>
+      <div className="space-y-2">
+        <Button type="submit" disabled={pending}>
+          <Plus className="mr-2 h-4 w-4" />
+          {pending ? "Creating…" : "Create template"}
+        </Button>
+        {error && (
+          <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+            {error}
+          </p>
+        )}
+        {success && <p className="text-xs text-green-600">{success}</p>}
+      </div>
     </form>
   );
 }

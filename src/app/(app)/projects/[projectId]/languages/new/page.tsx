@@ -17,11 +17,23 @@ export default async function NewLanguageProfilePage({
   const { projectId } = await params;
   await requireProjectPermission(projectId, "languages.write");
 
-  const providers = await prisma.providerCredential.findMany({
-    where: { projectId },
-    orderBy: { name: "asc" },
-    select: { id: true, name: true, defaultModel: true },
-  });
+  const [providers, existingProfiles, taxonomyNodes] = await Promise.all([
+    prisma.providerCredential.findMany({
+      where: { projectId },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, defaultModel: true },
+    }),
+    prisma.languageProfile.findMany({
+      where: { projectId },
+      orderBy: { name: "asc" },
+      select: { name: true, primary: true, register: true },
+    }),
+    prisma.taxonomyNode.findMany({
+      where: { taxonomy: { projectId } },
+      orderBy: { name: "asc" },
+      select: { name: true },
+    }),
+  ]);
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -41,6 +53,10 @@ export default async function NewLanguageProfilePage({
           <ProfileEditor
             projectId={projectId}
             providers={providers}
+            existingProfiles={existingProfiles.map(
+              (p) => `${p.name} (primary=${p.primary}, register=${p.register})`,
+            )}
+            taxonomyNodes={taxonomyNodes.map((t) => t.name)}
             initial={{
               name: "",
               primary: "ms",

@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback, useState, useTransition } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import { Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -60,12 +60,30 @@ export function ProfileEditor({
   projectId,
   initial,
   providers,
+  existingProfiles,
+  taxonomyNodes,
 }: {
   projectId: string;
   initial: Initial;
   providers: Provider[];
+  existingProfiles?: string[];
+  taxonomyNodes?: string[];
 }) {
   const router = useRouter();
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+  const suggestOpen = searchParams.get("suggest") === "1";
+  const setSuggestOpen = useCallback(
+    (next: boolean) => {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      if (next) params.set("suggest", "1");
+      else params.delete("suggest");
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
+
   const [pending, start] = useTransition();
   const [form, setForm] = useState(initial);
   const [bannedText, setBannedText] = useState(csv(initial.bannedTokens));
@@ -157,6 +175,22 @@ export function ProfileEditor({
           providers={providers}
           placeholder="An enterprise formal profile for customer-support data: ban colloquial particles and SMS shortcuts; allow domain loanwords (router, modem, bandwidth, etc.). Works for any locale — describe the language(s) and rules."
           onApply={applyAi}
+          open={suggestOpen}
+          onOpenChange={setSuggestOpen}
+          randomizePrompt={{
+            description:
+              "Invent ONE concise language-profile prompt for a Malaysia-focused synthetic-data project. Vary across calls: primary language (ms/en/zh/ta), register (formal Bahasa baku vs colloquial Manglish vs mixed), code-switch policy (none / inter-sentential / intra-sentential / rojak), and a specific domain (telco, retail banking, hospital, government service, e-commerce returns, kampung small-business, etc.). Mention the banned-token category (Manglish particles for MS-formal, anglicisms for FR-formal, SMS shortcuts when appropriate) and the loanword policy. ONE or TWO sentences — this text is the prompt for a downstream form-filling LLM.",
+            context: [
+              existingProfiles && existingProfiles.length > 0
+                ? `Existing profiles in this project (avoid duplicating; pick a complementary angle):\n${existingProfiles.map((p) => `- ${p}`).join("\n")}`
+                : null,
+              taxonomyNodes && taxonomyNodes.length > 0
+                ? `Project topics you can ground the profile in (pick one when relevant):\n${taxonomyNodes.map((t) => `- ${t}`).join("\n")}`
+                : null,
+            ]
+              .filter(Boolean)
+              .join("\n\n") || null,
+          }}
         />
       </div>
       <div className="grid gap-4 sm:grid-cols-2">

@@ -19,7 +19,7 @@ export default async function PersonasPage({
   const { role } = await requireProjectPermission(projectId, "personas.read");
   const canWrite = role ? projectRoleAllows(role, "personas.write") : false;
 
-  const [personas, languageProfiles, providers] = await Promise.all([
+  const [personas, languageProfiles, providers, taxonomyNodes] = await Promise.all([
     prisma.persona.findMany({
       where: { projectId },
       orderBy: { name: "asc" },
@@ -34,6 +34,11 @@ export default async function PersonasPage({
       where: { projectId },
       orderBy: { name: "asc" },
       select: { id: true, name: true, defaultModel: true },
+    }),
+    prisma.taxonomyNode.findMany({
+      where: { taxonomy: { projectId } },
+      orderBy: { name: "asc" },
+      select: { name: true },
     }),
   ]);
 
@@ -60,6 +65,7 @@ export default async function PersonasPage({
               projectId={projectId}
               languageProfiles={languageProfiles}
               providers={providers}
+              taxonomyNodes={taxonomyNodes.map((t) => t.name)}
             />
           </CardContent>
         </Card>

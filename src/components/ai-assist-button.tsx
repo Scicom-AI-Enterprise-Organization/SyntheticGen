@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useState, useTransition } from "react";
-import { Sparkles } from "lucide-react";
+import { Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -40,6 +40,7 @@ export function AiAssistButton({
   extraContext,
   open: openProp,
   onOpenChange: onOpenChangeProp,
+  randomizePrompt,
 }: {
   projectId: string;
   kind: AiAssistKind;
@@ -52,6 +53,15 @@ export function AiAssistButton({
   extraContext?: string | null;
   open?: boolean;
   onOpenChange?: (next: boolean) => void;
+  /** When provided, a "Randomize" button appears next to "Use example".
+   *  Clicking it asks the currently-selected provider to generate a one-sentence
+   *  prompt using `description` as the system hint and `context` as optional
+   *  extra information (e.g. the project's taxonomy node names). The returned
+   *  text is dropped into the prompt textarea. */
+  randomizePrompt?: {
+    description: string;
+    context?: string | null;
+  };
 }) {
   const [openInternal, setOpenInternal] = useState(false);
   const isControlled = openProp !== undefined;
@@ -62,6 +72,9 @@ export function AiAssistButton({
   };
   const [prompt, setPrompt] = useState("");
   const [providerId, setProviderId] = useState(providers[0]?.id ?? "");
+  const [maxTokens, setMaxTokens] = useState<number>(8000);
+  const [randomizing, setRandomizing] = useState(false);
+  const randomizeAbortRef = useRef<AbortController | null>(null);
   const [reasoningText, setReasoningText] = useState("");
   const [contentText, setContentText] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -108,7 +121,7 @@ export function AiAssistButton({
         const res = await fetch(`/api/projects/${projectId}/ai-assist?stream=1`, {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ kind, prompt, providerId, extraContext }),
+          body: JSON.stringify({ kind, prompt, providerId, extraContext, maxTokens }),
           signal: controller.signal,
         });
         if (!res.ok || !res.body) {
@@ -188,6 +201,101 @@ export function AiAssistButton({
     abortRef.current?.abort();
   }
 
+  async function onRandomize() {
+    if (!randomizePrompt) return;
+    if (!providerId) {
+      setError("Pick a provider before randomizing.");
+      return;
+    }
+    setError(null);
+    setRandomizing(true);
+    setPrompt("");
+    setReasoningText("");
+    setContentText("");
+    setInfo(null);
+    const controller = new AbortController();
+    randomizeAbortRef.current = controller;
+    try {
+      const res = await fetch(
+        `/api/projects/${projectId}/random-prompt?stream=1`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            providerId,
+            description: randomizePrompt.description,
+            extraContext: randomizePrompt.context ?? null,
+            maxTokens,
+          }),
+          signal: controller.signal,
+        },
+      );
+      if (!res.ok || !res.body) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `http ${res.status}`);
+      }
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = "";
+      let finalText: string | null = null;
+      let liveContent = "";
+
+      outer: while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        const lines = buf.split("\n");
+        buf = lines.pop() ?? "";
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          let evt: Record<string, unknown>;
+          try {
+            evt = JSON.parse(trimmed);
+          } catch {
+            continue;
+          }
+          const type = evt.type as string;
+          if (type === "start") {
+            const modelUsed = (evt.model as string) ?? "";
+            if (modelUsed) setInfo(`Streaming from ${modelUsed}…`);
+          } else if (type === "delta") {
+            if (evt.reasoning) {
+              setReasoningText((t) => t + ((evt.text as string) ?? ""));
+              autoScroll(reasoningBoxRef);
+            } else {
+              liveContent += (evt.text as string) ?? "";
+              setPrompt(liveContent);
+            }
+          } else if (type === "done") {
+            finalText = (evt.text as string) ?? liveContent;
+            break outer;
+          } else if (type === "error") {
+            throw new Error((evt.error as string) || "Randomize failed");
+          }
+        }
+      }
+
+      if (finalText) setPrompt(finalText.trim());
+      else if (!liveContent) throw new Error("Randomize returned an empty prompt.");
+    } catch (e) {
+      const err = e as Error;
+      if (err.name === "AbortError" || controller.signal.aborted) {
+        // Stopped — keep whatever already streamed in.
+      } else {
+        setError(err.message);
+      }
+    } finally {
+      if (randomizeAbortRef.current === controller) randomizeAbortRef.current = null;
+      setRandomizing(false);
+    }
+  }
+
+  function onStopRandomize() {
+    randomizeAbortRef.current?.abort();
+  }
+
   function onOpenChange(next: boolean) {
     if (pending) return;
     setOpen(next);
@@ -237,18 +345,44 @@ export function AiAssistButton({
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="ai-prompt">Prompt</Label>
-                {placeholder && (
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => setPrompt(placeholder)}
-                    disabled={pending}
-                    title="Fill the prompt with a sensible example"
-                  >
-                    Use example
-                  </Button>
-                )}
+                <div className="flex gap-1">
+                  {placeholder && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setPrompt(placeholder)}
+                      disabled={pending || randomizing}
+                      title="Fill the prompt with a sensible example"
+                    >
+                      Use example
+                    </Button>
+                  )}
+                  {randomizePrompt && (
+                    randomizing ? (
+                      <Button
+                        type="button"
+                        variant="destructive"
+                        size="sm"
+                        onClick={onStopRandomize}
+                        title="Stop the LLM"
+                      >
+                        Stop
+                      </Button>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={onRandomize}
+                        disabled={pending}
+                        title="Ask the LLM to invent a random prompt"
+                      >
+                        Randomize
+                      </Button>
+                    )
+                  )}
+                </div>
               </div>
               <Textarea
                 id="ai-prompt"
@@ -256,7 +390,7 @@ export function AiAssistButton({
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 placeholder={placeholder ?? "Describe what you want…"}
-                disabled={pending}
+                disabled={pending || randomizing}
               />
             </div>
 
@@ -279,14 +413,39 @@ export function AiAssistButton({
               </Select>
             </div>
 
-            {(pending || reasoningText || contentText) && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="ai-max-tokens">Max output tokens</Label>
+                <span className="font-mono text-xs text-muted-foreground">
+                  {maxTokens.toLocaleString()}
+                </span>
+              </div>
+              <input
+                id="ai-max-tokens"
+                type="range"
+                min={1000}
+                max={32000}
+                step={500}
+                value={maxTokens}
+                onChange={(e) => setMaxTokens(Number(e.target.value))}
+                disabled={pending}
+                className="w-full accent-primary"
+              />
+              <p className="text-xs text-muted-foreground">
+                Caps how many tokens the model can generate (reasoning + answer).
+                Reasoning models like Qwen3-thinking eat thousands of tokens before
+                producing JSON — keep it generous when in doubt.
+              </p>
+            </div>
+
+            {(pending || randomizing || reasoningText || contentText) && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label>LLM output</Label>
+                  <Label>{randomizing ? "Randomize output" : "LLM output"}</Label>
                   {info && <span className="text-xs text-muted-foreground">{info}</span>}
                 </div>
 
-                {reasoningText && (
+                {(reasoningText || (randomizing && !reasoningText)) && (
                   <details open className="rounded-md border border-border bg-muted/20">
                     <summary className="cursor-pointer select-none px-2 py-1 text-xs font-medium text-muted-foreground">
                       Reasoning ({reasoningText.length} chars)
@@ -295,22 +454,26 @@ export function AiAssistButton({
                       ref={reasoningBoxRef}
                       className="max-h-40 overflow-auto whitespace-pre-wrap break-words border-t border-border px-2 py-2 font-mono text-[11px] italic text-muted-foreground"
                     >
-                      {reasoningText}
-                      {pending && !contentText && <span className="animate-pulse">▍</span>}
+                      {reasoningText || "Waiting for first reasoning token…"}
+                      {(pending || randomizing) && !contentText && (
+                        <span className="animate-pulse">▍</span>
+                      )}
                     </pre>
                   </details>
                 )}
 
-                <pre
-                  ref={contentBoxRef}
-                  className="max-h-72 min-h-[6rem] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/30 p-2 font-mono text-xs"
-                >
-                  {contentText ||
-                    (reasoningText
-                      ? "Model is thinking… answer will appear here."
-                      : "Waiting for first token…")}
-                  {pending && contentText && <span className="animate-pulse">▍</span>}
-                </pre>
+                {!randomizing && (
+                  <pre
+                    ref={contentBoxRef}
+                    className="max-h-72 min-h-[6rem] overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/30 p-2 font-mono text-xs"
+                  >
+                    {contentText ||
+                      (reasoningText
+                        ? "Model is thinking… answer will appear here."
+                        : "Waiting for first token…")}
+                    {pending && contentText && <span className="animate-pulse">▍</span>}
+                  </pre>
+                )}
               </div>
             )}
 

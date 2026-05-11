@@ -14,7 +14,7 @@ from typing import Any
 from . import db
 from .crypto import decrypt_secret
 from .ids import cuid_like
-from .providers import chat_completion
+from .providers import chat_completion, chat_completion_stream, estimate_cost
 from .style_guide import FormalityPolicy, style_guide
 from .templates import RenderContext, render
 from .validators import ValidatorContext, run_pipeline
@@ -212,20 +212,54 @@ async def execute_job(job_id: str) -> str:
         job_id,
     )
 
+    # Stream the assistant response so the UI can show live tokens. We also
+    # emit a pg_notify('synthgen_job', ...) per delta so the per-job SSE route
+    # can forward to the browser. Reasoning deltas are forwarded with
+    # reasoning=true; only content deltas accumulate into the final answer.
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    tokens_in = 0
+    tokens_out = 0
+    upstream_model = run["model"]
+    started = __import__("time").perf_counter()
     try:
-        result = await chat_completion(
+        async with db.acquire() as ncon:
+            await ncon.execute(
+                "SELECT pg_notify('synthgen_job', $1)",
+                json.dumps({"jobId": job_id, "runId": run["id"], "event": "start"}),
+            )
+        async for ev in chat_completion_stream(
             base_url=base_url,
             api_key=api_key,
             model=run["model"],
             messages=messages,
             temperature=float(sampling.get("temperature", 0.7)),
-            top_p=float(sampling.get("top_p", 1.0)),
             max_tokens=sampling.get("max_tokens", 1024),
-            seed=sampling.get("seed"),
             extra_headers=extra_headers,
             reasoning_effort=provider.get("reasoningEffort"),
             chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")) or None,
-        )
+        ):
+            if ev.done:
+                tokens_in = ev.tokens_in
+                tokens_out = ev.tokens_out
+                upstream_model = ev.model or run["model"]
+                break
+            if ev.delta:
+                if ev.reasoning:
+                    reasoning_parts.append(ev.delta)
+                else:
+                    content_parts.append(ev.delta)
+                async with db.acquire() as ncon:
+                    await ncon.execute(
+                        "SELECT pg_notify('synthgen_job', $1)",
+                        json.dumps({
+                            "jobId": job_id,
+                            "runId": run["id"],
+                            "event": "delta",
+                            "text": ev.delta,
+                            "reasoning": ev.reasoning,
+                        }),
+                    )
     except Exception as e:  # noqa: BLE001
         log.exception("provider call failed for job=%s", job_id)
         await db.execute(
@@ -238,6 +272,35 @@ async def execute_job(job_id: str) -> str:
             str(e)[:1000],
         )
         raise
+
+    import time as _time
+    elapsed_ms = int((_time.perf_counter() - started) * 1000)
+
+    class _StreamedResult:
+        pass
+
+    result = _StreamedResult()
+    result.content = "".join(content_parts)
+    result.reasoning_content = "".join(reasoning_parts) or None
+    result.tokens_in = tokens_in
+    result.tokens_out = tokens_out
+    result.cost_usd = estimate_cost(upstream_model, tokens_in, tokens_out)
+    result.latency_ms = elapsed_ms
+    result.model = upstream_model
+    result.raw = {"streamed": True, "model": upstream_model}
+
+    async with db.acquire() as ncon:
+        await ncon.execute(
+            "SELECT pg_notify('synthgen_job', $1)",
+            json.dumps({
+                "jobId": job_id,
+                "runId": run["id"],
+                "event": "done",
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "latency_ms": elapsed_ms,
+            }),
+        )
 
     # Validate the assistant content.
     vctx = ValidatorContext(

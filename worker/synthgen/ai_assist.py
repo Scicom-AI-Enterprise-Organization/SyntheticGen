@@ -173,8 +173,8 @@ KIND_MAX_TOKENS: dict[str, int] = {
     "persona": 6000,
     "prompt-template": 6000,
     "tool-def": 6000,
-    "language-profile": 8000,
-    "flow-graph": 12000,
+    "language-profile": 16000,
+    "flow-graph": 16000,
 }
 
 
@@ -260,6 +260,7 @@ async def ai_assist(
     provider_id: str,
     model: str | None = None,
     extra_context: str | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Call the LLM and return a parsed dict suitable for spreading into form state."""
     fields = KIND_FIELDS.get(kind)
@@ -295,7 +296,7 @@ async def ai_assist(
             {"role": "user", "content": user_text},
         ],
         temperature=0.3,
-        max_tokens=KIND_MAX_TOKENS.get(kind, DEFAULT_MAX_TOKENS),
+        max_tokens=max_tokens if max_tokens and max_tokens > 0 else KIND_MAX_TOKENS.get(kind, DEFAULT_MAX_TOKENS),
         extra_headers=extra_headers or None,
         reasoning_effort=provider.get("reasoningEffort"),
         chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")),
@@ -312,6 +313,165 @@ async def ai_assist(
     }
 
 
+RANDOM_PROMPT_SYSTEM = """\
+You generate concise prompts that will be fed into an AI form-filling dialog.
+Output ONLY the prompt text — no surrounding quotes, no markdown fences, no
+preamble, no commentary, no "Here is..." prefix. One or two sentences max.
+Be specific and creative.
+"""
+
+
+def _strip_wrapping(text: str) -> str:
+    t = text.strip()
+    # Drop leading/trailing markdown fences if any.
+    if t.startswith("```"):
+        t = t.split("\n", 1)[-1] if "\n" in t else t
+        if t.endswith("```"):
+            t = t[: -3]
+        t = t.strip()
+    # Drop a single layer of surrounding quotes.
+    if len(t) >= 2 and t[0] in ('"', "'", "“", "‘") and t[-1] in ('"', "'", "”", "’"):
+        t = t[1:-1].strip()
+    return t
+
+
+async def random_prompt_stream(
+    *,
+    provider_id: str,
+    description: str,
+    extra_context: str | None = None,
+    max_tokens: int = 4000,
+) -> AsyncIterator[dict[str, Any]]:
+    """Streaming version of random_prompt: yields delta events as the LLM types
+    the suggested prompt, then a final {type:"done", text:...}.
+
+    Same event vocabulary as ai_assist_stream so the client can reuse parsing.
+    """
+    try:
+        provider = await _load_provider(provider_id)
+    except Exception as e:
+        yield {"type": "error", "error": str(e)}
+        return
+
+    api_key = decrypt_secret(provider["encryptedApiKey"])
+    base_url = provider["baseUrl"]
+    extra_headers = provider.get("headers")
+    if isinstance(extra_headers, str):
+        extra_headers = json.loads(extra_headers)
+    selected_model = provider.get("defaultModel") or "gpt-4o-mini"
+
+    user_text = description
+    if extra_context:
+        user_text = f"{description}\n\n{extra_context}"
+
+    yield {"type": "start", "model": selected_model}
+
+    started = time.perf_counter()
+    content: list[str] = []
+    tokens_in = 0
+    tokens_out = 0
+    upstream_model = selected_model
+    try:
+        async for ev in chat_completion_stream(
+            base_url=base_url,
+            api_key=api_key,
+            model=selected_model,
+            messages=[
+                {"role": "system", "content": RANDOM_PROMPT_SYSTEM},
+                {"role": "user", "content": user_text},
+            ],
+            temperature=1.0,
+            max_tokens=max_tokens,
+            extra_headers=extra_headers or None,
+            reasoning_effort=provider.get("reasoningEffort"),
+            chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")),
+        ):
+            if ev.done:
+                tokens_in = ev.tokens_in
+                tokens_out = ev.tokens_out
+                upstream_model = ev.model or selected_model
+                break
+            if ev.delta:
+                if not ev.reasoning:
+                    content.append(ev.delta)
+                yield {"type": "delta", "text": ev.delta, "reasoning": ev.reasoning}
+    except Exception as e:
+        yield {"type": "error", "error": str(e)}
+        return
+
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    text = _strip_wrapping("".join(content))
+    if not text:
+        yield {
+            "type": "error",
+            "error": "Model produced no content. If using a reasoning model, "
+                     "set chat_template_kwargs.enable_thinking=false on the provider "
+                     "or raise the max-tokens slider.",
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+        }
+        return
+
+    yield {
+        "type": "done",
+        "text": text,
+        "model": upstream_model,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "latency_ms": elapsed_ms,
+    }
+
+
+async def random_prompt(
+    *,
+    provider_id: str,
+    description: str,
+    extra_context: str | None = None,
+    max_tokens: int = 4000,
+) -> dict[str, Any]:
+    """Ask the LLM for a single-shot one-sentence prompt and return it as text.
+
+    Used by the "Randomize" button in the AI-fill dialogs. Uses the same provider
+    settings (reasoning_effort, chat_template_kwargs) as the regular ai_assist
+    path — so if the user configured `enable_thinking: false` on the provider,
+    randomize stays snappy.
+    """
+    provider = await _load_provider(provider_id)
+    api_key = decrypt_secret(provider["encryptedApiKey"])
+    base_url = provider["baseUrl"]
+    extra_headers = provider.get("headers")
+    if isinstance(extra_headers, str):
+        extra_headers = json.loads(extra_headers)
+    selected_model = provider.get("defaultModel") or "gpt-4o-mini"
+
+    user_text = description
+    if extra_context:
+        user_text = f"{description}\n\n{extra_context}"
+
+    result = await chat_completion(
+        base_url=base_url,
+        api_key=api_key,
+        model=selected_model,
+        messages=[
+            {"role": "system", "content": RANDOM_PROMPT_SYSTEM},
+            {"role": "user", "content": user_text},
+        ],
+        temperature=1.0,
+        max_tokens=max_tokens,
+        extra_headers=extra_headers or None,
+        reasoning_effort=provider.get("reasoningEffort"),
+        chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")),
+    )
+    text = _strip_wrapping(result.content)
+    return {
+        "text": text,
+        "model": result.model,
+        "tokens_in": result.tokens_in,
+        "tokens_out": result.tokens_out,
+        "latency_ms": result.latency_ms,
+    }
+
+
 async def ai_assist_stream(
     *,
     kind: str,
@@ -319,6 +479,7 @@ async def ai_assist_stream(
     provider_id: str,
     model: str | None = None,
     extra_context: str | None = None,
+    max_tokens: int | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Like `ai_assist`, but yields incremental events:
       {"type":"delta","text":"..."} during generation,
@@ -373,7 +534,7 @@ async def ai_assist_stream(
                 {"role": "user", "content": user_text},
             ],
             temperature=0.3,
-            max_tokens=KIND_MAX_TOKENS.get(kind, DEFAULT_MAX_TOKENS),
+            max_tokens=max_tokens if max_tokens and max_tokens > 0 else KIND_MAX_TOKENS.get(kind, DEFAULT_MAX_TOKENS),
             extra_headers=extra_headers or None,
             reasoning_effort=provider.get("reasoningEffort"),
             chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")),

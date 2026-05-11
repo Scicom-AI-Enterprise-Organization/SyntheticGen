@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/card";
 import { RunLiveStatus } from "./run-live-status";
 import { CancelRunButton } from "./cancel-run-button";
+import { LiveJobPreview } from "./live-job-preview";
 
 export default async function RunDetailPage({
   params,
@@ -81,6 +82,10 @@ export default async function RunDetailPage({
           },
         }}
       />
+
+      {(run.status === "running" || run.status === "queued") && (
+        <LiveJobPreview projectId={projectId} runId={runId} />
+      )}
 
       <Card>
         <CardHeader>

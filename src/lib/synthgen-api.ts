@@ -61,6 +61,7 @@ export async function aiAssist(input: {
   providerId: string;
   model?: string | null;
   extraContext?: string | null;
+  maxTokens?: number | null;
 }): Promise<AiAssistResult> {
   return call("/internal/ai-assist", {
     method: "POST",
@@ -70,6 +71,7 @@ export async function aiAssist(input: {
       providerId: input.providerId,
       model: input.model ?? null,
       extraContext: input.extraContext ?? null,
+      maxTokens: input.maxTokens ?? null,
     }),
   });
 }

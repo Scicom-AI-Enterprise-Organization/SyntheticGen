@@ -75,6 +75,7 @@ export function RunWizard({
   );
   const [difficulties, setDifficulties] = useState<string[]>(["medium"]);
   const [rowsPerCell, setRowsPerCell] = useState(5);
+  const [turns, setTurns] = useState(1);
   const [formalityPolicy, setFormalityPolicy] = useState<"inherit" | "formal" | "semi-formal" | "colloquial" | "mixed">(
     "inherit",
   );
@@ -119,6 +120,7 @@ export function RunWizard({
         personaIds,
         difficulties,
         rowsPerCell,
+        turns,
         formalityPolicy,
         temperature,
         topP: 1.0,
@@ -238,6 +240,23 @@ export function RunWizard({
             required
           />
         </div>
+
+        <div className="space-y-2">
+          <Label>Turns per conversation</Label>
+          <Input
+            type="number"
+            min={1}
+            max={20}
+            value={turns}
+            onChange={(e) => setTurns(Number(e.target.value))}
+            required
+          />
+          <p className="text-xs text-muted-foreground">
+            How many user↔assistant exchanges per conversation. Slice 1's
+            single-turn worker honours <code>1</code>; use <strong>Flows</strong>{" "}
+            for richer multi-turn graphs.
+          </p>
+        </div>
       </div>
 
       <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
@@ -273,7 +292,26 @@ export function RunWizard({
       </div>
 
       <div>
-        <Label className="mb-2 block">Taxonomy nodes ({nodeIds.length} selected)</Label>
+        <div className="mb-2 flex items-center justify-between">
+          <Label>Taxonomy nodes ({nodeIds.length} selected)</Label>
+          {taxonomy.length > 0 && (
+            <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+              <Checkbox
+                checked={
+                  nodeIds.length === taxonomy.length
+                    ? true
+                    : nodeIds.length === 0
+                      ? false
+                      : "indeterminate"
+                }
+                onCheckedChange={(v) =>
+                  setNodeIds(v === true ? taxonomy.map((n) => n.id) : [])
+                }
+              />
+              {nodeIds.length === taxonomy.length ? "Unselect all" : "Select all"}
+            </label>
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-2 rounded-md border border-border p-3 sm:grid-cols-3">
           {taxonomy.map((n) => (
             <label key={n.id} className="flex items-start gap-2 text-xs">
@@ -288,7 +326,26 @@ export function RunWizard({
       </div>
 
       <div>
-        <Label className="mb-2 block">Personas ({personaIds.length} selected)</Label>
+        <div className="mb-2 flex items-center justify-between">
+          <Label>Personas ({personaIds.length} selected)</Label>
+          {personas.length > 0 && (
+            <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+              <Checkbox
+                checked={
+                  personaIds.length === personas.length
+                    ? true
+                    : personaIds.length === 0
+                      ? false
+                      : "indeterminate"
+                }
+                onCheckedChange={(v) =>
+                  setPersonaIds(v === true ? personas.map((p) => p.id) : [])
+                }
+              />
+              {personaIds.length === personas.length ? "Unselect all" : "Select all"}
+            </label>
+          )}
+        </div>
         <div className="grid grid-cols-2 gap-2 rounded-md border border-border p-3 sm:grid-cols-3">
           {personas.map((p) => (
             <label key={p.id} className="flex items-start gap-2 text-xs">
@@ -310,7 +367,24 @@ export function RunWizard({
       </div>
 
       <div>
-        <Label className="mb-2 block">Difficulties</Label>
+        <div className="mb-2 flex items-center justify-between">
+          <Label>Difficulties ({difficulties.length} selected)</Label>
+          <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+            <Checkbox
+              checked={
+                difficulties.length === DIFFICULTIES.length
+                  ? true
+                  : difficulties.length === 0
+                    ? false
+                    : "indeterminate"
+              }
+              onCheckedChange={(v) =>
+                setDifficulties(v === true ? [...DIFFICULTIES] : [])
+              }
+            />
+            {difficulties.length === DIFFICULTIES.length ? "Unselect all" : "Select all"}
+          </label>
+        </div>
         <div className="flex gap-2">
           {DIFFICULTIES.map((d) => (
             <label key={d} className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs">
