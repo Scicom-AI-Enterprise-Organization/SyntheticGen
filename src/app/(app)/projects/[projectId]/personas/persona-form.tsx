@@ -2,8 +2,7 @@
 
 import { useCallback, useMemo, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { toast } from "sonner";
-import { Plus, AlertTriangle } from "lucide-react";
+import { Plus, Save, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,7 +16,26 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AiAssistButton } from "@/components/ai-assist-button";
-import { createPersona } from "./actions";
+import { createPersona, updatePersona } from "./actions";
+
+type Formality = "baku" | "colloquial" | "manglish" | "mixed";
+type Urbanity = "urban" | "suburban" | "kampung";
+
+export interface InitialPersona {
+  id: string;
+  name: string;
+  description: string | null;
+  ethnicity: string | null;
+  region: string | null;
+  urbanity: Urbanity | null;
+  ageRange: string | null;
+  gender: string | null;
+  occupation: string | null;
+  formality: Formality | null;
+  religionAware: boolean;
+  dialectTags: string[];
+  languageProfileId: string | null;
+}
 
 const NONE = "__none__";
 
@@ -47,22 +65,29 @@ export function PersonaForm({
   languageProfiles,
   providers,
   taxonomyNodes,
+  initial,
+  onDone,
 }: {
   projectId: string;
   languageProfiles: LP[];
   providers: Provider[];
   taxonomyNodes?: string[];
+  initial?: InitialPersona;
+  onDone?: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [ethnicity, setEthnicity] = useState(NONE);
-  const [region, setRegion] = useState(NONE);
-  const [urbanity, setUrbanity] = useState(NONE);
-  const [ageRange, setAgeRange] = useState(NONE);
-  const [formality, setFormality] = useState(NONE);
-  const [religionAware, setReligionAware] = useState(false);
-  const [dialectTags, setDialectTags] = useState("");
-  const [languageProfileId, setLanguageProfileId] = useState(NONE);
+  const isEditing = Boolean(initial);
+  const [name, setName] = useState(initial?.name ?? "");
+  const [description, setDescription] = useState(initial?.description ?? "");
+  const [ethnicity, setEthnicity] = useState(initial?.ethnicity ?? NONE);
+  const [region, setRegion] = useState(initial?.region ?? NONE);
+  const [urbanity, setUrbanity] = useState(initial?.urbanity ?? NONE);
+  const [ageRange, setAgeRange] = useState(initial?.ageRange ?? NONE);
+  const [formality, setFormality] = useState(initial?.formality ?? NONE);
+  const [religionAware, setReligionAware] = useState(initial?.religionAware ?? false);
+  const [dialectTags, setDialectTags] = useState((initial?.dialectTags ?? []).join(", "));
+  const [languageProfileId, setLanguageProfileId] = useState(initial?.languageProfileId ?? NONE);
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
   const router = useRouter();
@@ -101,28 +126,37 @@ export function PersonaForm({
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setError(null);
+    setSuccess(null);
     start(async () => {
-      const res = await createPersona({
+      const payload = {
         projectId,
         name,
         description: description || null,
         ethnicity: unwrap(ethnicity),
         region: unwrap(region),
-        urbanity: unwrap(urbanity) as "urban" | "suburban" | "kampung" | null,
+        urbanity: unwrap(urbanity) as Urbanity | null,
         ageRange: unwrap(ageRange),
         gender: null,
         occupation: null,
-        formality: unwrap(formality) as "baku" | "colloquial" | "manglish" | "mixed" | null,
+        formality: unwrap(formality) as Formality | null,
         religionAware,
         dialectTags: dialectTags
           .split(/[,\n]+/)
           .map((s) => s.trim())
           .filter(Boolean),
         languageProfileId: unwrap(languageProfileId),
-      });
-      if ("error" in res && res.error) toast.error(res.error);
-      else {
-        toast.success("Persona created");
+      };
+      const res = isEditing
+        ? await updatePersona({ id: initial!.id, ...payload })
+        : await createPersona(payload);
+      if ("error" in res && res.error) {
+        setError(res.error);
+      } else if (isEditing) {
+        setSuccess("Saved.");
+        onDone?.();
+      } else {
+        setSuccess(`Persona “${name}” created.`);
         setName("");
         setDescription("");
         setDialectTags("");
@@ -320,10 +354,28 @@ export function PersonaForm({
         </div>
       )}
 
-      <Button type="submit" disabled={pending}>
-        <Plus className="mr-2 h-4 w-4" />
-        {pending ? "Creating…" : "Create persona"}
-      </Button>
+      <div className="space-y-2">
+        <Button type="submit" disabled={pending}>
+          {isEditing ? (
+            <Save className="mr-2 h-4 w-4" />
+          ) : (
+            <Plus className="mr-2 h-4 w-4" />
+          )}
+          {pending
+            ? isEditing
+              ? "Saving…"
+              : "Creating…"
+            : isEditing
+              ? "Save changes"
+              : "Create persona"}
+        </Button>
+        {error && (
+          <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+            {error}
+          </p>
+        )}
+        {success && <p className="text-xs text-green-600">{success}</p>}
+      </div>
     </form>
   );
 }

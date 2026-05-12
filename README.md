@@ -52,6 +52,16 @@ generation, and exports.
   Action nodes in flows. The ✨ AI-assist `tool-def` kind also emits 2-4
   **synthetic argument examples** that the worker validates against the tool's
   JSON Schema before saving (invalid ones are dropped with inline warnings).
+- **Streaming function-calling** — `chat_completion_stream` understands
+  `delta.tool_calls` chunks; the worker assembles them per-`index` and yields
+  `tool_call_delta` events so tool invocations show up live in the preview as
+  the model is still emitting them. Run cells with tools also stream a
+  **mock-backend** synthetic-response LLM call (full reasoning + JSON
+  materialize live) before the tool result lands. When tools are configured on
+  a run, the worker prepends a **tool-catalog block** to the system prompt
+  (name + description per tool) and sets `tool_choice: "auto"` — without that,
+  some OpenAI-compat servers (vLLM in particular) leave the model refusing
+  with "I don't have access" even though the catalog is in the request.
 - **Knowledge base** — per-project `KnowledgeBaseEntry` rows the worker
   auto-injects into the system prompt before each generation. Entries link to
   one-or-many taxonomy nodes (empty list = project-wide); the deterministic
@@ -85,17 +95,32 @@ generation, and exports.
   `?suggest=1` open state, and a **max output tokens** slider so reasoning
   models don't run out of budget mid-answer.
 - **Per-job live token preview** — the run detail page picks one running
-  `GenerationJob` and streams its tokens (reasoning + content) into a card via
-  Postgres `LISTEN synthgen_job`. Reasoning content is persisted on the
-  `Message` row for later inspection.
+  `GenerationJob` and streams its activity into a card via Postgres
+  `LISTEN synthgen_job`. The view is **block-based**, not raw text: the worker
+  emits typed events (`turn.user`, `turn.assistant`, `turn.followup`,
+  `tool.call.frag` / `tool.call.complete`, `tool.mock.start`, `tool.result`,
+  `delta`) and the client renders each as a coloured card — User turns,
+  Assistant headers, Tool calls (with streamed args), Mock-backend status,
+  Tool results, plus reasoning/content text segments. Reasoning is persisted
+  on every assistant `Message` row (first turn + multi-turn + tool-aware) for
+  later inspection. **Stop** cancels the current job (closes the SSE and marks
+  the row cancelled); **Restart** re-queues from any state, including already
+  `succeeded` — the run flips back to `running` so the live cards re-mount.
 - **Conversation trace tab** — every conversation has a step-by-step
   `JobEvent` timeline: job picked up → context loaded → prompt rendered →
   provider request → reasoning/content stream → validators → persistence. The
   drawer has Messages / Trace tabs (URL-synced), JSON / Trace download buttons,
-  and renders the full provenance (run config, template body, persona snapshot,
-  language profile, provider, KB entries used). Conversations are also
-  filterable by topic / language / status, sortable by turns / tokens / time,
-  and paginated.
+  an **Open run page · &lt;name&gt;** back-link above the tabs, a **Settings
+  panel** on the Messages tab summarising the frozen `settingsSnapshot` (mode,
+  model, provider, template, language profile, persona, taxonomy, formality,
+  sampling, tools available, tools actually invoked), and renders the full
+  provenance (run config, template body, persona snapshot, language profile,
+  provider, KB entries used). Per-message rows are collapsible `<details>`
+  with role-coloured borders; assistant rows with `tool_calls` show the
+  function/arguments next to the (possibly empty) content. Conversations are
+  filterable by topic / language / status, sortable, paginated, and support
+  **bulk select + delete** (frozen-dataset rows are skipped with per-id
+  reasons surfaced inline).
 - **Dashboard with charts** — daily activity, acceptance donut, language mix,
   top projects, validation-fail breakdown — pure-SVG, no chart-lib dependency.
 - **Dataset versioning** — frozen `DatasetVersion` snapshots are immutable, with
@@ -187,11 +212,16 @@ worker/                Python service
     style_guide.py     Auto-injected formality system-prompt fragment
     templates.py       Mustache renderer (supports {{knowledge}}, {{taxonomy.related}})
     providers.py       httpx OpenAI-compat client — non-streaming + streaming
-                       with stream_options.include_usage; per-call reasoning_effort
-                       + chat_template_kwargs
+                       (incl. tool_calls deltas assembled per-`index`), with
+                       stream_options.include_usage, tool_choice="auto" when
+                       tools are present, per-call reasoning_effort +
+                       chat_template_kwargs
     validators/        schema, lang_id (lingua-py), register, ngram
-    generation.py      Single-turn pipeline w/ streaming, JobEvent timeline,
-                       knowledge-base injection, related-topics
+    generation.py      Single-turn + multi-turn pipeline w/ streaming,
+                       JobEvent timeline, knowledge-base injection, related
+                       topics, structured pg_notify events (turn.user,
+                       tool.call.*, tool.mock.start, tool.result) for the live
+                       preview, reasoning persistence on every assistant turn
     exporter.py        OpenAI JSONL writer
     bootstrap.py       Seed default LanguageProfile presets per project
     ai_assist.py       Per-kind structured-output prompts + tolerant JSON
@@ -327,18 +357,26 @@ and can re-seed via **Settings → Reseed default language profiles**.
    nodes onto the canvas, wire them up. Action nodes can chain multiple tool calls per
    turn (sequential / parallel). Or click ✨ Generate from prompt to produce the whole
    graph from a description, review the YAML, and apply.
-7. **Add a PromptTemplate** under *Templates*. Uses `{{persona.name}}`, `{{taxonomy.path}}`,
-   `{{language.primary}}`, `{{difficulty}}`. ✨ Fill with AI works here too.
-8. **Start a Run** under *Runs → New run*. Pick taxonomy nodes × personas ×
-   difficulties × rows-per-cell (select-all checkboxes on each axis). Slide
-   **Temperature** + **Max output tokens** to taste, optionally tick **Related
-   topics per conversation** to weave in N sibling node names via
-   `{{taxonomy.related}}`, and use the **Formality lock** to force `formal` even
-   if personas/profiles are mixed. Tool catalog gets a multiselect so the run
-   ships only the tools you want.
+7. **Add a PromptTemplate** under *Templates*. Uses `{{persona.name}}`,
+   `{{taxonomy.path}}`, `{{language.primary}}`. ✨ Fill with AI works here too,
+   and existing templates can be edited via the pencil icon (body changes bump
+   the template version so historical runs keep their frozen snapshot).
+8. **Start a Run** under *Runs → New run*. The wizard is **tab-driven**:
+   *Single-turn (manual grid)* drives `taxonomyNodes × personas ×
+   conversations-per-combination` with Turns / Related-topics knobs and a Tools
+   multiselect; *Flow-driven* hides those and uses `flows × personas ×
+   conversations-per-combination` instead (the chosen flow owns its own
+   topics, tool wiring, and turn count graph-style). Either way: slide
+   **Temperature** + **Max output tokens**, use the **Formality lock** to
+   force a register override, and submit.
 9. **Watch progress** — the run detail page subscribes to SSE; counts and cost
-   update live, and a **Live job preview** card streams reasoning + content
-   tokens of one currently-running job.
+   update live; a **Live job preview** card streams the running job as
+   structured blocks (User turns, Tool calls with live args, Mock-backend
+   reasoning, Tool results, Assistant reasoning + content). The same page has
+   a paginated, filterable, sortable **Jobs table** below — each row links to
+   its generated conversation (eye icon) and exposes an inline restart icon
+   (works for `succeeded` jobs too — the old conversation is orphaned, not
+   deleted, and the run flips back to `running` so live cards re-mount).
 10. **Inspect Conversations** — table at `/projects/.../conversations`. Filter
     by topic / language / status, sort by turns / tokens / time, paginate 25 at
     a time (state in URL). Click a row to open a drawer with Messages / Trace
@@ -587,25 +625,49 @@ Both expect a smoke project named `smoke-proj-001` (created by the first run).
 ## Roadmap
 
 **Done**
-- Single-turn generation with formality lock + cheap validators
-- Streaming generation worker (reasoning + content) with token-by-token
-  preview in the run page + reasoning persistence on the assistant message
+- Single-turn + multi-turn generation with formality lock + cheap validators
+- Streaming generation worker (reasoning + content) with per-job structured
+  live preview (User / Assistant / Tool-call / Mock-backend / Tool-result
+  blocks instead of inline text labels), Stop + Restart per-job, reasoning
+  persistence on every assistant `Message` row (turn 1, multi-turn, and
+  tool-aware paths)
+- **Streaming function-calling** — provider stream client assembles
+  `delta.tool_calls` per-`index`, worker emits live `tool_call_delta` events,
+  tool-catalog auto-injected into system prompt with `tool_choice: "auto"` so
+  vLLM-class servers actually invoke tools; mock-backend tool-response LLM
+  call streams its own reasoning + JSON live
+- Multi-turn user-simulator forces `enable_thinking: false` + reuses the run's
+  `max_tokens` so reasoning models don't burn the whole budget on `<think>`
+  and silently truncate the conversation
 - `JobEvent` step-by-step trace timeline + downloadable provenance bundle
 - Tool catalog (CRUD with AI-assist + synthetic argument examples + JSON
   Schema self-verify)
 - Flow editor (React Flow + AI-generate w/ streaming + YAML round-trip)
 - Multi-tool Action nodes (sequential / parallel)
+- Run wizard with tabbed single-turn / flow-driven modes (difficulty axis
+  retired — templates are the sole driver of question difficulty)
+- Run detail page: paginated/sortable Jobs table with per-row eye/restart
+  icons, single-job cancel endpoint, run-level Settings card resolving every
+  configSnapshot id to a human name
 - Project / persona / template / language-profile / taxonomy CRUD with
-  streaming AI-assist (Use example + Randomize)
+  streaming AI-assist (Use example + Randomize) — templates now editable
+  in-place with version-bump-on-body-change
 - Knowledge base — text / doc upload (PDF / DOCX / HTML / TXT) / URL crawler
   with depth-N BFS + cached `KnowledgeCrawl` results
 - Provider reasoning controls (reasoning_effort + chat_template_kwargs)
-- Conversation drawer with Messages / Trace tabs, filters / sort / pagination,
-  JSON + Trace download
+- Conversation drawer with Messages / Trace tabs, per-message collapsible
+  rows, **Open run page** back-link above the tabs, **Settings panel**
+  (frozen snapshot or derived-from-run fallback w/ resolved tool names),
+  filters / sort / pagination, bulk-select delete (frozen-dataset rows
+  surfaced as inline reasons), JSON + Trace download
+- Runs list paginated 25/page with Created / Updated sortable columns
 - Dashboard charts
 - Invite-as-register flow
 - OpenAI fine-tune JSONL export
 - Function-Call benchmark format exporter
+- No-toast policy throughout — every transient notification is inline UI
+  (status banner, button flash, destructive panel) so nothing disappears
+  before the user reads it
 
 **Next slice**
 - **Worker walks Flow graphs** — pick a path through the published flow, generate

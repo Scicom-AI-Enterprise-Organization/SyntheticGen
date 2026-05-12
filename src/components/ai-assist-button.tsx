@@ -330,7 +330,7 @@ export function AiAssistButton({
       </Button>
 
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="flex max-h-[90vh] flex-col overflow-hidden sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Sparkles className="h-4 w-4" />
@@ -341,7 +341,7 @@ export function AiAssistButton({
             </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3">
+          <div className="-mx-6 flex-1 space-y-3 overflow-y-auto px-6 py-1">
             <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="ai-prompt">Prompt</Label>

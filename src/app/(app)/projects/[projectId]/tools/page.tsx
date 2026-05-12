@@ -1,5 +1,8 @@
+import Link from "next/link";
+import { Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission, projectRoleAllows } from "@/lib/project-rbac";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -8,7 +11,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { ToolForm } from "./tool-form";
 import { ToolsTable } from "./tools-table";
 
 export default async function ToolsPage({
@@ -32,56 +34,31 @@ export default async function ToolsPage({
     });
   }
 
-  const [providers, taxonomyNodes] = await Promise.all([
-    prisma.providerCredential.findMany({
-      where: { projectId },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, defaultModel: true },
-    }),
-    prisma.taxonomyNode.findMany({
-      where: { taxonomy: { projectId } },
-      orderBy: { name: "asc" },
-      select: { name: true },
-    }),
-  ]);
-
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Tools</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Function/tool definitions in the OpenAI tools schema. Slice 1 captures the catalog;
-          generation runs will start passing tools to the model in a later slice. Tag tools with
-          locale or domain presets like{" "}
-          <Badge variant="outline" className="text-[10px]">banking</Badge>{" "}
-          <Badge variant="outline" className="text-[10px]">telco</Badge>{" "}
-          <Badge variant="outline" className="text-[10px]">government</Badge>{" "}
-          (or country-scoped tags like <code>mykad</code>, <code>siret</code>, <code>iban</code>)
-          to wire them into the future mock-executor.
-        </p>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Tools</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Function/tool definitions in the OpenAI tools schema. Slice 1 captures the catalog;
+            generation runs will start passing tools to the model in a later slice. Tag tools with
+            locale or domain presets like{" "}
+            <Badge variant="outline" className="text-[10px]">banking</Badge>{" "}
+            <Badge variant="outline" className="text-[10px]">telco</Badge>{" "}
+            <Badge variant="outline" className="text-[10px]">government</Badge>{" "}
+            (or country-scoped tags like <code>mykad</code>, <code>siret</code>, <code>iban</code>)
+            to wire them into the future mock-executor.
+          </p>
+        </div>
+        {canWrite && catalog && (
+          <Button asChild>
+            <Link href={`/projects/${projectId}/tools/new`}>
+              <Plus className="mr-2 h-4 w-4" />
+              New tool
+            </Link>
+          </Button>
+        )}
       </div>
-
-      {canWrite && catalog && (
-        <Card>
-          <CardHeader>
-            <CardTitle>New tool</CardTitle>
-            <CardDescription>
-              Catalog: <code>{catalog.name}</code>. Use AI-assist to draft a tool from a sentence
-              — e.g. &ldquo;look up a bank account balance by account number&rdquo; or
-              &ldquo;check the status of a delivery by tracking number.&rdquo;
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <ToolForm
-              projectId={projectId}
-              catalogId={catalog.id}
-              providers={providers}
-              taxonomyNodes={taxonomyNodes.map((t) => t.name)}
-              existingTools={catalog.tools.map((t) => `${t.name}${t.description ? ` — ${t.description.slice(0, 80)}` : ""}`)}
-            />
-          </CardContent>
-        </Card>
-      )}
 
       <Card>
         <CardHeader>

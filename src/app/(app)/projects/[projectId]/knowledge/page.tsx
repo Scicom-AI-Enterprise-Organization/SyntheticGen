@@ -1,5 +1,8 @@
+import Link from "next/link";
+import { Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission, projectRoleAllows } from "@/lib/project-rbac";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -7,7 +10,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { KnowledgeForm } from "./knowledge-form";
 import { KnowledgeTable } from "./knowledge-table";
 import { CrawlCard } from "./crawl-card";
 
@@ -72,36 +74,25 @@ export default async function KnowledgePage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Knowledge base</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Domain facts the assistant should ground its answers in. Each entry can be
-          linked to one or more taxonomy nodes; the worker auto-injects matching
-          entries into the system prompt before every generation and records which
-          entries were used in the conversation trace.
-        </p>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Knowledge base</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Domain facts the assistant should ground its answers in. Each entry can be
+            linked to one or more taxonomy nodes; the worker auto-injects matching
+            entries into the system prompt before every generation and records which
+            entries were used in the conversation trace.
+          </p>
+        </div>
+        {canWrite && (
+          <Button asChild>
+            <Link href={`/projects/${projectId}/knowledge/new`}>
+              <Plus className="mr-2 h-4 w-4" />
+              New entry
+            </Link>
+          </Button>
+        )}
       </div>
-
-      {canWrite && (
-        <Card>
-          <CardHeader>
-            <CardTitle>New entry</CardTitle>
-            <CardDescription>
-              Leave taxonomy links empty for a project-wide entry. Otherwise, the
-              entry is only injected when a run targets one of the linked nodes.
-              Fill the content from a doc upload OR from a cached crawl below.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <KnowledgeForm
-              projectId={projectId}
-              taxonomyNodes={taxonomyNodes}
-              providers={providers}
-              crawls={slimCrawls}
-            />
-          </CardContent>
-        </Card>
-      )}
 
       <CrawlCard
         projectId={projectId}

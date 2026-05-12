@@ -1,5 +1,8 @@
+import Link from "next/link";
+import { Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission, projectRoleAllows } from "@/lib/project-rbac";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -7,7 +10,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { TemplateForm } from "./template-form";
 import { TemplatesTable } from "./templates-table";
 
 export default async function TemplatesPage({
@@ -43,33 +45,24 @@ export default async function TemplatesPage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">Prompt templates</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Mustache-style templates with variables: <code>{"{{persona.name}}"}</code>,{" "}
-          <code>{"{{taxonomy.path}}"}</code>, <code>{"{{language.primary}}"}</code>.
-          The runtime style guide for formality is auto-prepended.
-        </p>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Prompt templates</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Mustache-style templates with variables: <code>{"{{persona.name}}"}</code>,{" "}
+            <code>{"{{taxonomy.path}}"}</code>, <code>{"{{language.primary}}"}</code>.
+            The runtime style guide for formality is auto-prepended.
+          </p>
+        </div>
+        {canWrite && (
+          <Button asChild>
+            <Link href={`/projects/${projectId}/templates/new`}>
+              <Plus className="mr-2 h-4 w-4" />
+              New template
+            </Link>
+          </Button>
+        )}
       </div>
-
-      {canWrite && (
-        <Card>
-          <CardHeader>
-            <CardTitle>New template</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <TemplateForm
-              projectId={projectId}
-              providers={providers}
-              taxonomyNodes={taxonomyNodes.map((t) => t.name)}
-              existingTemplates={templates.map((t) => `${t.name} (${t.kind})`)}
-              languageProfiles={languageProfiles.map(
-                (p) => `${p.name} (primary=${p.primary}, register=${p.register})`,
-              )}
-            />
-          </CardContent>
-        </Card>
-      )}
 
       <Card>
         <CardHeader>

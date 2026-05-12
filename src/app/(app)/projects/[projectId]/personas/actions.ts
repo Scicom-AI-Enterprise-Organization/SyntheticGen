@@ -59,6 +59,52 @@ export async function createPersona(input: z.infer<typeof personaSchema>) {
   return { ok: true, id: created.id };
 }
 
+const updateSchema = personaSchema.extend({ id: z.string() });
+
+export async function updatePersona(input: z.infer<typeof updateSchema>) {
+  const parsed = updateSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
+  const { user } = await requireProjectPermission(parsed.data.projectId, "personas.write");
+
+  // Defence in depth — confirm the persona belongs to this project.
+  const existing = await prisma.persona.findFirst({
+    where: { id: parsed.data.id, projectId: parsed.data.projectId },
+    select: { id: true },
+  });
+  if (!existing) return { error: "Persona not found in this project" };
+
+  const data = parsed.data;
+  const updated = await prisma.persona.update({
+    where: { id: existing.id },
+    data: {
+      name: data.name,
+      description: data.description ?? null,
+      ethnicity: data.ethnicity ?? null,
+      region: data.region ?? null,
+      urbanity: data.urbanity ?? null,
+      ageRange: data.ageRange ?? null,
+      gender: data.gender ?? null,
+      occupation: data.occupation ?? null,
+      formality: data.formality ?? null,
+      religionAware: data.religionAware,
+      dialectTags: data.dialectTags,
+      languageProfileId: data.languageProfileId ?? null,
+    },
+  });
+
+  await logAudit({
+    projectId: data.projectId,
+    actorUserId: user.id,
+    action: "persona.update",
+    targetKind: "Persona",
+    targetId: updated.id,
+    metadata: { name: updated.name },
+  });
+
+  revalidatePath(`/projects/${data.projectId}/personas`);
+  return { ok: true, id: updated.id };
+}
+
 export async function deletePersona(projectId: string, id: string) {
   const { user } = await requireProjectPermission(projectId, "personas.write");
   await prisma.persona.delete({ where: { id } });
