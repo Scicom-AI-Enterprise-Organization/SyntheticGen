@@ -64,29 +64,15 @@ jobs:
           git push origin "${{ steps.bump.outputs.tag }}"
 
   build:
-    name: Build (${{ matrix.platform }})
+    name: Build & Push
     needs: version
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      matrix:
-        include:
-          - platform: linux/amd64
-            runner: ubuntu-24.04-x64-big
-          - platform: linux/arm64
-            runner: ubuntu-24.04-arm64-big
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: true
 
-      - name: Ensure Docker access
-        run: |
-          if ! command -v docker &> /dev/null; then
-            curl -fsSL https://get.docker.com | sh
-          fi
-          sudo systemctl start docker || true
-          sudo usermod -aG docker "$USER"
-          sudo chmod 666 /var/run/docker.sock
+      - uses: docker/setup-qemu-action@v3
+
+      - uses: docker/setup-buildx-action@v3
 
       - uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -95,56 +81,23 @@ jobs:
 
       - id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
-
-      - uses: docker/setup-buildx-action@v3
-
-      - id: meta
-        run: |
-          ARCH=$(echo "${{ matrix.platform }}" | tr '/' '-')
-          echo "tag=${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.version.outputs.version }}-${ARCH}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/build-push-action@v6
         with:
           context: .
           file: ./Dockerfile
-          platforms: ${{ matrix.platform }}
+          platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.meta.outputs.tag }}
-          cache-from: type=gha,scope=build-${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=build-${{ matrix.platform }}
-
-  merge:
-    name: Merge manifest
-    needs: [version, build]
-    runs-on: ubuntu-latest
-    steps:
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ env.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - id: ecr-login
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - uses: docker/setup-buildx-action@v3
-
-      - name: Create multi-arch manifest
-        run: |
-          REGISTRY="${{ steps.ecr-login.outputs.registry }}"
-          IMAGE="${REGISTRY}/${{ env.ECR_REPOSITORY }}"
-          VERSION="${{ needs.version.outputs.version }}"
-          MAJOR_MINOR="${{ needs.version.outputs.major_minor }}"
-
-          docker buildx imagetools create \
-            -t "${IMAGE}:${VERSION}" \
-            -t "${IMAGE}:${MAJOR_MINOR}" \
-            -t "${IMAGE}:latest" \
-            "${IMAGE}:${VERSION}-linux-amd64" \
-            "${IMAGE}:${VERSION}-linux-arm64"
+          tags: |
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.version.outputs.version }}
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.version.outputs.major_minor }}
+            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
   release:
     name: Create Release
-    needs: [version, merge]
+    needs: [version, build]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
