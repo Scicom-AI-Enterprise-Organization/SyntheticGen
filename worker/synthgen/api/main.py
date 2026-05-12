@@ -108,6 +108,7 @@ class AiAssistRequest(BaseModel):
     model: str | None = None
     extraContext: str | None = None
     maxTokens: int | None = None
+    temperature: float | None = None
 
 
 @app.post("/internal/benchmark-runs/{run_id}/start")
@@ -131,6 +132,7 @@ async def ai_assist_endpoint(req: AiAssistRequest, _=Depends(require_internal)):
             model=req.model,
             extra_context=req.extraContext,
             max_tokens=req.maxTokens,
+            temperature=req.temperature,
         )
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e)) from e
@@ -191,6 +193,7 @@ async def ai_assist_stream_endpoint(req: AiAssistRequest, _=Depends(require_inte
                 model=req.model,
                 extra_context=req.extraContext,
                 max_tokens=req.maxTokens,
+                temperature=req.temperature,
             ):
                 yield _json.dumps(event) + "\n"
         except Exception as e:  # noqa: BLE001

@@ -36,6 +36,7 @@ const bodySchema = z.object({
   // than the flow-graph's tool catalog).
   extraContext: z.string().max(100_000).optional().nullable(),
   maxTokens: z.number().int().min(256).max(64000).optional().nullable(),
+  temperature: z.number().min(0).max(2).optional().nullable(),
 });
 
 export async function POST(
@@ -83,6 +84,7 @@ export async function POST(
         model: parsed.data.model ?? null,
         extraContext: parsed.data.extraContext ?? null,
         maxTokens: parsed.data.maxTokens ?? null,
+        temperature: parsed.data.temperature ?? null,
       }),
       cache: "no-store",
       // Propagate client cancellation upstream so the Python service stops generating.

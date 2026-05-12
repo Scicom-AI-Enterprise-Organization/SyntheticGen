@@ -1,5 +1,3 @@
-import Link from "next/link";
-import { ArrowRight } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission, projectRoleAllows } from "@/lib/project-rbac";
 import {
@@ -10,6 +8,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { CreateDatasetForm } from "./create-dataset-form";
+import { DatasetsList } from "./datasets-list";
 
 export default async function DatasetsPage({
   params,
@@ -55,31 +54,19 @@ export default async function DatasetsPage({
           <CardTitle>Datasets ({datasets.length})</CardTitle>
         </CardHeader>
         <CardContent>
-          {datasets.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No datasets yet.</p>
-          ) : (
-            <ul className="divide-y divide-border">
-              {datasets.map((d) => (
-                <li key={d.id}>
-                  <Link
-                    href={`/projects/${projectId}/datasets/${d.id}`}
-                    className="flex items-center justify-between gap-4 rounded-md px-2 py-3 hover:bg-muted/40"
-                  >
-                    <div className="min-w-0">
-                      <div className="font-medium">{d.name}</div>
-                      <div className="text-xs text-muted-foreground">
-                        {d.description || "—"} ·{" "}
-                        {d._count.versions === 0
-                          ? "no versions"
-                          : `current: v${d.currentVersion?.version ?? "—"}`}
-                      </div>
-                    </div>
-                    <ArrowRight className="h-4 w-4 text-muted-foreground" />
-                  </Link>
-                </li>
-              ))}
-            </ul>
-          )}
+          <DatasetsList
+            projectId={projectId}
+            canWrite={canFreeze}
+            datasets={datasets.map((d) => ({
+              id: d.id,
+              name: d.name,
+              description: d.description,
+              versionCount: d._count.versions,
+              currentVersionLabel: d.currentVersion?.version
+                ? `v${d.currentVersion.version}`
+                : null,
+            }))}
+          />
         </CardContent>
       </Card>
     </div>

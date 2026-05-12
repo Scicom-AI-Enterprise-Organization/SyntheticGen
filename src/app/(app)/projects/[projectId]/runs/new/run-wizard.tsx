@@ -14,6 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { createAndStartRun } from "../actions";
 
 interface Node {
@@ -51,6 +52,11 @@ interface Tool {
   description: string | null;
   localePresets: string[];
 }
+interface Flow {
+  id: string;
+  name: string;
+  version: number;
+}
 
 const DIFFICULTIES = ["easy", "medium", "hard"];
 
@@ -62,6 +68,7 @@ export function RunWizard({
   providers,
   templates,
   tools,
+  flows,
 }: {
   projectId: string;
   taxonomy: Node[];
@@ -70,6 +77,7 @@ export function RunWizard({
   providers: Provider[];
   templates: Template[];
   tools: Tool[];
+  flows: Flow[];
 }) {
   const [name, setName] = useState("Run " + new Date().toISOString().slice(0, 16).replace("T", " "));
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
@@ -90,10 +98,19 @@ export function RunWizard({
   const [maxTokens, setMaxTokens] = useState(8192);
   const [relatedTopics, setRelatedTopics] = useState(0);
   const [toolIds, setToolIds] = useState<string[]>([]);
+  const [flowIds, setFlowIds] = useState<string[]>([]);
+  // Explicit user choice: single-turn manual grid vs flow-driven multi-turn.
+  // Flow-driven hides turns/relatedTopics/taxonomy/tools; the flow owns all of that.
+  const [mode, setMode] = useState<"single" | "flow">("single");
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
-  const totalCells = nodeIds.length * personaIds.length * difficulties.length * rowsPerCell;
+  const flowMode = mode === "flow";
+
+  // In flow mode the "first axis" of the grid is flows instead of taxonomy
+  // nodes; everything else still combines.
+  const primaryAxis = flowMode ? flowIds.length : nodeIds.length;
+  const totalCells = primaryAxis * personaIds.length * difficulties.length * rowsPerCell;
 
   const lp = languageProfiles.find((p) => p.id === languageProfileId) ?? null;
   const formalityWarn = useMemo(() => {
@@ -116,7 +133,11 @@ export function RunWizard({
     e.preventDefault();
     setSubmitError(null);
     if (totalCells === 0) {
-      setSubmitError("Pick at least one taxonomy node, persona, and difficulty.");
+      setSubmitError(
+        flowMode
+          ? "Pick at least one flow, persona, and difficulty."
+          : "Pick at least one taxonomy node, persona, and difficulty.",
+      );
       return;
     }
     start(async () => {
@@ -128,13 +149,14 @@ export function RunWizard({
         languageProfileId,
         providerCredentialId: providerId,
         model,
-        taxonomyNodeIds: nodeIds,
+        taxonomyNodeIds: flowMode ? [] : nodeIds,
         personaIds,
         difficulties,
         rowsPerCell,
-        turns,
-        relatedTopics,
-        toolIds,
+        turns: flowMode ? 1 : turns,
+        relatedTopics: flowMode ? 0 : relatedTopics,
+        toolIds: flowMode ? [] : toolIds,
+        flowIds,
         formalityPolicy,
         temperature,
         topP: 1.0,
@@ -288,38 +310,6 @@ export function RunWizard({
           </p>
         </div>
 
-        <div className="space-y-2">
-          <Label>Turns per conversation</Label>
-          <Input
-            type="number"
-            min={1}
-            max={20}
-            value={turns}
-            onChange={(e) => setTurns(Number(e.target.value))}
-            required
-          />
-          <p className="text-xs text-muted-foreground">
-            Only meaningful for the single-turn pipeline. Pick a <strong>Flow</strong>{" "}
-            once that integration lands to drive richer multi-turn conversations
-            graph-style. Slice 1 honours <code>1</code>.
-          </p>
-        </div>
-
-        <div className="space-y-2">
-          <Label>Related topics per conversation</Label>
-          <Input
-            type="number"
-            min={0}
-            max={6}
-            value={relatedTopics}
-            onChange={(e) => setRelatedTopics(Number(e.target.value))}
-          />
-          <p className="text-xs text-muted-foreground">
-            Inject N additional taxonomy node names per conversation as{" "}
-            <code>{"{{taxonomy.related}}"}</code> in the template. Conversation is
-            still tagged with the primary node only. <code>0</code> = strictly single-topic.
-          </p>
-        </div>
       </div>
 
       <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-3">
@@ -352,40 +342,6 @@ export function RunWizard({
             <span>{formalityWarn}</span>
           </div>
         )}
-      </div>
-
-      <div>
-        <div className="mb-2 flex items-center justify-between">
-          <Label>Taxonomy nodes ({nodeIds.length} selected)</Label>
-          {taxonomy.length > 0 && (
-            <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-              <Checkbox
-                checked={
-                  nodeIds.length === taxonomy.length
-                    ? true
-                    : nodeIds.length === 0
-                      ? false
-                      : "indeterminate"
-                }
-                onCheckedChange={(v) =>
-                  setNodeIds(v === true ? taxonomy.map((n) => n.id) : [])
-                }
-              />
-              {nodeIds.length === taxonomy.length ? "Unselect all" : "Select all"}
-            </label>
-          )}
-        </div>
-        <div className="grid grid-cols-2 gap-2 rounded-md border border-border p-3 sm:grid-cols-3">
-          {taxonomy.map((n) => (
-            <label key={n.id} className="flex items-start gap-2 text-xs">
-              <Checkbox
-                checked={nodeIds.includes(n.id)}
-                onCheckedChange={() => setNodeIds((arr) => toggleArr(arr, n.id))}
-              />
-              <span>{n.name}</span>
-            </label>
-          ))}
-        </div>
       </div>
 
       <div>
@@ -431,59 +387,6 @@ export function RunWizard({
 
       <div>
         <div className="mb-2 flex items-center justify-between">
-          <Label>Tools ({toolIds.length} selected)</Label>
-          {tools.length > 0 && (
-            <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-              <Checkbox
-                checked={
-                  toolIds.length === tools.length
-                    ? true
-                    : toolIds.length === 0
-                      ? false
-                      : "indeterminate"
-                }
-                onCheckedChange={(v) =>
-                  setToolIds(v === true ? tools.map((t) => t.id) : [])
-                }
-              />
-              {toolIds.length === tools.length ? "Unselect all" : "Select all"}
-            </label>
-          )}
-        </div>
-        {tools.length === 0 ? (
-          <p className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-            No tools in this project's catalog yet. Add some under{" "}
-            <strong>Tools</strong> to expose function-calling.
-          </p>
-        ) : (
-          <div className="grid grid-cols-1 gap-2 rounded-md border border-border p-3 sm:grid-cols-2">
-            {tools.map((t) => (
-              <label key={t.id} className="flex items-start gap-2 text-xs">
-                <Checkbox
-                  checked={toolIds.includes(t.id)}
-                  onCheckedChange={() => setToolIds((arr) => toggleArr(arr, t.id))}
-                />
-                <span className="min-w-0">
-                  <span className="font-mono">{t.name}</span>
-                  {t.localePresets.length > 0 && (
-                    <span className="ml-1 text-muted-foreground">
-                      [{t.localePresets.join(", ")}]
-                    </span>
-                  )}
-                  {t.description && (
-                    <span className="block truncate text-muted-foreground">
-                      {t.description}
-                    </span>
-                  )}
-                </span>
-              </label>
-            ))}
-          </div>
-        )}
-      </div>
-
-      <div>
-        <div className="mb-2 flex items-center justify-between">
           <Label>Difficulties ({difficulties.length} selected)</Label>
           <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
             <Checkbox
@@ -514,11 +417,212 @@ export function RunWizard({
         </div>
       </div>
 
+      <Tabs value={mode} onValueChange={(v) => setMode(v as "single" | "flow")}>
+        <TabsList className="w-full sm:w-auto">
+          <TabsTrigger value="single">Single-turn (manual grid)</TabsTrigger>
+          <TabsTrigger value="flow" disabled={flows.length === 0}>
+            Flow-driven {flows.length === 0 && "(no published flows)"}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="single" className="space-y-6 pt-2">
+          <p className="text-xs text-muted-foreground">
+            Conversations are generated from <strong>Taxonomy × Persona × Difficulty</strong>{" "}
+            cells, each with optional tool-use. Switch to <strong>Flow-driven</strong>{" "}
+            for multi-turn graph-style runs.
+          </p>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label>Turns per conversation</Label>
+              <Input
+                type="number"
+                min={1}
+                max={20}
+                value={turns}
+                onChange={(e) => setTurns(Number(e.target.value))}
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                Only meaningful for the single-turn pipeline. Slice 1 honours{" "}
+                <code>1</code>.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Related topics per conversation</Label>
+              <Input
+                type="number"
+                min={0}
+                max={6}
+                value={relatedTopics}
+                onChange={(e) => setRelatedTopics(Number(e.target.value))}
+              />
+              <p className="text-xs text-muted-foreground">
+                Inject N additional taxonomy node names per conversation as{" "}
+                <code>{"{{taxonomy.related}}"}</code> in the template.
+                Conversation is still tagged with the primary node only.{" "}
+                <code>0</code> = strictly single-topic.
+              </p>
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <Label>Taxonomy nodes ({nodeIds.length} selected)</Label>
+              {taxonomy.length > 0 && (
+                <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox
+                    checked={
+                      nodeIds.length === taxonomy.length
+                        ? true
+                        : nodeIds.length === 0
+                          ? false
+                          : "indeterminate"
+                    }
+                    onCheckedChange={(v) =>
+                      setNodeIds(v === true ? taxonomy.map((n) => n.id) : [])
+                    }
+                  />
+                  {nodeIds.length === taxonomy.length ? "Unselect all" : "Select all"}
+                </label>
+              )}
+            </div>
+            <div className="grid grid-cols-2 gap-2 rounded-md border border-border p-3 sm:grid-cols-3">
+              {taxonomy.map((n) => (
+                <label key={n.id} className="flex items-start gap-2 text-xs">
+                  <Checkbox
+                    checked={nodeIds.includes(n.id)}
+                    onCheckedChange={() => setNodeIds((arr) => toggleArr(arr, n.id))}
+                  />
+                  <span>{n.name}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <Label>Tools ({toolIds.length} selected)</Label>
+              {tools.length > 0 && (
+                <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox
+                    checked={
+                      toolIds.length === tools.length
+                        ? true
+                        : toolIds.length === 0
+                          ? false
+                          : "indeterminate"
+                    }
+                    onCheckedChange={(v) =>
+                      setToolIds(v === true ? tools.map((t) => t.id) : [])
+                    }
+                  />
+                  {toolIds.length === tools.length ? "Unselect all" : "Select all"}
+                </label>
+              )}
+            </div>
+            {tools.length === 0 ? (
+              <p className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+                No tools in this project's catalog yet. Add some under{" "}
+                <strong>Tools</strong> to expose function-calling.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 gap-2 rounded-md border border-border p-3 sm:grid-cols-2">
+                {tools.map((t) => (
+                  <label key={t.id} className="flex items-start gap-2 text-xs">
+                    <Checkbox
+                      checked={toolIds.includes(t.id)}
+                      onCheckedChange={() => setToolIds((arr) => toggleArr(arr, t.id))}
+                    />
+                    <span className="min-w-0">
+                      <span className="font-mono">{t.name}</span>
+                      {t.localePresets.length > 0 && (
+                        <span className="ml-1 text-muted-foreground">
+                          [{t.localePresets.join(", ")}]
+                        </span>
+                      )}
+                      {t.description && (
+                        <span className="block truncate text-muted-foreground">
+                          {t.description}
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+          </div>
+        </TabsContent>
+
+        <TabsContent value="flow" className="space-y-3 pt-2">
+          <p className="text-xs text-muted-foreground">
+            Each conversation is driven by the chosen flow's graph — turns,
+            tool calls, and topic branching all come from the flow itself, so
+            taxonomy/tools/turns/related-topics aren't needed here.
+          </p>
+
+          {flows.length === 0 ? (
+            <p className="rounded-md border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+              No published flows yet. Publish a flow under{" "}
+              <strong>Flows</strong> first.
+            </p>
+          ) : (
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <Label>Flows ({flowIds.length} selected)</Label>
+                <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+                  <Checkbox
+                    checked={
+                      flowIds.length === flows.length
+                        ? true
+                        : flowIds.length === 0
+                          ? false
+                          : "indeterminate"
+                    }
+                    onCheckedChange={(v) =>
+                      setFlowIds(v === true ? flows.map((f) => f.id) : [])
+                    }
+                  />
+                  {flowIds.length === flows.length ? "Unselect all" : "Select all"}
+                </label>
+              </div>
+              <div className="grid grid-cols-1 gap-2 rounded-md border border-border p-3 sm:grid-cols-2">
+                {flows.map((f) => (
+                  <label key={f.id} className="flex items-start gap-2 text-xs">
+                    <Checkbox
+                      checked={flowIds.includes(f.id)}
+                      onCheckedChange={() => setFlowIds((arr) => toggleArr(arr, f.id))}
+                    />
+                    <span className="min-w-0">
+                      <span className="font-mono">{f.name}</span>
+                      <Badge variant="outline" className="ml-1 text-[9px]">
+                        v{f.version}
+                      </Badge>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          )}
+        </TabsContent>
+      </Tabs>
+
       <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
         <span className="font-semibold">Total cells:</span>{" "}
         <span className="font-mono">
-          {nodeIds.length} × {personaIds.length} × {difficulties.length} × {rowsPerCell} ={" "}
+          {flowMode ? (
+            <>
+              <span title="flows">{flowIds.length}</span>
+            </>
+          ) : (
+            <span title="taxonomy nodes">{nodeIds.length}</span>
+          )}{" "}
+          × {personaIds.length} × {difficulties.length} × {rowsPerCell} ={" "}
           <span className="font-bold">{totalCells}</span>
+        </span>
+        <span className="ml-2 text-xs text-muted-foreground">
+          ({flowMode ? "flows" : "nodes"} × personas × difficulties × rows)
         </span>
         {totalCells > 1000 && (
           <span className="ml-3 text-amber-600">⚠ exceeds 1000-cell slice 1 cap</span>

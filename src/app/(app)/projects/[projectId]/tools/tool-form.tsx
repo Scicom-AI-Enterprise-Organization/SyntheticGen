@@ -46,6 +46,7 @@ export function ToolForm({
   const [presets, setPresets] = useState("");
   const [examples, setExamples] = useState<Record<string, unknown>[]>([]);
   const [exampleWarnings, setExampleWarnings] = useState<string[]>([]);
+  const [schemaWarnings, setSchemaWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -99,6 +100,15 @@ export function ToolForm({
     } else {
       setExampleWarnings([]);
     }
+    if (Array.isArray(data["_schemaWarnings"])) {
+      setSchemaWarnings(
+        (data["_schemaWarnings"] as unknown[]).filter(
+          (x): x is string => typeof x === "string",
+        ),
+      );
+    } else {
+      setSchemaWarnings([]);
+    }
   }
 
   function onSubmit(e: React.FormEvent) {
@@ -128,6 +138,7 @@ export function ToolForm({
         setPresets("");
         setExamples([]);
         setExampleWarnings([]);
+        setSchemaWarnings([]);
       }
     });
   }
@@ -232,8 +243,17 @@ export function ToolForm({
               required
             />
             <p className="text-[11px] text-muted-foreground">
-              Standard OpenAI function-calling parameter shape. Must be a JSON object.
+              Standard OpenAI function-calling parameter shape. Must be a valid
+              JSON Schema (Draft 2020-12). <em>Fill with AI</em> self-verifies
+              the schema and each example before returning.
             </p>
+            {schemaWarnings.length > 0 && (
+              <ul className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-[10px] text-destructive">
+                {schemaWarnings.map((w, i) => (
+                  <li key={i}>• {w}</li>
+                ))}
+              </ul>
+            )}
           </div>
 
           <div className="space-y-2">

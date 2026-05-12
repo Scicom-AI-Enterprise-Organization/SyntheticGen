@@ -87,28 +87,49 @@ TOOL_DEF_FIELDS = """\
 {
   "name": "snake_case identifier — the function name passed to the model (e.g. 'maybank_account_balance', 'mykad_lookup', 'lhdn_efile_status')",
   "description": "1-2 sentence description of what the function does",
-  "parameters": {
-    "type": "object",
-    "properties": {
-      "<arg_name>": {
-        "type": "string|number|boolean|integer|array|object",
-        "description": "..."
-      }
-    },
-    "required": ["<arg_name>", ...]
-  },
+  "parameters": { ... valid JSON Schema (Draft 2020-12) ... },
   "localePresets": ["short tags like mykad, lhdn, maybank, cimb, tng, duitnow, banking, telco — use one or more when relevant"],
-  "examples": [
-    { "<arg_name>": "<realistic locale-appropriate value>" },
-    { "<arg_name>": "<another distinct example>" },
-    { "<arg_name>": "<third example>" }
-  ]
+  "examples": [ ... 2–4 objects, EACH satisfying `parameters` ... ]
 }
 
-`parameters` MUST be a valid JSON Schema object describing the function arguments.
-`examples` MUST be an array of 2–4 objects, EACH object satisfying that JSON
-Schema (correct types, all required keys present, locale-appropriate values —
-e.g. valid 12-digit MyKad, MYR amounts in numbers, ISO dates).
+PARAMETERS — must be a valid JSON Schema (Draft 2020-12) and SHOULD use the full
+expressive power of the schema where it adds real value. Use whichever of these
+features are appropriate for the tool:
+
+- Top-level shape: `{ "type": "object", "properties": {...}, "required": [...], "additionalProperties": false }`.
+- `required`: list EVERY parameter the caller MUST pass. Omit truly optional ones.
+- `description` on every property — the model will read this when deciding what to fill in.
+- Strings: `enum`, `pattern` (regex), `minLength`, `maxLength`, `format` (date / date-time / email / uri).
+- Numbers / integers: `minimum`, `maximum`, `exclusiveMinimum`, `exclusiveMaximum`, `multipleOf`.
+- Arrays: `items` (a schema), `minItems`, `maxItems`, `uniqueItems`.
+- Objects: nest `type: "object"` with its own `properties` / `required` for structured
+  arguments (e.g. address { line1, postcode, state }).
+- Constants: `const` for fixed values.
+- Unions: `oneOf` / `anyOf` when an arg can be one of several shapes.
+
+REALISTIC LOCALE EXAMPLES (Malaysia-focused) you SHOULD imitate:
+- MyKad: `{"type":"string","pattern":"^[0-9]{6}-[0-9]{2}-[0-9]{4}$","description":"12-digit MyKad with hyphens"}`
+- Malaysian state: `{"type":"string","enum":["KUL","SGR","PNG","JHR","KTN","TRG","KDH","PRK","MLK","NSN","PHG","PLS","SBH","SWK","PJY","LBN"]}`
+- MYR amount: `{"type":"number","minimum":0.01,"maximum":1000000,"multipleOf":0.01,"description":"Amount in MYR"}`
+- ISO date: `{"type":"string","format":"date","pattern":"^[0-9]{4}-[0-9]{2}-[0-9]{2}$"}`
+- Mobile: `{"type":"string","pattern":"^\\\\+?60[0-9]{9,10}$","description":"Malaysian mobile, +60 prefix"}`
+- Account number: `{"type":"string","pattern":"^[0-9]{10,16}$"}`
+- Nested address:
+    `{"type":"object","properties":{"line1":{"type":"string","minLength":3},"postcode":{"type":"string","pattern":"^[0-9]{5}$"},"state":{"type":"string","enum":["KUL","SGR",...]}},"required":["line1","postcode","state"]}`
+
+EXAMPLES — array of 2–4 objects. EACH example MUST validate against `parameters`:
+- All `required` keys present.
+- Each value matches its property's `type`, `enum`, `pattern`, range, etc.
+- Use distinct, plausible values (different MyKads, different states, etc.).
+- DO NOT include keys that aren't in `properties` (set `additionalProperties:false`
+  on parameters to make this explicit).
+
+Before returning, SELF-VERIFY:
+1. Re-read each property — does it have a `type`, a `description`, and the
+   constraints that match the tool's real-world semantics?
+2. Walk each example and mentally check it against every constraint in `parameters`.
+3. If anything mismatches, fix BEFORE returning. Do not return a schema you
+   wouldn't pass validation on.
 """
 
 FLOW_GRAPH_FIELDS = """\
@@ -258,39 +279,93 @@ _FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.MULTILINE)
 
 
 def _verify_tool_examples(parsed: dict[str, Any]) -> dict[str, Any]:
-    """For kind='tool-def', validate `examples` against `parameters` JSON Schema.
-    Drops invalid examples, attaches the validation errors as `_examplesWarnings`.
+    """For kind='tool-def', validate the `parameters` schema itself AND each
+    `examples` entry against it. Drops invalid examples, attaches diagnostics:
+        _schemaWarnings   — problems with the JSON Schema itself (meta-validation).
+        _examplesWarnings — problems with individual example objects.
     """
     schema = parsed.get("parameters")
     examples = parsed.get("examples")
-    if not isinstance(schema, dict) or not isinstance(examples, list):
-        return parsed
 
-    try:
-        from jsonschema import Draft202012Validator  # noqa: WPS433
-    except Exception:  # noqa: BLE001
-        return parsed  # jsonschema is already a dep, but fail soft if absent.
+    schema_warnings: list[str] = []
+    example_warnings: list[str] = []
 
-    try:
-        validator = Draft202012Validator(schema)
-    except Exception as e:  # invalid schema — let the form surface this
-        parsed["_examplesWarnings"] = [f"parameters schema invalid: {e}"]
-        return parsed
+    if not isinstance(schema, dict):
+        schema_warnings.append("parameters must be a JSON Schema object")
+    else:
+        try:
+            from jsonschema import Draft202012Validator  # noqa: WPS433
+        except Exception:  # noqa: BLE001
+            # jsonschema is a hard dependency, but fail soft if missing.
+            return parsed
 
-    valid: list[Any] = []
-    warnings: list[str] = []
-    for i, ex in enumerate(examples):
-        errs = list(validator.iter_errors(ex))
-        if not errs:
-            valid.append(ex)
-        else:
-            for err in errs:
-                path = ".".join(str(p) for p in err.absolute_path) or "<root>"
-                warnings.append(f"example[{i}] at {path}: {err.message}")
-    parsed["examples"] = valid
-    if warnings:
-        parsed["_examplesWarnings"] = warnings
+        # Meta-validate: is `parameters` itself a well-formed JSON Schema?
+        try:
+            Draft202012Validator.check_schema(schema)
+        except Exception as e:  # noqa: BLE001
+            schema_warnings.append(f"parameters schema invalid: {e}")
+
+        # Validate each example against the schema (even if meta-valid).
+        if not schema_warnings and isinstance(examples, list):
+            try:
+                validator = Draft202012Validator(schema)
+            except Exception as e:  # noqa: BLE001
+                schema_warnings.append(f"could not build validator: {e}")
+            else:
+                valid: list[Any] = []
+                for i, ex in enumerate(examples):
+                    errs = list(validator.iter_errors(ex))
+                    if not errs:
+                        valid.append(ex)
+                    else:
+                        for err in errs:
+                            path = ".".join(str(p) for p in err.absolute_path) or "<root>"
+                            example_warnings.append(f"example[{i}] at {path}: {err.message}")
+                parsed["examples"] = valid
+
+    if schema_warnings:
+        parsed["_schemaWarnings"] = schema_warnings
+    if example_warnings:
+        parsed["_examplesWarnings"] = example_warnings
     return parsed
+
+
+def _tool_def_repair_prompt(parsed: dict[str, Any]) -> str | None:
+    """Build a follow-up user message that asks the model to fix the schema and
+    examples it just produced. Returns None if there's nothing to repair."""
+    schema_w = parsed.get("_schemaWarnings") or []
+    example_w = parsed.get("_examplesWarnings") or []
+    if not schema_w and not example_w:
+        return None
+
+    original_examples = parsed.get("examples")
+    original_schema = parsed.get("parameters")
+    try:
+        schema_text = json.dumps(original_schema, indent=2, ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        schema_text = str(original_schema)
+    try:
+        examples_text = json.dumps(original_examples, indent=2, ensure_ascii=False)
+    except Exception:  # noqa: BLE001
+        examples_text = str(original_examples)
+
+    issues = []
+    if schema_w:
+        issues.append("PARAMETERS SCHEMA PROBLEMS:\n- " + "\n- ".join(schema_w))
+    if example_w:
+        issues.append("EXAMPLE VALIDATION ERRORS:\n- " + "\n- ".join(example_w))
+    return (
+        "Your previous tool definition didn't fully validate. Fix the issues "
+        "below and return the SAME JSON object (full name/description/parameters/"
+        "localePresets/examples) — not just the parts you changed. After fixing, "
+        "self-verify each example against parameters one more time before "
+        "returning.\n\n"
+        + "\n\n".join(issues)
+        + "\n\nLast parameters:\n"
+        + schema_text
+        + "\n\nLast examples:\n"
+        + examples_text
+    )
 
 
 def _extract_json(text: str) -> dict[str, Any]:
@@ -351,6 +426,7 @@ async def ai_assist(
     model: str | None = None,
     extra_context: str | None = None,
     max_tokens: int | None = None,
+    temperature: float | None = None,
 ) -> dict[str, Any]:
     """Call the LLM and return a parsed dict suitable for spreading into form state."""
     fields = KIND_FIELDS.get(kind)
@@ -377,31 +453,82 @@ async def ai_assist(
     if extra_context:
         user_text = f"{prompt}\n\nAdditional context:\n{extra_context}"
 
+    messages = [
+        {"role": "system", "content": system_text},
+        {"role": "user", "content": user_text},
+    ]
+    completion_max_tokens = (
+        max_tokens if max_tokens and max_tokens > 0 else KIND_MAX_TOKENS.get(kind, DEFAULT_MAX_TOKENS)
+    )
+
     result = await chat_completion(
         base_url=base_url,
         api_key=api_key,
         model=selected_model,
-        messages=[
-            {"role": "system", "content": system_text},
-            {"role": "user", "content": user_text},
-        ],
-        temperature=0.3,
-        max_tokens=max_tokens if max_tokens and max_tokens > 0 else KIND_MAX_TOKENS.get(kind, DEFAULT_MAX_TOKENS),
+        messages=messages,
+        temperature=temperature if temperature is not None else 0.3,
+        max_tokens=completion_max_tokens,
         extra_headers=extra_headers or None,
         reasoning_effort=provider.get("reasoningEffort"),
         chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")),
     )
+    total_tokens_in = result.tokens_in
+    total_tokens_out = result.tokens_out
+    total_cost = result.cost_usd
+    total_latency = result.latency_ms
 
     parsed = _extract_json(result.content)
     if kind == "tool-def":
         parsed = _verify_tool_examples(parsed)
+        # Single-shot self-repair: if the schema didn't meta-validate or any
+        # example failed, hand the errors back to the model for one retry. We
+        # cap to one round to keep cost bounded; remaining warnings flow back
+        # to the UI for human review.
+        repair = _tool_def_repair_prompt(parsed)
+        if repair:
+            log.info("tool-def self-verify failed once; asking model to repair")
+            retry_msgs = messages + [
+                {"role": "assistant", "content": result.content},
+                {"role": "user", "content": repair},
+            ]
+            retry = await chat_completion(
+                base_url=base_url,
+                api_key=api_key,
+                model=selected_model,
+                messages=retry_msgs,
+                temperature=0.1,
+                max_tokens=completion_max_tokens,
+                extra_headers=extra_headers or None,
+                reasoning_effort=provider.get("reasoningEffort"),
+                chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")),
+            )
+            total_tokens_in += retry.tokens_in
+            total_tokens_out += retry.tokens_out
+            total_cost += retry.cost_usd
+            total_latency += retry.latency_ms
+            try:
+                reparsed = _extract_json(retry.content)
+                reparsed = _verify_tool_examples(reparsed)
+                # Only swap in the repaired version if it has STRICTLY FEWER
+                # warnings; otherwise keep the first attempt + its diagnostics.
+                old_w = len(parsed.get("_schemaWarnings", [])) + len(
+                    parsed.get("_examplesWarnings", [])
+                )
+                new_w = len(reparsed.get("_schemaWarnings", [])) + len(
+                    reparsed.get("_examplesWarnings", [])
+                )
+                if new_w < old_w:
+                    parsed = reparsed
+            except Exception as e:  # noqa: BLE001
+                log.warning("tool-def repair pass failed to parse: %s", e)
+
     return {
         "data": parsed,
         "model": result.model,
-        "tokens_in": result.tokens_in,
-        "tokens_out": result.tokens_out,
-        "cost_usd": result.cost_usd,
-        "latency_ms": result.latency_ms,
+        "tokens_in": total_tokens_in,
+        "tokens_out": total_tokens_out,
+        "cost_usd": total_cost,
+        "latency_ms": total_latency,
     }
 
 
@@ -572,6 +699,7 @@ async def ai_assist_stream(
     model: str | None = None,
     extra_context: str | None = None,
     max_tokens: int | None = None,
+    temperature: float | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Like `ai_assist`, but yields incremental events:
       {"type":"delta","text":"..."} during generation,
@@ -625,7 +753,7 @@ async def ai_assist_stream(
                 {"role": "system", "content": system_text},
                 {"role": "user", "content": user_text},
             ],
-            temperature=0.3,
+            temperature=temperature if temperature is not None else 0.3,
             max_tokens=max_tokens if max_tokens and max_tokens > 0 else KIND_MAX_TOKENS.get(kind, DEFAULT_MAX_TOKENS),
             extra_headers=extra_headers or None,
             reasoning_effort=provider.get("reasoningEffort"),
@@ -660,6 +788,36 @@ async def ai_assist_stream(
 
     if kind == "tool-def":
         parsed = _verify_tool_examples(parsed)
+        repair = _tool_def_repair_prompt(parsed)
+        if repair:
+            yield {"type": "verifying", "issues": (parsed.get("_schemaWarnings") or []) + (parsed.get("_examplesWarnings") or [])}
+            try:
+                retry_msgs = [
+                    {"role": "system", "content": system_text},
+                    {"role": "user", "content": user_text},
+                    {"role": "assistant", "content": full_text},
+                    {"role": "user", "content": repair},
+                ]
+                retry = await chat_completion(
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=selected_model,
+                    messages=retry_msgs,
+                    temperature=0.1,
+                    max_tokens=max_tokens if max_tokens and max_tokens > 0 else KIND_MAX_TOKENS.get(kind, DEFAULT_MAX_TOKENS),
+                    extra_headers=extra_headers or None,
+                    reasoning_effort=provider.get("reasoningEffort"),
+                    chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")),
+                )
+                tokens_in += retry.tokens_in
+                tokens_out += retry.tokens_out
+                reparsed = _verify_tool_examples(_extract_json(retry.content))
+                old_w = len(parsed.get("_schemaWarnings", [])) + len(parsed.get("_examplesWarnings", []))
+                new_w = len(reparsed.get("_schemaWarnings", [])) + len(reparsed.get("_examplesWarnings", []))
+                if new_w < old_w:
+                    parsed = reparsed
+            except Exception as e:  # noqa: BLE001
+                log.warning("tool-def streaming repair failed: %s", e)
 
     yield {
         "type": "done",

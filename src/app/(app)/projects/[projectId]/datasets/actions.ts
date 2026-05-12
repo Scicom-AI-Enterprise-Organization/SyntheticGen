@@ -117,6 +117,45 @@ export async function freezeDatasetVersion(input: z.infer<typeof freezeSchema>) 
   return { ok: true, versionId: versionRow.id };
 }
 
+export async function deleteDataset(projectId: string, datasetId: string) {
+  const { user } = await requireProjectPermission(projectId, "datasets.freeze");
+
+  const dataset = await prisma.dataset.findFirst({
+    where: { id: datasetId, projectId },
+    select: { id: true, name: true, currentVersionId: true },
+  });
+  if (!dataset) return { error: "Dataset not found in this project" };
+
+  // Clear the self-reference first so the cascade to DatasetVersion (and from
+  // there to DatasetVersionConversation + ExportArtifact) doesn't trip the
+  // pinned-current-version FK.
+  try {
+    await prisma.$transaction(async (tx) => {
+      if (dataset.currentVersionId) {
+        await tx.dataset.update({
+          where: { id: datasetId },
+          data: { currentVersionId: null },
+        });
+      }
+      await tx.dataset.delete({ where: { id: datasetId } });
+    });
+  } catch (e) {
+    return { error: (e as Error).message };
+  }
+
+  await logAudit({
+    projectId,
+    actorUserId: user.id,
+    action: "dataset.delete",
+    targetKind: "Dataset",
+    targetId: datasetId,
+    metadata: { name: dataset.name },
+  });
+
+  revalidatePath(`/projects/${projectId}/datasets`);
+  return { ok: true };
+}
+
 const exportSchema = z.object({
   projectId: z.string(),
   versionId: z.string(),

@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
-import { requireProjectPermission } from "@/lib/project-rbac";
+import { requireProjectPermission, projectRoleAllows } from "@/lib/project-rbac";
 import {
   Card,
   CardContent,
@@ -32,7 +32,8 @@ export default async function ConversationsPage({
 }) {
   const { projectId } = await params;
   const sp = await searchParams;
-  await requireProjectPermission(projectId, "conversations.read");
+  const { role } = await requireProjectPermission(projectId, "conversations.read");
+  const canDelete = role ? projectRoleAllows(role, "conversations.annotate") : false;
 
   const page = Math.max(1, parseInt(sp.page ?? "1", 10) || 1);
   const sort: SortField = SORT_FIELDS.includes(sp.sort as SortField)
@@ -119,6 +120,7 @@ export default async function ConversationsPage({
             projectId={projectId}
             initialFocusId={sp.focus ?? null}
             initialTab={sp.tab === "trace" ? "trace" : "messages"}
+            canDelete={canDelete}
             taxonomyNodes={taxonomyNodes}
             languages={languages}
             page={page}

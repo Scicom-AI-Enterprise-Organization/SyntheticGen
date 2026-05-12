@@ -99,6 +99,7 @@ export default async function ToolsPage({
                 version: t.version,
                 localePresets: t.localePresets,
                 parameters: t.parameters,
+                examples: (t.examples as Record<string, unknown>[] | null) ?? null,
               }))}
             />
           ) : (

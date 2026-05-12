@@ -49,7 +49,24 @@ generation, and exports.
   decrypted only inside the Python worker.
 - **Tool catalog** — define OpenAI-style function/tool definitions (JSON Schema +
   MY-locale presets like `mykad / lhdn / maybank / tng / duitnow`), referenced by
-  Action nodes in flows.
+  Action nodes in flows. The ✨ AI-assist `tool-def` kind also emits 2-4
+  **synthetic argument examples** that the worker validates against the tool's
+  JSON Schema before saving (invalid ones are dropped with inline warnings).
+- **Knowledge base** — per-project `KnowledgeBaseEntry` rows the worker
+  auto-injects into the system prompt before each generation. Entries link to
+  one-or-many taxonomy nodes (empty list = project-wide); the deterministic
+  retrieval is `cardinality(taxonomyNodeIds)=0 OR primary_node = ANY(...)`.
+  Authoring options: paste text, **upload PDF / DOCX / HTML / TXT** (extracted
+  via `unpdf` / `mammoth` / `html-to-text`), or **crawl a URL** with BFS
+  depth-N — pages are streamed live, cached in `KnowledgeCrawl`, and any cached
+  crawl can be merged into a single entry from the New entry form. Provider-side
+  AI-assist (`knowledge-entry` kind) drafts a clean title, restructures the
+  content, and auto-ticks taxonomy nodes from a fixed `AVAILABLE_TAXONOMY` list.
+- **Provider reasoning controls** — per-provider `reasoningEffort` (OpenAI
+  o-series `minimal | low | medium | high`) and free-form `chatTemplateKwargs`
+  (vLLM Qwen3 `{enable_thinking: false}`, etc.) stored on `ProviderCredential`
+  and forwarded on every chat call. Setting `enable_thinking` also mirrors to
+  top-level `include_reasoning` so vLLM fully suppresses chain-of-thought.
 - **Conversation flows** — visual React Flow editor (`/projects/[id]/flows`) lets
   you author DAGs of `intent → action → condition → end` nodes. Action nodes can
   chain **multiple tool calls per turn** (sequential when later calls depend on
@@ -58,8 +75,27 @@ generation, and exports.
 - **Project-scoped RBAC** — `OWNER / EDITOR / ANNOTATOR / VIEWER` per project, on top
   of the existing global Auth.js permissions.
 - **AI-assist on every complex form** — Persona, LanguageProfile, PromptTemplate,
-  ToolDef, TaxonomyNode, and full Flow graphs. Click ✨ Fill/Generate, describe in
-  free text, the LLM emits structured JSON that auto-fills the form for review.
+  ToolDef, TaxonomyNode, full Flow graphs, KnowledgeBaseEntry, and benchmark
+  rubrics. Click ✨ Fill/Generate, describe in free text; the LLM emits structured
+  JSON that auto-fills the form for review. **Streaming-by-default**: the dialog
+  shows reasoning + content tokens live (collapsible panel for thinking models),
+  with a red **Stop** button that aborts the upstream connection. Each dialog
+  has **Use example** (pre-fills a sensible prompt), **Randomize** (asks the
+  provider to invent a prompt — also streamed, also abortable), URL-driven
+  `?suggest=1` open state, and a **max output tokens** slider so reasoning
+  models don't run out of budget mid-answer.
+- **Per-job live token preview** — the run detail page picks one running
+  `GenerationJob` and streams its tokens (reasoning + content) into a card via
+  Postgres `LISTEN synthgen_job`. Reasoning content is persisted on the
+  `Message` row for later inspection.
+- **Conversation trace tab** — every conversation has a step-by-step
+  `JobEvent` timeline: job picked up → context loaded → prompt rendered →
+  provider request → reasoning/content stream → validators → persistence. The
+  drawer has Messages / Trace tabs (URL-synced), JSON / Trace download buttons,
+  and renders the full provenance (run config, template body, persona snapshot,
+  language profile, provider, KB entries used). Conversations are also
+  filterable by topic / language / status, sortable by turns / tokens / time,
+  and paginated.
 - **Dashboard with charts** — daily activity, acceptance donut, language mix,
   top projects, validation-fail breakdown — pure-SVG, no chart-lib dependency.
 - **Dataset versioning** — frozen `DatasetVersion` snapshots are immutable, with
@@ -86,11 +122,12 @@ Two processes share Postgres as the integration bus:
  │  - all CRUD UI     │ ─────▶│  - LanguageProfile   │◀───── │  - validators│
  │  - run wizard      │        │  - GenerationRun/Job │  writes│  - worker    │
  │  - SSE progress    │ reads  │  - Conversation/Msg  │ ─────▶│  - exporter  │
- │  - dataset freeze  │ ◀───── │  - Validation        │        │  - FastAPI   │
+ │  - dataset freeze  │ ◀───── │  - JobEvent timeline │        │  - FastAPI   │
+ │  - trace timeline  │        │  - KnowledgeBase     │        │              │
  └────────────────────┘        └──────────────────────┘        └──────────────┘
                                        ▲
-                                       │ NOTIFY synthgen_run
-                                       │ (live progress)
+                                       │ NOTIFY synthgen_run (job done)
+                                       │ NOTIFY synthgen_job  (per-token live stream)
 ```
 
 The Python service exposes only **internal endpoints** that Next.js calls
@@ -105,24 +142,38 @@ src/                   Next.js app (TS)
     dashboard/         SyntheticGen home with stats + charts
     projects/          All project-scoped pages
       [projectId]/
-        personas/      Persona CRUD (with AI-assist)
+        personas/      Persona CRUD (with AI-assist Randomize)
         languages/     LanguageProfile CRUD (formality lock, banned tokens, …)
         templates/     PromptTemplate CRUD (Mustache renderer + AI-assist)
-        tools/         ToolDef CRUD (OpenAI tool schema, locale presets)
+        tools/         ToolDef CRUD (OpenAI schema + synthetic examples)
+        knowledge/     KnowledgeBaseEntry CRUD + doc upload + URL crawler card
         flows/         React Flow editor — author conversation graphs
           [flowId]/    Editor: palette, canvas, inspector, AI-generate, YAML I/O
-        taxonomy/      Flat topic list (slice 1)
+        taxonomy/      Flat topic list (slice 1) with ✨ Suggest (multi)
         providers/     OpenAI-compat provider credentials (AES-256-GCM at rest)
-        runs/          Run wizard, list, detail (SSE live progress)
-        conversations/ Generated conversations + per-axis verdicts
+        runs/          Run wizard, list, detail (SSE counts + live job tokens)
+        conversations/ Generated conversations + per-axis verdicts + trace tab
         datasets/      Datasets / versions / OpenAI JSONL export
   app/api/             SSE + JSON APIs Next.js calls
-    projects/[id]/ai-assist/   Single endpoint, kind = persona / taxonomy-node /
-                                language-profile / prompt-template / tool-def /
-                                flow-graph
+    projects/[id]/
+      ai-assist/                        Single endpoint, kind = persona /
+                                        taxonomy-node / language-profile /
+                                        prompt-template / tool-def / flow-graph
+                                        / knowledge-entry / benchmark-rubric.
+                                        Supports `?stream=1` NDJSON
+      random-prompt/                    LLM-generated example prompts (streaming)
+      knowledge/extract/                PDF / DOCX / HTML / TXT → text
+      knowledge/crawl/                  BFS URL crawl, NDJSON stream, caches
+                                        results in KnowledgeCrawl
+      runs/[runId]/stream/              SSE run snapshot
+      runs/[runId]/jobs/[id]/stream/    LISTEN synthgen_job → per-token SSE
+      conversations/[id]/               GET conversation + messages + reasoning
+      conversations/[id]/trace/         Full provenance JSON (events + run +
+                                        template body + persona + lp + provider
+                                        + job). `?download=1` for attachment
   app/invite/[token]/  Invite link → register form
   components/
-    ai-assist-button.tsx    Shared dialog used by all complex forms
+    ai-assist-button.tsx    Shared streaming dialog (Fill / Use example / Randomize)
     charts/                 BarChart / DonutChart / HorizontalBars (SVG)
   lib/
     rbac.ts            Global RBAC (template)
@@ -134,14 +185,19 @@ worker/                Python service
   synthgen/
     presets.py         Manglish particles, Formal-Malay shortcuts, loanword allowlists
     style_guide.py     Auto-injected formality system-prompt fragment
-    templates.py       Mustache renderer
-    providers.py       httpx OpenAI-compat client + pricing table
+    templates.py       Mustache renderer (supports {{knowledge}}, {{taxonomy.related}})
+    providers.py       httpx OpenAI-compat client — non-streaming + streaming
+                       with stream_options.include_usage; per-call reasoning_effort
+                       + chat_template_kwargs
     validators/        schema, lang_id (lingua-py), register, ngram
-    generation.py      Single-turn generation pipeline
+    generation.py      Single-turn pipeline w/ streaming, JobEvent timeline,
+                       knowledge-base injection, related-topics
     exporter.py        OpenAI JSONL writer
     bootstrap.py       Seed default LanguageProfile presets per project
-    ai_assist.py       Structured-output prompts per kind (persona / flow-graph / …)
-    api/main.py        FastAPI internal endpoints
+    ai_assist.py       Per-kind structured-output prompts + tolerant JSON
+                       extractor + jsonschema-based tool-def example verifier
+    api/main.py        FastAPI internal endpoints (incl. NDJSON streaming
+                       /internal/ai-assist/stream + /internal/random-prompt/stream)
     jobworker/main.py  Job poller (SELECT ... FOR UPDATE SKIP LOCKED)
     crypto.py          AES-256-GCM matching the TS wire format
   tests/               smoke_e2e.py + smoke_export.py + stub_openai.py
@@ -257,6 +313,16 @@ and can re-seed via **Settings → Reseed default language profiles**.
 5. **Add Tools** under *Tools* — OpenAI-style function defs with JSON Schema params
    and locale tags (`mykad / lhdn / maybank / …`). Use ✨ Fill with AI ("a function
    that looks up a Maybank account balance by 12-digit account number") to draft them.
+   Generated tools come with 2-4 synthetic argument examples validated against
+   the JSON Schema (shown in a collapsible "Parameters" panel).
+5a. **Knowledge base** under *Knowledge* — optional but powerful. Add facts the
+    assistant should ground answers in: paste text, **Upload doc** (PDF / DOCX /
+    HTML / TXT → extracted text + LLM-drafted title + auto-ticked taxonomy
+    nodes), or **Crawl a URL** (BFS depth 0-3, same-origin by default, results
+    cached in `KnowledgeCrawl`). Cached crawls can be merged into a single entry
+    from the New entry form (page snippets capped per-page + total). The worker
+    auto-injects matching entries before each generation and the conversation
+    trace shows which entries were loaded.
 6. **(Optional) Author a Flow** under *Flows* — drag intent / action / condition / end
    nodes onto the canvas, wire them up. Action nodes can chain multiple tool calls per
    turn (sequential / parallel). Or click ✨ Generate from prompt to produce the whole
@@ -264,12 +330,23 @@ and can re-seed via **Settings → Reseed default language profiles**.
 7. **Add a PromptTemplate** under *Templates*. Uses `{{persona.name}}`, `{{taxonomy.path}}`,
    `{{language.primary}}`, `{{difficulty}}`. ✨ Fill with AI works here too.
 8. **Start a Run** under *Runs → New run*. Pick taxonomy nodes × personas ×
-   difficulties × rows-per-cell. Use the **Formality lock** to force `formal` even if
-   personas/profiles are mixed.
+   difficulties × rows-per-cell (select-all checkboxes on each axis). Slide
+   **Temperature** + **Max output tokens** to taste, optionally tick **Related
+   topics per conversation** to weave in N sibling node names via
+   `{{taxonomy.related}}`, and use the **Formality lock** to force `formal` even
+   if personas/profiles are mixed. Tool catalog gets a multiselect so the run
+   ships only the tools you want.
 9. **Watch progress** — the run detail page subscribes to SSE; counts and cost
-   update live as the worker drains jobs.
-10. **Inspect Conversations** — table at `/projects/.../conversations`. Click a row
-    to see the full transcript and per-axis validation verdicts (`pass / warn / fail`).
+   update live, and a **Live job preview** card streams reasoning + content
+   tokens of one currently-running job.
+10. **Inspect Conversations** — table at `/projects/.../conversations`. Filter
+    by topic / language / status, sort by turns / tokens / time, paginate 25 at
+    a time (state in URL). Click a row to open a drawer with Messages / Trace
+    tabs: Messages shows the transcript + collapsible reasoning per turn;
+    Trace shows the full step-by-step `JobEvent` timeline (job picked up →
+    knowledge loaded → prompt rendered → provider request → reasoning/content
+    stream → validators → persisted) plus run/template/persona/provider/job
+    panels. JSON / Trace download buttons in the drawer header.
 11. **Freeze and export** — *Datasets → New dataset → Freeze version → Build OpenAI
     JSONL*. The file lands under `./storage/exports/<projectId>/...jsonl`.
 
@@ -304,24 +381,86 @@ The worker's flow walker (slice 2) consumes these graphs to produce structured
 multi-turn conversations: pick a path from Start → End, generate user/assistant
 turns guided by each node's data, mock-execute Action nodes' tools.
 
+## Knowledge base
+
+`/projects/[id]/knowledge` — domain facts the assistant grounds in. Three input
+modes feed one schema (`KnowledgeBaseEntry`):
+
+- **Paste / type** — title + markdown content + tags + linked taxonomy nodes.
+- **Upload doc** — PDF (`unpdf`), DOCX (`mammoth`), HTML / TXT / MD
+  (`html-to-text`). After extraction, if a provider is selected the form chains
+  into the `knowledge-entry` AI-assist kind: the LLM drafts a 4-10 word title,
+  cleans the content (markdown sections, preserves every fact), and **auto-ticks
+  taxonomy nodes** from the project's `AVAILABLE_TAXONOMY` list.
+- **URL crawl** — the **URL crawls** card runs a BFS crawl from a start URL up
+  to depth N (capped at 3, max 50 pages, same-origin by default). Progress
+  streams page-by-page over NDJSON; results persist in `KnowledgeCrawl` so you
+  can re-import a different subset later, re-crawl with the same params, or
+  delete the cache. Clicking a page in a cached crawl expands its extracted
+  text inline so you can verify before importing. **Import crawled pages**
+  in the New entry form merges the selected pages into a single entry (snippet
+  cap per page + total cap so the form doesn't choke on a multi-MB site).
+
+**Worker injection.** Before every generation `generation.py` runs:
+
+```sql
+SELECT id, title, content FROM "KnowledgeBaseEntry"
+WHERE "projectId" = $1
+  AND (cardinality("taxonomyNodeIds") = 0          -- project-wide catch-alls
+    OR $2 = ANY("taxonomyNodeIds"))                -- match primary node
+ORDER BY "createdAt" DESC LIMIT 20
+```
+
+Matching entries are joined into a `## Knowledge base` markdown block,
+appended to the system prompt **and** exposed as `{{knowledge}}` so authored
+templates can reference it explicitly. The conversation `JobEvent` timeline
+emits a `knowledge.loaded` step with the IDs + titles + content sizes used.
+
+No embeddings, no pgvector — tag-based retrieval is deterministic and fast
+enough for the typical KB size (hundreds of entries). The retrieval seam is
+isolated; swap in semantic search later without changing the template / worker
+contract.
+
 ## AI-assist — structured-output dialog on every complex form
 
 Every form whose schema has more than a couple of fields (Persona, LanguageProfile,
-Template, ToolDef, TaxonomyNode, full Flow graphs) gets a ✨ button that opens an
-"Fill with AI" dialog. You type a free-text description, pick a Provider, and the
-LLM returns structured JSON that the form then auto-fills. You always review and
-save — the LLM never touches the database directly.
+Template, ToolDef, TaxonomyNode, KnowledgeBaseEntry, full Flow graphs, benchmark
+rubrics) gets a ✨ button that opens a "Fill with AI" dialog. You type a free-text
+description, pick a Provider, and the LLM returns structured JSON that the form
+auto-fills. You always review and save — the LLM never touches the database
+directly.
+
+The dialog is **streaming-first**:
+- Tokens appear as the model types. Reasoning tokens (Qwen3-thinking,
+  DeepSeek-R1, OpenAI o-series) render in a collapsible italic-muted panel
+  above the content panel.
+- A red **Stop** button replaces Cancel while streaming; clicking it aborts
+  the fetch and propagates `AbortController.signal` to the upstream provider so
+  generation actually stops (not just hidden).
+- A **max output tokens** slider (256 → 64 000) tunes the budget per call.
+  Reasoning models default to higher per-kind caps (`flow-graph` 16k,
+  `knowledge-entry` 32k).
+- **Use example** pre-fills the prompt with a sensible default; **Randomize**
+  asks the same provider to invent a domain-specific prompt (also streamed,
+  also abortable). The randomize call is grounded in project context —
+  taxonomy nodes for personas, the tool catalog for tools, existing entries
+  for KB / tools so the LLM doesn't suggest duplicates.
+- Open/close state lives in the URL (`?suggest=1`), so deep-links and refresh
+  preserve the dialog.
 
 Implementation:
-- TS — `src/components/ai-assist-button.tsx` (single shared dialog) and
-  `src/lib/synthgen-api.ts` (typed client + `AiAssistKind` union).
+- TS — `src/components/ai-assist-button.tsx` (single shared streaming dialog)
+  and `src/lib/synthgen-api.ts` (typed client + `AiAssistKind` union).
 - Python — `worker/synthgen/ai_assist.py` (per-kind structured-output prompts,
-  tolerant JSON extractor that strips markdown fences). `flow-graph` kind also
-  receives the project's tool catalog as `extraContext` so `action.toolIds` stays
-  in-bounds.
-- API gate — `src/app/api/projects/[id]/ai-assist` route enforces the
-  per-kind RBAC action (`personas.write`, `flows.write`, etc.) before delegating
-  to the Python service.
+  tolerant JSON extractor that strips markdown fences, `jsonschema`-based
+  self-verification for `tool-def` examples). `flow-graph` receives the
+  project's tool catalog and `knowledge-entry` receives `AVAILABLE_TAXONOMY` as
+  `extraContext` so referenced IDs stay in-bounds.
+- API gate — `src/app/api/projects/[id]/ai-assist` enforces the per-kind RBAC
+  action (`personas.write`, `flows.write`, `knowledge.write`, …) before
+  delegating to the Python service. `?stream=1` proxies the NDJSON body straight
+  through with `cache-control: no-store` and `x-accel-buffering: no` so live
+  tokens stream end-to-end.
 
 ## RBAC model
 
@@ -335,10 +474,11 @@ can act on every project. `member` users can list and create projects.
 | `project.read` | ✓ | ✓ | ✓ | ✓ |
 | `project.update / delete / members.manage` | ✓ | | | |
 | `providers.manage` | ✓ | ✓ | | |
-| `taxonomy / personas / languages / tools / templates / flows .write` | ✓ | ✓ | | |
+| `taxonomy / personas / languages / tools / templates / flows / knowledge .write` | ✓ | ✓ | | |
 | `runs.execute / runs.cancel` | ✓ | ✓ | | |
 | `conversations.annotate` | ✓ | ✓ | ✓ | |
 | `datasets.freeze / datasets.export` | ✓ | ✓ | | |
+| `benchmarks.write / execute / cancel` | ✓ | ✓ | | |
 
 Server-side gate: `requireProjectPermission(projectId, action)` — `src/lib/project-rbac.ts`.
 
@@ -448,13 +588,24 @@ Both expect a smoke project named `smoke-proj-001` (created by the first run).
 
 **Done**
 - Single-turn generation with formality lock + cheap validators
-- Tool catalog (CRUD with AI-assist)
-- Flow editor (React Flow + AI-generate + YAML round-trip)
+- Streaming generation worker (reasoning + content) with token-by-token
+  preview in the run page + reasoning persistence on the assistant message
+- `JobEvent` step-by-step trace timeline + downloadable provenance bundle
+- Tool catalog (CRUD with AI-assist + synthetic argument examples + JSON
+  Schema self-verify)
+- Flow editor (React Flow + AI-generate w/ streaming + YAML round-trip)
 - Multi-tool Action nodes (sequential / parallel)
-- Project / persona / template / language-profile / taxonomy CRUD with AI-assist
+- Project / persona / template / language-profile / taxonomy CRUD with
+  streaming AI-assist (Use example + Randomize)
+- Knowledge base — text / doc upload (PDF / DOCX / HTML / TXT) / URL crawler
+  with depth-N BFS + cached `KnowledgeCrawl` results
+- Provider reasoning controls (reasoning_effort + chat_template_kwargs)
+- Conversation drawer with Messages / Trace tabs, filters / sort / pagination,
+  JSON + Trace download
 - Dashboard charts
 - Invite-as-register flow
 - OpenAI fine-tune JSONL export
+- Function-Call benchmark format exporter
 
 **Next slice**
 - **Worker walks Flow graphs** — pick a path through the published flow, generate
@@ -471,6 +622,8 @@ Both expect a smoke project named `smoke-proj-001` (created by the first run).
   bounded, calibrated against a human-rated gold set.
 - **Annotation UI** at `/projects/[id]/annotate` — accept / reject / edit feeds
   rejected samples into DPO/KTO preference pairs.
+- **Embedding-based KB retrieval** (pgvector) — swap the tag-based knowledge
+  injection for semantic search when entry count outgrows tag matching.
 - **Embedding-based dedup** (pgvector) — across-conversation deduplication.
 - **More exporters** — ShareGPT, Alpaca, Parquet, HF Hub push.
 - **Figma / Mermaid import** for flows.
@@ -482,11 +635,17 @@ Both expect a smoke project named `smoke-proj-001` (created by the first run).
 - [Next.js 16](https://nextjs.org) + React 19 + Tailwind v4 + Radix UI
 - [Auth.js v5](https://authjs.dev) — credentials, Azure AD, Google, Keycloak, SAML
 - [Prisma 6](https://www.prisma.io) + Postgres 14+
+- [`pg`](https://github.com/brianc/node-postgres) — used directly only for
+  `LISTEN synthgen_job` (Prisma doesn't expose LISTEN/NOTIFY)
 - [@xyflow/react](https://reactflow.dev) for the Flow editor
 - [js-yaml](https://github.com/nodeca/js-yaml) for YAML round-trip
+- [unpdf](https://github.com/unjs/unpdf) — PDF text extraction (serverless-friendly)
+- [mammoth](https://github.com/mwilliamson/mammoth.js) — DOCX → text
+- [html-to-text](https://github.com/html-to-text/node-html-to-text) — HTML → text (extract + crawl)
 - Python 3.11+ + [FastAPI](https://fastapi.tiangolo.com) + [asyncpg](https://magicstack.github.io/asyncpg/)
 - [lingua-py](https://github.com/pemistahl/lingua-py) for language detection
-- [httpx](https://www.python-httpx.org/) for OpenAI-compat calls
+- [httpx](https://www.python-httpx.org/) for OpenAI-compat calls (streaming via `aiter_lines`)
+- [jsonschema](https://github.com/python-jsonschema/jsonschema) — validates tool-def synthetic examples server-side
 - [cryptography](https://cryptography.io/) for AES-256-GCM (matching Node's `crypto`)
 
 ## Default credentials

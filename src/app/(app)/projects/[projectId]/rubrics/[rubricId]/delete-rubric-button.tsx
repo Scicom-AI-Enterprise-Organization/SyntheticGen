@@ -42,7 +42,23 @@ export function DeleteRubricButton({
   return (
     <div className="space-y-2">
       <Label htmlFor="confirm-delete-rubric" className="text-xs">
-        Type <code className="font-mono">{name}</code> to confirm
+        Type{" "}
+        <code
+          className="cursor-text rounded bg-muted px-1 font-mono select-text"
+          onClick={(e) => {
+            // Click-to-select so the rubric name is easy to copy out of the
+            // Label (which is `select-none` by default).
+            const range = document.createRange();
+            range.selectNodeContents(e.currentTarget);
+            const sel = window.getSelection();
+            sel?.removeAllRanges();
+            sel?.addRange(range);
+          }}
+          title="Click to select, then ⌘/Ctrl-C to copy"
+        >
+          {name}
+        </code>{" "}
+        to confirm
       </Label>
       <div className="flex items-center gap-2">
         <Input

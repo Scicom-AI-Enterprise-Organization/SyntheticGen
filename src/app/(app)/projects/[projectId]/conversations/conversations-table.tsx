@@ -1,8 +1,8 @@
 "use client";
 
-import { useCallback } from "react";
+import { useCallback, useState, useTransition } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Eye, X } from "lucide-react";
+import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Eye, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Label } from "@/components/ui/label";
@@ -13,7 +13,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { useConfirm } from "@/components/confirm-dialog";
 import { ConversationDrawer } from "./conversation-drawer";
+import { deleteConversation } from "./actions";
 
 interface Row {
   id: string;
@@ -48,6 +50,7 @@ export function ConversationsTable({
   initialFocusId,
   conversations,
   initialTab,
+  canDelete = false,
   taxonomyNodes,
   languages,
   page,
@@ -71,6 +74,7 @@ export function ConversationsTable({
   dir: SortDir;
   filters: { topic: string | null; lang: string | null; status: string | null };
   initialTab?: "messages" | "trace";
+  canDelete?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -80,6 +84,29 @@ export function ConversationsTable({
   // server and client when the hook is read here (hydration warning on the
   // aria-controls attribute).
   const focusId = initialFocusId ?? null;
+  const confirm = useConfirm();
+  const [deleting, startDelete] = useTransition();
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  async function onDelete(c: Row) {
+    const ok = await confirm({
+      title: "Delete this conversation?",
+      body: `The conversation, its messages, reasoning, validations and JobEvent timeline are removed permanently. If it's part of a frozen dataset version, the delete is blocked.`,
+      destructive: true,
+    });
+    if (!ok) return;
+    setDeleteError(null);
+    // Close the drawer if we're deleting the focused row.
+    if (focusId === c.id) setParams({ focus: null });
+    startDelete(async () => {
+      const res = await deleteConversation(projectId, c.id);
+      if ("error" in res && (res as { error?: string }).error) {
+        setDeleteError((res as { error: string }).error);
+      } else {
+        router.refresh();
+      }
+    });
+  }
 
   const setParams = useCallback(
     (updates: Record<string, string | null>) => {
@@ -189,6 +216,12 @@ export function ConversationsTable({
         )}
       </div>
 
+      {deleteError && (
+        <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+          {deleteError}
+        </p>
+      )}
+
       {/* Table */}
       {conversations.length === 0 ? (
         <p className="text-sm text-muted-foreground">No conversations match the current filters.</p>
@@ -253,14 +286,28 @@ export function ConversationsTable({
                     </Badge>
                   </td>
                   <td className="py-3 pl-4 text-right">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => setParams({ focus: c.id })}
-                      aria-label="View conversation"
-                    >
-                      <Eye className="h-4 w-4" />
-                    </Button>
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setParams({ focus: c.id })}
+                        aria-label="View conversation"
+                      >
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                      {canDelete && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => onDelete(c)}
+                          disabled={deleting}
+                          aria-label="Delete conversation"
+                          title="Delete conversation"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
                   </td>
                 </tr>
               ))}

@@ -20,21 +20,32 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  ArrowRight,
+  ArrowDown,
+  ChevronDown,
   Flag,
   GitMerge,
+  LayoutGrid,
   MessageSquare,
   Save,
   Square,
   Upload,
+  Wand2,
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
+import { autoLayout, type LayoutMode } from "./auto-layout";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { NODE_TYPES } from "./flow-nodes";
 import { NodeInspector } from "./node-inspector";
 import { GenerateFlowDialog } from "./generate-flow-dialog";
@@ -148,6 +159,11 @@ function FlowEditorInner({
   const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const [dirty, setDirty] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [recentlySaved, setRecentlySaved] = useState<
+    "save" | "publish" | "unpublish" | null
+  >(null);
+  const savedFlashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const { screenToFlowPosition } = useReactFlow();
 
   const onNodesChange = useCallback((changes: NodeChange[]) => {
@@ -261,6 +277,15 @@ function FlowEditorInner({
     setTimeout(() => rfInstance?.fitView({ padding: 0.2 }), 50);
   }
 
+  function beautify(mode: LayoutMode) {
+    // Run auto-layout in the requested direction, then re-fit the viewport.
+    // Marks the flow dirty since node positions are persisted.
+    const laidOut = autoLayout(toFlowNodes(nodes), toFlowEdges(edges), mode);
+    setNodes(toRfNodes(laidOut));
+    setDirty(true);
+    setTimeout(() => rfInstance?.fitView({ padding: 0.2 }), 50);
+  }
+
   function persist(nextPublished?: boolean) {
     start(async () => {
       const res = await saveFlow({
@@ -273,12 +298,18 @@ function FlowEditorInner({
         ...(nextPublished != null ? { isPublished: nextPublished } : {}),
       });
       if ("error" in res && res.error) {
-        toast.error(res.error);
+        setSaveError(res.error);
         return;
       }
+      setSaveError(null);
       if (nextPublished != null) setIsPublished(nextPublished);
       setDirty(false);
-      toast.success(nextPublished == null ? "Flow saved" : nextPublished ? "Published" : "Unpublished");
+      // Flash the matching button green for ~1.5s instead of toasting.
+      const next: "save" | "publish" | "unpublish" =
+        nextPublished == null ? "save" : nextPublished ? "publish" : "unpublish";
+      setRecentlySaved(next);
+      if (savedFlashTimer.current) clearTimeout(savedFlashTimer.current);
+      savedFlashTimer.current = setTimeout(() => setRecentlySaved(null), 1500);
       router.refresh();
     });
   }
@@ -332,6 +363,37 @@ function FlowEditorInner({
           />
           {canWrite && (
             <>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={pending || nodes.length === 0}
+                    title="Re-run auto-layout to space nodes evenly"
+                  >
+                    <Wand2 className="mr-2 h-3.5 w-3.5" />
+                    Beautify
+                    <ChevronDown className="ml-1 h-3 w-3 opacity-70" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuItem onSelect={() => beautify("horizontal")}>
+                    <ArrowRight className="mr-2 h-3.5 w-3.5" />
+                    <span className="flex-1">Horizontal</span>
+                    <span className="text-[10px] text-muted-foreground">left → right</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => beautify("vertical")}>
+                    <ArrowDown className="mr-2 h-3.5 w-3.5" />
+                    <span className="flex-1">Vertical</span>
+                    <span className="text-[10px] text-muted-foreground">top → bottom</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => beautify("box")}>
+                    <LayoutGrid className="mr-2 h-3.5 w-3.5" />
+                    <span className="flex-1">Fit to screen</span>
+                    <span className="text-[10px] text-muted-foreground">box grid</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
               <GenerateFlowDialog
                 projectId={projectId}
                 providers={providers}
@@ -344,18 +406,47 @@ function FlowEditorInner({
                 onClick={() => persist(!isPublished)}
                 disabled={pending || dirty}
                 title={dirty ? "Save first to publish" : undefined}
+                className={
+                  recentlySaved === "publish" || recentlySaved === "unpublish"
+                    ? "border-green-500 bg-green-500/10 text-green-700 dark:text-green-300"
+                    : undefined
+                }
               >
                 <Upload className="mr-2 h-3.5 w-3.5" />
-                {isPublished ? "Unpublish" : "Publish"}
+                {recentlySaved === "publish"
+                  ? "Published ✓"
+                  : recentlySaved === "unpublish"
+                    ? "Unpublished ✓"
+                    : isPublished
+                      ? "Unpublish"
+                      : "Publish"}
               </Button>
-              <Button size="sm" onClick={() => persist()} disabled={pending}>
+              <Button
+                size="sm"
+                onClick={() => persist()}
+                disabled={pending}
+                className={
+                  recentlySaved === "save"
+                    ? "bg-green-600 text-white hover:bg-green-600/90"
+                    : undefined
+                }
+              >
                 <Save className="mr-2 h-3.5 w-3.5" />
-                {pending ? "Saving…" : "Save"}
+                {pending
+                  ? "Saving…"
+                  : recentlySaved === "save"
+                    ? "Saved ✓"
+                    : "Save"}
               </Button>
             </>
           )}
         </div>
       </div>
+      {saveError && (
+        <p className="whitespace-pre-wrap break-words border-b border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {saveError}
+        </p>
+      )}
 
       {/* Body: palette / canvas / inspector */}
       <div className="flex min-h-0 flex-1">

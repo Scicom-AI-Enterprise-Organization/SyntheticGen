@@ -15,6 +15,7 @@ interface Tool {
   version: number;
   localePresets: string[];
   parameters: unknown;
+  examples: Record<string, unknown>[] | null;
 }
 
 export function ToolsTable({
@@ -57,6 +58,7 @@ export function ToolsTable({
         } catch {
           preview = String(t.parameters);
         }
+        const examples = Array.isArray(t.examples) ? t.examples : [];
         return (
           <div key={t.id} className="rounded-md border border-border bg-card p-3 text-sm">
             <div className="flex items-start justify-between gap-2">
@@ -71,6 +73,9 @@ export function ToolsTable({
                       {p}
                     </Badge>
                   ))}
+                  <Badge variant="outline" className="text-[10px]">
+                    {examples.length} example{examples.length === 1 ? "" : "s"}
+                  </Badge>
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">{t.description}</div>
               </div>
@@ -86,9 +91,48 @@ export function ToolsTable({
                 </Button>
               )}
             </div>
-            <details className="mt-2">
+            <details className="mt-3">
               <summary className="cursor-pointer text-xs text-muted-foreground">
-                parameters
+                Synthetic examples ({examples.length})
+              </summary>
+              {examples.length === 0 ? (
+                <p className="mt-2 text-[11px] italic text-muted-foreground">
+                  None saved on this tool. Re-run <em>Fill with AI</em> in the form
+                  above with this tool&apos;s description — the worker now generates
+                  2–4 examples and self-verifies them against the JSON Schema.
+                </p>
+              ) : (
+                <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                  {examples.map((ex, i) => {
+                    let exText = "";
+                    try {
+                      exText = JSON.stringify(ex, null, 2);
+                    } catch {
+                      exText = String(ex);
+                    }
+                    return (
+                      <div
+                        key={i}
+                        className="rounded-md border border-border/70 bg-muted/30 p-2"
+                      >
+                        <div className="mb-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+                          <Badge variant="outline" className="text-[10px]">
+                            example {i + 1}
+                          </Badge>
+                          <span>{Object.keys(ex).length} arg(s)</span>
+                        </div>
+                        <pre className="overflow-x-auto font-mono text-[11px] leading-snug">
+                          {exText}
+                        </pre>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </details>
+            <details className="mt-3">
+              <summary className="cursor-pointer text-xs text-muted-foreground">
+                parameters (JSON Schema)
               </summary>
               <pre className="mt-1 overflow-x-auto rounded-md bg-muted/40 p-2 text-[11px] leading-snug">
                 {preview}

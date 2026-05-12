@@ -9,8 +9,8 @@ export const runtime = "nodejs";
 const bodySchema = z.object({
   providerId: z.string(),
   description: z.string().min(3).max(2000),
-  extraContext: z.string().max(16000).optional().nullable(),
-  maxTokens: z.number().int().min(64).max(8000).optional().nullable(),
+  extraContext: z.string().max(100_000).optional().nullable(),
+  maxTokens: z.number().int().min(64).max(64000).optional().nullable(),
 });
 
 export async function POST(

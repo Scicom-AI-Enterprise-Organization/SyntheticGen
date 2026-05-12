@@ -16,13 +16,14 @@ const startRunSchema = z.object({
   languageProfileId: z.string(),
   providerCredentialId: z.string(),
   model: z.string().min(1),
-  taxonomyNodeIds: z.array(z.string()).min(1),
+  taxonomyNodeIds: z.array(z.string()),
   personaIds: z.array(z.string()).min(1),
   difficulties: z.array(z.string()).min(1),
   rowsPerCell: z.number().int().min(1).max(200),
   turns: z.number().int().min(1).max(20).default(1),
   relatedTopics: z.number().int().min(0).max(6).default(0),
   toolIds: z.array(z.string()).default([]),
+  flowIds: z.array(z.string()).default([]),
   formalityPolicy: z.enum(["inherit", "formal", "semi-formal", "colloquial", "mixed"]).default("inherit"),
   temperature: z.number().min(0).max(2).default(0.7),
   topP: z.number().min(0).max(1).default(1.0),
@@ -38,8 +39,14 @@ export async function createAndStartRun(input: z.infer<typeof startRunSchema>) {
   const data = parsed.data;
   const { user } = await requireProjectPermission(data.projectId, "runs.execute");
 
+  const flowMode = data.flowIds.length > 0;
+  if (!flowMode && data.taxonomyNodeIds.length === 0) {
+    return { error: "Pick at least one taxonomy node, or one flow." };
+  }
+
+  const primaryAxis = flowMode ? data.flowIds.length : data.taxonomyNodeIds.length;
   const totalCells =
-    data.taxonomyNodeIds.length * data.personaIds.length * data.difficulties.length * data.rowsPerCell;
+    primaryAxis * data.personaIds.length * data.difficulties.length * data.rowsPerCell;
   if (totalCells > 1000) {
     return { error: `Slice 1 caps runs at 1000 cells (this would create ${totalCells}).` };
   }
@@ -70,6 +77,7 @@ export async function createAndStartRun(input: z.infer<typeof startRunSchema>) {
     grid: gridSpec,
     formalityPolicy: data.formalityPolicy,
     toolIds: data.toolIds,
+    flowIds: data.flowIds,
     validation: { judgeSampleRate: 0 }, // slice 1: no judge
   };
 
@@ -99,24 +107,25 @@ export async function createAndStartRun(input: z.infer<typeof startRunSchema>) {
   });
 
   // Materialize the grid into GenerationJob rows in batched insertMany.
+  // The primary axis is taxonomy nodes by default, or flows when the run
+  // is in flow mode (the flow owns its own topic / tool wiring).
   const jobs: Array<{
     runId: string;
     cellKey: string;
     inputContext: object;
   }> = [];
-  for (const nodeId of data.taxonomyNodeIds) {
+  const primaryIds = flowMode ? data.flowIds : data.taxonomyNodeIds;
+  const primaryKey = flowMode ? "f" : "t";
+  for (const primaryId of primaryIds) {
     for (const personaId of data.personaIds) {
       for (const difficulty of data.difficulties) {
         for (let idx = 0; idx < data.rowsPerCell; idx++) {
           jobs.push({
             runId: run.id,
-            cellKey: `t:${nodeId}|p:${personaId}|d:${difficulty}|i:${idx}`,
-            inputContext: {
-              taxonomyNodeId: nodeId,
-              personaId,
-              difficulty,
-              idx,
-            },
+            cellKey: `${primaryKey}:${primaryId}|p:${personaId}|d:${difficulty}|i:${idx}`,
+            inputContext: flowMode
+              ? { flowId: primaryId, personaId, difficulty, idx }
+              : { taxonomyNodeId: primaryId, personaId, difficulty, idx },
           });
         }
       }
