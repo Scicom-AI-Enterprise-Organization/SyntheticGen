@@ -60,7 +60,7 @@ export default async function BenchmarkDetailPage({
       : null;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="space-y-6">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="mb-1 flex items-center gap-2 text-xs text-muted-foreground">

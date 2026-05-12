@@ -70,7 +70,7 @@ export default async function BenchmarkRunPage({
   }));
 
   return (
-    <div className="mx-auto max-w-6xl space-y-6">
+    <div className="space-y-6">
       <div>
         <Link
           href={`/projects/${projectId}/benchmarks/${benchmarkId}`}

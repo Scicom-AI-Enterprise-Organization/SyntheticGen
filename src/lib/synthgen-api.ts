@@ -37,6 +37,10 @@ export async function buildExport(exportId: string): Promise<{ ok: boolean }> {
   return call(`/internal/exports/${exportId}/build`, { method: "POST" });
 }
 
+export async function executeJob(jobId: string): Promise<{ ok: boolean }> {
+  return call(`/internal/jobs/${jobId}/execute`, { method: "POST" });
+}
+
 export type AiAssistKind =
   | "persona"
   | "taxonomy-node"

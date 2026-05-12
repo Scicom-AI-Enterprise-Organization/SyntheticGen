@@ -464,6 +464,12 @@ export function RunWizard({
                 Conversation is still tagged with the primary node only.{" "}
                 <code>0</code> = strictly single-topic.
               </p>
+              <p className="text-xs text-muted-foreground">
+                <strong>Tip:</strong> this doesn't replace primaries — the grid
+                still iterates every selected taxonomy node. Keep more primaries
+                for a wider tag distribution; drop a few and bump this for more
+                cross-topic conversations on fewer tags.
+              </p>
             </div>
           </div>
 
@@ -609,23 +615,33 @@ export function RunWizard({
       </Tabs>
 
       <div className="rounded-md border border-border bg-muted/30 p-3 text-sm">
-        <span className="font-semibold">Total cells:</span>{" "}
-        <span className="font-mono">
-          {flowMode ? (
-            <>
-              <span title="flows">{flowIds.length}</span>
-            </>
-          ) : (
-            <span title="taxonomy nodes">{nodeIds.length}</span>
-          )}{" "}
-          × {personaIds.length} × {difficulties.length} × {rowsPerCell} ={" "}
-          <span className="font-bold">{totalCells}</span>
-        </span>
-        <span className="ml-2 text-xs text-muted-foreground">
-          ({flowMode ? "flows" : "nodes"} × personas × difficulties × rows)
-        </span>
-        {totalCells > 1000 && (
-          <span className="ml-3 text-amber-600">⚠ exceeds 1000-cell slice 1 cap</span>
+        <div>
+          <span className="font-semibold">Total cells:</span>{" "}
+          <span className="font-mono">
+            {flowMode ? (
+              <>
+                <span title="flows">{flowIds.length}</span>
+              </>
+            ) : (
+              <span title="taxonomy nodes">{nodeIds.length}</span>
+            )}{" "}
+            × {personaIds.length} × {difficulties.length} × {rowsPerCell} ={" "}
+            <span className="font-bold">{totalCells}</span>
+          </span>
+          <span className="ml-2 text-xs text-muted-foreground">
+            ({flowMode ? "flows" : "nodes"} × personas × difficulties × rows)
+          </span>
+          {totalCells > 1000 && (
+            <span className="ml-3 text-amber-600">⚠ exceeds 1000-cell slice 1 cap</span>
+          )}
+        </div>
+        {!flowMode && relatedTopics > 0 && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Related topics ({relatedTopics}) only enrich each conversation's
+            context — they don't change the cell count. Each of the{" "}
+            <span className="font-mono">{totalCells}</span> conversations is
+            still tagged with one primary node.
+          </p>
         )}
       </div>
 

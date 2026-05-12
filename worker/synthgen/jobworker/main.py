@@ -70,9 +70,12 @@ async def _mark_run_started(run_id: str) -> None:
 
 
 async def _maybe_complete_run(run_id: str) -> None:
+    # Include 'queued' too — regenerate sets job rows to queued and the fire-
+    # and-forget path bypasses the poller, so without this we'd prematurely
+    # mark a run completed while queued jobs are still waiting to fire.
     pending = await db.fetch_one(
         """SELECT COUNT(*)::int AS n FROM "GenerationJob"
-           WHERE "runId" = $1 AND status IN ('pending', 'running')""",
+           WHERE "runId" = $1 AND status IN ('pending', 'queued', 'running')""",
         run_id,
     )
     if pending and pending["n"] == 0:

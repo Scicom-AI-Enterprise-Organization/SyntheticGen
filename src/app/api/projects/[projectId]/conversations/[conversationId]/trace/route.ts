@@ -103,6 +103,7 @@ export async function GET(
       turnCount: conv.turnCount,
       tokenCount: conv.tokenCount,
       dedupHash: conv.dedupHash,
+      settingsSnapshot: conv.settingsSnapshot,
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
     },

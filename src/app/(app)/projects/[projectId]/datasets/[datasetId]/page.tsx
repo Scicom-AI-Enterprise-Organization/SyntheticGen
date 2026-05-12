@@ -51,7 +51,7 @@ export default async function DatasetDetailPage({
   });
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">{dataset.name}</h1>
         {dataset.description && (

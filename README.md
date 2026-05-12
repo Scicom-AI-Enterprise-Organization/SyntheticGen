@@ -288,7 +288,7 @@ For dev mode with hot-reload, skip `app` and run `npm run dev` on the host
 while leaving `db` / `synthgen-api` / `synthgen-worker` in compose:
 
 ```bash
-docker compose up -d db synthgen-api synthgen-worker
+docker compose up --build -d db synthgen-api synthgen-worker
 npm run db:migrate && npm run db:seed && rm -rf .next && npm run dev
 ```
 

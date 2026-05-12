@@ -56,12 +56,12 @@ const PROJECT_NAV: { label: string; segment: string; icon: LucideIcon }[] = [
   { label: "Knowledge", segment: "knowledge", icon: BookOpen },
   { label: "Flows", segment: "flows", icon: GitBranch },
   { label: "Tools", segment: "tools", icon: Wrench },
-  { label: "Providers", segment: "providers", icon: KeySquare },
   { label: "Runs", segment: "runs", icon: Play },
   { label: "Conversations", segment: "conversations", icon: MessagesSquare },
   { label: "Datasets", segment: "datasets", icon: Database },
   { label: "Benchmarks", segment: "benchmarks", icon: FlaskConical },
   { label: "Rubrics", segment: "rubrics", icon: Gauge },
+  { label: "Providers", segment: "providers", icon: KeySquare },
   { label: "Settings", segment: "settings", icon: Settings },
 ];
 

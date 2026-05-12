@@ -2,7 +2,6 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { toast } from "sonner";
 import { XCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -27,7 +26,6 @@ export function CancelRunButton({ projectId, runId }: { projectId: string; runId
         if (!ok) return;
         start(async () => {
           await cancelRunAction(projectId, runId);
-          toast.success("Run cancelled");
           router.refresh();
         });
       }}

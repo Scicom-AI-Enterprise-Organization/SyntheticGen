@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { ArrowDown, ArrowUp, ArrowUpDown, ChevronLeft, ChevronRight, Eye, Trash2, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -15,7 +16,7 @@ import {
 } from "@/components/ui/select";
 import { useConfirm } from "@/components/confirm-dialog";
 import { ConversationDrawer } from "./conversation-drawer";
-import { deleteConversation } from "./actions";
+import { deleteConversation, deleteConversations } from "./actions";
 
 interface Row {
   id: string;
@@ -87,6 +88,66 @@ export function ConversationsTable({
   const confirm = useConfirm();
   const [deleting, startDelete] = useTransition();
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  // Bulk-selection. Lives client-side only; cleared when the page changes
+  // (a fresh list of rows means stale ids would silently no-op anyway).
+  const [selected, setSelected] = useState<Set<string>>(() => new Set());
+  const [bulkErrors, setBulkErrors] = useState<Array<{ id: string; error: string }>>([]);
+
+  // Drop selections that aren't on the current page (e.g. after pagination /
+  // filter change). Cheap O(n) over the visible rows.
+  const visibleIds = new Set(conversations.map((c) => c.id));
+  const selectedOnPage = Array.from(selected).filter((id) => visibleIds.has(id));
+  const allOnPageChecked =
+    conversations.length > 0 && selectedOnPage.length === conversations.length;
+  const someOnPageChecked = selectedOnPage.length > 0 && !allOnPageChecked;
+
+  function toggleRow(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+  function togglePage(checked: boolean) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (checked) for (const c of conversations) next.add(c.id);
+      else for (const c of conversations) next.delete(c.id);
+      return next;
+    });
+  }
+  function clearSelection() {
+    setSelected(new Set());
+    setBulkErrors([]);
+  }
+
+  async function onBulkDelete() {
+    const ids = Array.from(selected);
+    if (ids.length === 0) return;
+    const ok = await confirm({
+      title: `Delete ${ids.length} conversation${ids.length === 1 ? "" : "s"}?`,
+      body: `Each conversation's messages, reasoning, validations and JobEvent timeline are removed permanently. Any that are part of a frozen dataset version will be skipped.`,
+      destructive: true,
+    });
+    if (!ok) return;
+    setDeleteError(null);
+    setBulkErrors([]);
+    // Close the drawer if we're deleting the focused row.
+    if (focusId && selected.has(focusId)) setParams({ focus: null });
+    startDelete(async () => {
+      const res = await deleteConversations(projectId, ids);
+      setBulkErrors(res.errors);
+      // Drop the ones that succeeded from the local selection set.
+      const failedIds = new Set(res.errors.map((e) => e.id));
+      setSelected((prev) => {
+        const next = new Set<string>();
+        for (const id of prev) if (failedIds.has(id)) next.add(id);
+        return next;
+      });
+      router.refresh();
+    });
+  }
 
   async function onDelete(c: Row) {
     const ok = await confirm({
@@ -222,6 +283,60 @@ export function ConversationsTable({
         </p>
       )}
 
+      {canDelete && selected.size > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs">
+          <span>
+            <span className="font-semibold">{selected.size}</span> selected
+            {selectedOnPage.length !== selected.size && (
+              <span className="ml-2 text-muted-foreground">
+                ({selectedOnPage.length} on this page)
+              </span>
+            )}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              onClick={clearSelection}
+              disabled={deleting}
+            >
+              Clear
+            </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="destructive"
+              onClick={onBulkDelete}
+              disabled={deleting}
+            >
+              <Trash2 className="mr-1 h-3 w-3" />
+              {deleting ? "Deleting…" : `Delete ${selected.size}`}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {bulkErrors.length > 0 && (
+        <div className="space-y-1 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+          <div className="font-semibold">
+            {bulkErrors.length} could not be deleted:
+          </div>
+          <ul className="ml-4 list-disc space-y-0.5">
+            {bulkErrors.slice(0, 10).map((e) => (
+              <li key={e.id} className="break-words">
+                <span className="font-mono">{e.id.slice(0, 8)}…</span> — {e.error}
+              </li>
+            ))}
+            {bulkErrors.length > 10 && (
+              <li className="text-muted-foreground">
+                …and {bulkErrors.length - 10} more
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+
       {/* Table */}
       {conversations.length === 0 ? (
         <p className="text-sm text-muted-foreground">No conversations match the current filters.</p>
@@ -230,9 +345,24 @@ export function ConversationsTable({
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-border text-left text-muted-foreground">
+                {canDelete && (
+                  <th className="w-8 py-2 pr-2">
+                    <Checkbox
+                      aria-label="Select all on this page"
+                      checked={
+                        allOnPageChecked
+                          ? true
+                          : someOnPageChecked
+                            ? "indeterminate"
+                            : false
+                      }
+                      onCheckedChange={(v) => togglePage(v === true)}
+                    />
+                  </th>
+                )}
                 <th className="py-2 pr-4 font-medium">
                   <SortHeader
-                    label="When"
+                    label="Created"
                     field="createdAt"
                     activeSort={sort}
                     activeDir={dir}
@@ -267,6 +397,15 @@ export function ConversationsTable({
             <tbody>
               {conversations.map((c) => (
                 <tr key={c.id} className="border-b border-border/50 align-top">
+                  {canDelete && (
+                    <td className="w-8 py-3 pr-2">
+                      <Checkbox
+                        aria-label={`Select conversation ${c.id}`}
+                        checked={selected.has(c.id)}
+                        onCheckedChange={() => toggleRow(c.id)}
+                      />
+                    </td>
+                  )}
                   <td className="py-3 pr-4 text-xs text-muted-foreground">
                     {new Date(c.createdAt).toLocaleString()}
                   </td>

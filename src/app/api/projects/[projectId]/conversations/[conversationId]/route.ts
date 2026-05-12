@@ -24,8 +24,26 @@ export async function GET(
     include: {
       messages: { orderBy: { ordinal: "asc" } },
       validations: { orderBy: { createdAt: "asc" } },
-      persona: { select: { name: true } },
-      taxonomyNode: { select: { name: true } },
+      persona: { select: { id: true, name: true } },
+      taxonomyNode: { select: { id: true, name: true, path: true } },
+      // For the Settings panel fallback when settingsSnapshot is null (older
+      // conversations, or new ones produced by a worker that hasn't picked up
+      // the snapshot-writing code yet).
+      run: {
+        select: {
+          id: true,
+          name: true,
+          model: true,
+          samplingParams: true,
+          formalityPolicy: true,
+          configSnapshot: true,
+          providerCredential: { select: { id: true, name: true, kind: true } },
+          template: { select: { id: true, name: true, kind: true } },
+          languageProfile: {
+            select: { id: true, name: true, primary: true, register: true },
+          },
+        },
+      },
     },
   });
 
@@ -44,6 +62,22 @@ export async function GET(
       difficulty: c.difficulty,
       persona: c.persona?.name ?? null,
       topic: c.taxonomyNode?.name ?? null,
+      settingsSnapshot: c.settingsSnapshot ?? null,
+      run: c.run
+        ? {
+            id: c.run.id,
+            name: c.run.name,
+            model: c.run.model,
+            samplingParams: c.run.samplingParams,
+            formalityPolicy: c.run.formalityPolicy,
+            configSnapshot: c.run.configSnapshot,
+            provider: c.run.providerCredential,
+            template: c.run.template,
+            languageProfile: c.run.languageProfile,
+          }
+        : null,
+      personaInfo: c.persona,
+      taxonomyNode: c.taxonomyNode,
       messages: c.messages.map((m) => ({
         id: m.id,
         role: m.role,

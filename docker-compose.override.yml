@@ -1,0 +1,33 @@
+# docker-compose.override.yml — applied automatically on top of docker-compose.yml.
+#
+# Purpose: faster Python dev loop. Bind-mounts ./worker over /worker so edits
+# on the host show up live inside the synthgen-api / synthgen-worker
+# containers, then runs each service through an auto-reloader:
+#   - synthgen-api uses `uvicorn --reload --reload-dir /worker/synthgen`.
+#   - synthgen-worker uses the `watchfiles` CLI (bundled with uvicorn[standard])
+#     to restart `python -m synthgen.jobworker.main` whenever a .py file under
+#     /worker/synthgen changes.
+#
+# Production deployments should disable this override (e.g. set
+# COMPOSE_FILE=docker-compose.yml) so the source is COPYed into the image and
+# the containers don't depend on the host filesystem.
+
+services:
+  synthgen-api:
+    volumes:
+      - ./worker:/worker
+      - exports:/data/exports
+    command: >-
+      uvicorn synthgen.api.main:app
+      --host 0.0.0.0 --port 8000
+      --reload --reload-dir /worker/synthgen
+
+  synthgen-worker:
+    volumes:
+      - ./worker:/worker
+      - exports:/data/exports
+    command: >-
+      watchfiles
+      --filter python
+      "python -m synthgen.jobworker.main"
+      /worker/synthgen

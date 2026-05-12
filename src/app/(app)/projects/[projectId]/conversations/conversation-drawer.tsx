@@ -36,6 +36,13 @@ interface DrawerData {
   difficulty: string | null;
   persona: string | null;
   topic: string | null;
+  // Frozen at conversation-persist time — survives later run edits/cancellations.
+  settingsSnapshot: Record<string, unknown> | null;
+  // Fallback data for the Settings panel when settingsSnapshot is null (older
+  // conversations created before the snapshot column existed).
+  run: Record<string, unknown> | null;
+  personaInfo: Record<string, unknown> | null;
+  taxonomyNode: Record<string, unknown> | null;
   messages: Message[];
   validations: Validation[];
 }
@@ -246,6 +253,14 @@ export function ConversationDrawer({
                 </TabsList>
 
                 <TabsContent value="messages" className="space-y-4">
+                  <SettingsPanel
+                    settings={data.settingsSnapshot}
+                    fallbackRun={data.run}
+                    fallbackPersona={data.personaInfo}
+                    fallbackTaxonomy={data.taxonomyNode}
+                    fallbackConv={data as unknown as TraceDoc}
+                  />
+
                   <section>
                     <h3 className="mb-2 text-xs font-semibold uppercase text-muted-foreground">
                       Validations
@@ -285,43 +300,60 @@ export function ConversationDrawer({
                       Messages
                     </h3>
                     <div className="space-y-2">
-                      {data.messages.map((m) => (
-                        <div
-                          key={m.id}
-                          className={cn(
-                            "rounded-md border p-2 text-xs",
-                            m.role === "system"
-                              ? "border-amber-500/30 bg-amber-500/5"
-                              : m.role === "user"
-                                ? "border-blue-500/30 bg-blue-500/5"
-                                : m.role === "assistant"
-                                  ? "border-emerald-500/30 bg-emerald-500/5"
-                                  : "border-border",
-                          )}
-                        >
-                          <div className="mb-1 flex items-center justify-between gap-2">
-                            <span className="font-mono uppercase">{m.role}</span>
-                            <span className="text-[10px] text-muted-foreground">
-                              {m.language ?? "—"}
-                              {m.tokenCount != null && ` · ${m.tokenCount} tok`}
-                              {m.model && ` · ${m.model}`}
-                            </span>
-                          </div>
-                          <pre className="overflow-x-auto whitespace-pre-wrap break-words font-sans text-xs leading-snug">
-                            {m.content ?? ""}
-                          </pre>
-                          {m.reasoningContent && (
-                            <details className="mt-2 rounded-md border border-border/70 bg-background/60">
-                              <summary className="cursor-pointer select-none px-2 py-1 text-[10px] font-medium text-muted-foreground">
-                                Reasoning ({m.reasoningContent.length} chars)
-                              </summary>
-                              <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words border-t border-border/60 px-2 py-2 font-mono text-[10px] italic text-muted-foreground">
-                                {m.reasoningContent}
-                              </pre>
-                            </details>
-                          )}
-                        </div>
-                      ))}
+                      {data.messages.map((m) => {
+                        const preview = (m.content ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+                        const charCount = (m.content ?? "").length;
+                        return (
+                          <details
+                            key={m.id}
+                            open={m.role !== "system"}
+                            className={cn(
+                              "group rounded-md border p-2 text-xs",
+                              m.role === "system"
+                                ? "border-amber-500/30 bg-amber-500/5"
+                                : m.role === "user"
+                                  ? "border-blue-500/30 bg-blue-500/5"
+                                  : m.role === "assistant"
+                                    ? "border-emerald-500/30 bg-emerald-500/5"
+                                    : "border-border",
+                            )}
+                          >
+                            <summary className="flex cursor-pointer select-none items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
+                              <span className="flex min-w-0 items-center gap-2">
+                                <span
+                                  aria-hidden
+                                  className="text-muted-foreground transition-transform group-open:rotate-90"
+                                >
+                                  ▸
+                                </span>
+                                <span className="font-mono uppercase">{m.role}</span>
+                                <span className="truncate text-muted-foreground group-open:hidden">
+                                  {preview || <em className="opacity-70">empty</em>}
+                                </span>
+                              </span>
+                              <span className="shrink-0 text-[10px] text-muted-foreground">
+                                {m.language ?? "—"}
+                                {m.tokenCount != null && ` · ${m.tokenCount} tok`}
+                                {charCount > 0 && ` · ${charCount} chars`}
+                                {m.model && ` · ${m.model}`}
+                              </span>
+                            </summary>
+                            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-sans text-xs leading-snug">
+                              {m.content ?? ""}
+                            </pre>
+                            {m.reasoningContent && (
+                              <details className="mt-2 rounded-md border border-border/70 bg-background/60">
+                                <summary className="cursor-pointer select-none px-2 py-1 text-[10px] font-medium text-muted-foreground">
+                                  Reasoning ({m.reasoningContent.length} chars)
+                                </summary>
+                                <pre className="max-h-60 overflow-auto whitespace-pre-wrap break-words border-t border-border/60 px-2 py-2 font-mono text-[10px] italic text-muted-foreground">
+                                  {m.reasoningContent}
+                                </pre>
+                              </details>
+                            )}
+                          </details>
+                        );
+                      })}
                     </div>
                   </section>
                 </TabsContent>
@@ -403,6 +435,14 @@ function TraceView({ trace }: { trace: TraceDoc }) {
           ]}
         />
       </Panel>
+
+      <SettingsPanel
+        settings={pick(conv, "settingsSnapshot")}
+        fallbackRun={run}
+        fallbackPersona={persona}
+        fallbackTaxonomy={taxonomyNode}
+        fallbackConv={conv}
+      />
 
       <Panel title="Run" subtitle={asString(run, "name")}>
         <KV
@@ -701,6 +741,136 @@ function formatOffset(ms: number): string {
   const m = Math.floor(ms / 60_000);
   const s = Math.floor((ms % 60_000) / 1000);
   return `${m}m${s}s`;
+}
+
+function SettingsPanel({
+  settings,
+  fallbackRun,
+  fallbackPersona,
+  fallbackTaxonomy,
+  fallbackConv,
+}: {
+  settings: TraceDoc | null;
+  fallbackRun?: TraceDoc | null;
+  fallbackPersona?: TraceDoc | null;
+  fallbackTaxonomy?: TraceDoc | null;
+  fallbackConv?: TraceDoc | null;
+}) {
+  // Frozen at conversation-persist time when available, otherwise derived from
+  // the run + persona + taxonomy already loaded for the trace (for older rows
+  // produced before the snapshot column existed).
+  let s: Record<string, unknown>;
+  let frozen = true;
+  if (settings && typeof settings === "object") {
+    s = settings as Record<string, unknown>;
+  } else if (fallbackRun) {
+    frozen = false;
+    const cfg = (pick(fallbackRun, "configSnapshot") ?? {}) as Record<string, unknown>;
+    const sp = (pick(fallbackRun, "samplingParams") ?? {}) as Record<string, unknown>;
+    const tmpl = (pick(fallbackRun, "template") ?? {}) as Record<string, unknown>;
+    const lp = (pick(fallbackRun, "languageProfile") ?? {}) as Record<string, unknown>;
+    const prov = (pick(fallbackRun, "provider") ?? {}) as Record<string, unknown>;
+    s = {
+      mode: "single-turn",
+      model: fallbackRun.model ?? null,
+      providerCredentialId: cfg.providerCredentialId ?? null,
+      providerName: prov.name ?? null,
+      templateId: tmpl.id ?? null,
+      templateName: tmpl.name ?? null,
+      languageProfileId: lp.id ?? null,
+      languageProfileName: lp.name ?? null,
+      formalityPolicy: fallbackRun.formalityPolicy ?? cfg.formalityPolicy ?? null,
+      register: lp.register ?? null,
+      samplingParams: sp,
+      toolIds: Array.isArray(cfg.toolIds) ? cfg.toolIds : [],
+      toolNames: [],
+      taxonomyNodeId: (fallbackTaxonomy as { id?: unknown })?.id ?? null,
+      taxonomyNodeName: (fallbackTaxonomy as { name?: unknown })?.name ?? null,
+      taxonomyNodePath: (fallbackTaxonomy as { path?: unknown })?.path ?? null,
+      personaId: (fallbackPersona as { id?: unknown })?.id ?? null,
+      personaName: (fallbackPersona as { name?: unknown })?.name ?? null,
+      difficulty: (fallbackConv as { difficulty?: unknown })?.difficulty ?? null,
+    };
+  } else {
+    return null;
+  }
+  const mode = typeof s.mode === "string" ? s.mode : null;
+  const sampling = (s.samplingParams as Record<string, unknown> | undefined) ?? {};
+  const toolNames = Array.isArray(s.toolNames) ? (s.toolNames as string[]) : [];
+  const toolsInvoked = Array.isArray(s.toolsInvoked)
+    ? (s.toolsInvoked as Array<{ name?: string; count?: number }>)
+    : [];
+
+  const rows: Array<[string, string | null]> = [
+    ["mode", mode],
+    ["model", val(s.model)],
+    ["provider", val(s.providerName)],
+    ["template", val(s.templateName)],
+    ["language profile", val(s.languageProfileName)],
+    ["persona", val(s.personaName)],
+    ["taxonomy", joinPair(val(s.taxonomyNodeName), val(s.taxonomyNodePath))],
+    ["difficulty", val(s.difficulty)],
+    ["formality", joinPair(val(s.formalityPolicy), val(s.register))],
+    ["flow", joinPair(val(s.flowName), s.flowVersion != null ? `v${s.flowVersion}` : null)],
+    [
+      "sampling",
+      [
+        sampling.temperature != null && `temp=${sampling.temperature}`,
+        sampling.top_p != null && `top_p=${sampling.top_p}`,
+        sampling.max_tokens != null && `max=${sampling.max_tokens}`,
+        sampling.seed != null && `seed=${sampling.seed}`,
+        sampling.turns != null && `turns=${sampling.turns}`,
+      ]
+        .filter(Boolean)
+        .join(" · ") || null,
+    ],
+  ];
+  return (
+    <Panel title={frozen ? "Settings (frozen at generation)" : "Settings (derived from run)"}>
+      <KV rows={rows} />
+      {toolNames.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-[10px] uppercase text-muted-foreground">
+            Tools available ({toolNames.length})
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {toolNames.map((n) => (
+              <code
+                key={n}
+                className="rounded border border-border/60 bg-muted/30 px-1 font-mono text-[10px]"
+              >
+                {n}
+              </code>
+            ))}
+          </div>
+        </div>
+      )}
+      {toolsInvoked.length > 0 && (
+        <div className="mt-2">
+          <div className="mb-1 text-[10px] uppercase text-muted-foreground">
+            Tools invoked ({toolsInvoked.length})
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {toolsInvoked.map((t, i) => (
+              <code
+                key={i}
+                className="rounded border border-emerald-500/40 bg-emerald-500/10 px-1 font-mono text-[10px] text-emerald-700 dark:text-emerald-300"
+              >
+                {t.name ?? "?"} {typeof t.count === "number" && t.count > 1 ? `×${t.count}` : ""}
+              </code>
+            ))}
+          </div>
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function val(v: unknown): string | null {
+  if (v === null || v === undefined) return null;
+  if (typeof v === "string") return v || null;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return null;
 }
 
 function Panel({

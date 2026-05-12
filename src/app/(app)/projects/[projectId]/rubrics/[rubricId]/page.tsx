@@ -42,7 +42,7 @@ export default async function RubricDetailPage({
   const axes = (Array.isArray(rubric.axes) ? rubric.axes : []) as unknown as RubricAxis[];
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="space-y-6">
       <div>
         <Link
           href={`/projects/${projectId}/rubrics`}

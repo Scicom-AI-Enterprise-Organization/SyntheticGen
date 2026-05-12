@@ -71,7 +71,7 @@ export default async function NewRunPage({
 
   if (missing.length > 0) {
     return (
-      <div className="mx-auto max-w-5xl space-y-6">
+      <div className="space-y-6">
         <h1 className="text-2xl font-bold tracking-tight">New run</h1>
         <Card>
           <CardHeader>
@@ -93,7 +93,7 @@ export default async function NewRunPage({
   }
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6">
+    <div className="space-y-6">
       <h1 className="text-2xl font-bold tracking-tight">New run</h1>
       <Card>
         <CardHeader>
