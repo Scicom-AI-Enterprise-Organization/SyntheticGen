@@ -22,7 +22,10 @@ export async function GET(
   }
 
   const encoder = new TextEncoder();
-  const ABORT_TIMEOUT_MS = 5 * 60 * 1000;
+  // Bumped from 5 to 60 minutes — runs (especially with Regenerate) routinely
+  // exceed 5 min, and a stale terminal stream means the page only refreshes
+  // when the user manually reloads.
+  const ABORT_TIMEOUT_MS = 60 * 60 * 1000;
   const POLL_INTERVAL_MS = 1500;
 
   const stream = new ReadableStream({
@@ -94,9 +97,11 @@ export async function GET(
             controller.enqueue(encoder.encode(`: heartbeat\n\n`));
           }
 
-          // Auto-close on terminal status or after timeout.
-          const terminal = ["completed", "failed", "cancelled"].includes(run.status);
-          if (terminal || Date.now() - startedAt > ABORT_TIMEOUT_MS) {
+          // Don't auto-close on terminal status — the run can flip back to
+          // `running` via Regenerate / Jumpstart, and a closed stream means
+          // the page only updates after a hard refresh. Only the absolute
+          // timeout (5 min) or an explicit client disconnect tears us down.
+          if (Date.now() - startedAt > ABORT_TIMEOUT_MS) {
             clearInterval(interval);
             controller.close();
           }

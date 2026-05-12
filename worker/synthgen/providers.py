@@ -57,6 +57,54 @@ def estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
     return (tokens_in * in_rate + tokens_out * out_rate) / 1_000_000
 
 
+# Fallback char→token ratio used only when the upstream provider fails to
+# return `usage.prompt_tokens` (some vLLM builds drop it from streamed
+# responses despite `stream_options.include_usage`). ~4 chars/token matches
+# the well-known OpenAI heuristic and is close enough for accounting; the
+# real `usage` is preferred whenever available.
+_CHARS_PER_TOKEN = 4
+
+
+def _estimate_tokens_from_text(text: str) -> int:
+    if not text:
+        return 0
+    return max(1, len(text) // _CHARS_PER_TOKEN)
+
+
+def estimate_prompt_tokens(
+    messages: list[dict[str, Any]],
+    tools: Optional[list[dict[str, Any]]] = None,
+) -> int:
+    """Char-based fallback for `usage.prompt_tokens` when the upstream omits it.
+
+    Sums message content (string or OpenAI multipart), tool_call name+args, and
+    the tool schema if `tools` was sent. Result is order-of-magnitude correct —
+    not a substitute for real tokenizer counts, but vastly better than the
+    accidental zero we used to persist.
+    """
+    total_chars = 0
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, str):
+            total_chars += len(c)
+        elif isinstance(c, list):
+            for part in c:
+                if isinstance(part, dict) and isinstance(part.get("text"), str):
+                    total_chars += len(part["text"])
+        for tc in m.get("tool_calls") or []:
+            fn = (tc or {}).get("function") or {}
+            total_chars += len(fn.get("name") or "")
+            total_chars += len(fn.get("arguments") or "")
+        if isinstance(m.get("name"), str):
+            total_chars += len(m["name"])
+    if tools:
+        try:
+            total_chars += len(json.dumps(tools, ensure_ascii=False))
+        except Exception:  # noqa: BLE001
+            pass
+    return max(1, total_chars // _CHARS_PER_TOKEN)
+
+
 def _apply_reasoning_controls(
     payload: dict[str, Any],
     reasoning_effort: Optional[str],
@@ -121,6 +169,11 @@ async def chat_completion(
         payload["seed"] = seed
     if tools:
         payload["tools"] = tools
+        # Explicit "auto" — OpenAI defaults to this when tools are present, but
+        # some OpenAI-compat servers (vLLM in particular) treat the absence as
+        # "do not invoke", which leaves the model refusing with "I don't have
+        # access" even though the catalog is in the request.
+        payload["tool_choice"] = "auto"
     _apply_reasoning_controls(payload, reasoning_effort, chat_template_kwargs)
 
     started = time.perf_counter()
@@ -141,6 +194,10 @@ async def chat_completion(
     usage = raw.get("usage") or {}
     tokens_in = int(usage.get("prompt_tokens") or 0)
     tokens_out = int(usage.get("completion_tokens") or 0)
+    if tokens_in == 0:
+        tokens_in = estimate_prompt_tokens(messages, tools)
+    if tokens_out == 0 and content:
+        tokens_out = _estimate_tokens_from_text(content)
     finish_reason = choice.get("finish_reason")
     cost = estimate_cost(model, tokens_in, tokens_out)
 
@@ -167,6 +224,15 @@ class StreamEvent:
     tokens_out: int = 0
     model: str = ""
     error: str = ""
+    # Set on the final `done` event when the upstream emitted tool_calls. Same
+    # shape as the non-streaming chat_completion path: list of
+    # {id, type, function: {name, arguments}} dicts, with arguments as a
+    # JSON-encoded string.
+    tool_calls: Optional[list[dict[str, Any]]] = None
+    # When tool_calls are streaming in (per-delta name/arguments fragments), we
+    # also surface a "delta.tool_call" marker so the UI can render progress
+    # like "[calling foo({a: 1, ...})]" even before [DONE] arrives.
+    tool_call_delta: Optional[dict[str, Any]] = None
 
 
 async def chat_completion_stream(
@@ -176,14 +242,22 @@ async def chat_completion_stream(
     model: str,
     messages: list[dict[str, Any]],
     temperature: float = 0.7,
+    top_p: float = 1.0,
     max_tokens: int | None = 1500,
+    seed: int | None = None,
+    tools: Optional[list[dict[str, Any]]] = None,
     extra_headers: Optional[dict[str, str]] = None,
     timeout: float = 180.0,
     reasoning_effort: Optional[str] = None,
     chat_template_kwargs: Optional[dict[str, Any]] = None,
 ) -> AsyncIterator[StreamEvent]:
-    """Stream OpenAI-compat chat completion deltas. Yields delta events, then a final
-    done event with `full_text` and usage stats."""
+    """Stream OpenAI-compat chat completion deltas, including tool_calls.
+
+    Yields content / reasoning deltas as they arrive, plus per-fragment
+    `tool_call_delta` events so the UI can show tool invocations in real time.
+    The final `done` event carries the full content, usage stats, and the
+    accumulated `tool_calls` list (or None if the model didn't call any).
+    """
     url = base_url.rstrip("/") + "/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -197,6 +271,7 @@ async def chat_completion_stream(
         "model": model,
         "messages": messages,
         "temperature": temperature,
+        "top_p": top_p,
         "stream": True,
         # Without this, vLLM / OpenAI omit `usage` from streamed responses and
         # we end up persisting tokensIn=0 / tokensOut=0 for every conversation.
@@ -204,12 +279,21 @@ async def chat_completion_stream(
     }
     if max_tokens is not None:
         payload["max_tokens"] = max_tokens
+    if seed is not None:
+        payload["seed"] = seed
+    if tools:
+        payload["tools"] = tools
     _apply_reasoning_controls(payload, reasoning_effort, chat_template_kwargs)
 
     full: list[str] = []
     tokens_in = 0
     tokens_out = 0
     upstream_model = model
+    # Accumulators for streamed tool_calls. OpenAI sends them as deltas keyed
+    # by `index` (a tool_call's position in the response). Each delta may
+    # contribute the id, name, or another chunk of `arguments`.
+    tc_acc: dict[int, dict[str, Any]] = {}
+
     async with httpx.AsyncClient(timeout=timeout) as client:
         async with client.stream("POST", url, json=payload, headers=headers) as resp:
             if resp.status_code >= 400:
@@ -247,14 +331,59 @@ async def chat_completion_stream(
                     if delta_text:
                         full.append(delta_text)
                         yield StreamEvent(delta=delta_text)
+                    # Streamed tool_calls: each entry has an `index` and may
+                    # contribute the id, function.name, or a chunk of
+                    # function.arguments. Accumulate per-index.
+                    streamed_calls = delta_obj.get("tool_calls") or []
+                    for tc in streamed_calls:
+                        if not isinstance(tc, dict):
+                            continue
+                        idx = int(tc.get("index", 0))
+                        slot = tc_acc.setdefault(
+                            idx,
+                            {"id": None, "type": "function", "function": {"name": "", "arguments": ""}},
+                        )
+                        if tc.get("id"):
+                            slot["id"] = tc["id"]
+                        if tc.get("type"):
+                            slot["type"] = tc["type"]
+                        fn = tc.get("function") or {}
+                        if fn.get("name"):
+                            slot["function"]["name"] = fn["name"]
+                        if fn.get("arguments"):
+                            slot["function"]["arguments"] += fn["arguments"]
+                        yield StreamEvent(tool_call_delta={
+                            "index": idx,
+                            "id": slot["id"],
+                            "name": slot["function"]["name"],
+                            "argumentsFragment": fn.get("arguments") or "",
+                        })
                 usage = event.get("usage")
                 if usage:
                     tokens_in = int(usage.get("prompt_tokens") or 0)
                     tokens_out = int(usage.get("completion_tokens") or 0)
+
+    final_tool_calls: Optional[list[dict[str, Any]]] = None
+    if tc_acc:
+        ordered = [tc_acc[k] for k in sorted(tc_acc.keys())]
+        # Drop any incomplete slots (no name).
+        final_tool_calls = [t for t in ordered if t["function"].get("name")] or None
+
+    final_text = "".join(full)
+    # Fallback when the upstream forgot to include `usage` despite
+    # stream_options.include_usage=True. Without this we persist 0 (or, after
+    # multi-turn rollup, the simulator's tiny 83-token prompt) instead of the
+    # real prompt size, which makes accounting numbers meaningless.
+    if tokens_in == 0:
+        tokens_in = estimate_prompt_tokens(messages, tools)
+    if tokens_out == 0 and final_text:
+        tokens_out = _estimate_tokens_from_text(final_text)
+
     yield StreamEvent(
         done=True,
-        full_text="".join(full),
+        full_text=final_text,
         tokens_in=tokens_in,
         tokens_out=tokens_out,
         model=upstream_model,
+        tool_calls=final_tool_calls,
     )

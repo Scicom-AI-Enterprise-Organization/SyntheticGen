@@ -2,7 +2,7 @@
 
 import { useCallback, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Plus } from "lucide-react";
+import { Plus, Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,7 +15,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { AiAssistButton } from "@/components/ai-assist-button";
-import { createTemplate } from "./actions";
+import { createTemplate, updateTemplate } from "./actions";
+
+type TemplateKind = "system" | "user-seed" | "judge" | "conversation-driver";
+
+interface InitialTemplate {
+  id: string;
+  name: string;
+  kind: TemplateKind;
+  description: string | null;
+  body: string;
+}
 
 interface Provider {
   id: string;
@@ -28,7 +38,6 @@ const DEFAULT_USER_SEED = `A realistic customer-support inquiry for a telco oper
 Persona: {{persona.name}} ({{persona.region}}, {{persona.urbanity}}).
 Topic: {{taxonomy.path}}.
 Language: {{language.primary}}.
-Difficulty: {{difficulty}}.
 
 Write a single customer message in the persona's voice and language. Do NOT
 include the operator's reply — just the customer's turn.`;
@@ -39,17 +48,22 @@ export function TemplateForm({
   taxonomyNodes,
   existingTemplates,
   languageProfiles,
+  initial,
+  onDone,
 }: {
   projectId: string;
   providers: Provider[];
   taxonomyNodes?: string[];
   existingTemplates?: string[];
   languageProfiles?: string[];
+  initial?: InitialTemplate;
+  onDone?: () => void;
 }) {
-  const [name, setName] = useState("");
-  const [kind, setKind] = useState<"system" | "user-seed" | "judge" | "conversation-driver">("user-seed");
-  const [description, setDescription] = useState("");
-  const [body, setBody] = useState(DEFAULT_USER_SEED);
+  const isEditing = Boolean(initial);
+  const [name, setName] = useState(initial?.name ?? "");
+  const [kind, setKind] = useState<TemplateKind>(initial?.kind ?? "user-seed");
+  const [description, setDescription] = useState(initial?.description ?? "");
+  const [body, setBody] = useState(initial?.body ?? DEFAULT_USER_SEED);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -85,15 +99,28 @@ export function TemplateForm({
     setError(null);
     setSuccess(null);
     start(async () => {
-      const res = await createTemplate({
-        projectId,
-        name,
-        kind,
-        description: description || null,
-        body,
-      });
+      const res = isEditing
+        ? await updateTemplate({
+            id: initial!.id,
+            projectId,
+            name,
+            kind,
+            description: description || null,
+            body,
+          })
+        : await createTemplate({
+            projectId,
+            name,
+            kind,
+            description: description || null,
+            body,
+          });
       if ("error" in res && res.error) {
         setError(res.error);
+      } else if (isEditing) {
+        const v = (res as { version?: number }).version;
+        setSuccess(`Saved${v != null ? ` · v${v}` : ""}.`);
+        onDone?.();
       } else {
         setSuccess(`Template “${name}” created.`);
         setName("");
@@ -115,7 +142,7 @@ export function TemplateForm({
           onOpenChange={setSuggestOpen}
           randomizePrompt={{
             description:
-              "Invent ONE concise prompt for an LLM to generate a PromptTemplate. Pick a kind (user-seed / system / judge / conversation-driver) and a domain (telco support, retail banking, hospital scheduling, government enquiries, e-commerce returns, etc.). Mention the formality register, primary language, code-switch behaviour if any, and which Mustache variables it should reference ({{persona.name}}, {{persona.region}}, {{persona.urbanity}}, {{taxonomy.path}}, {{language.primary}}, {{difficulty}}). ONE or TWO sentences — used as input to a downstream form-filling LLM.",
+              "Invent ONE concise prompt for an LLM to generate a PromptTemplate. Pick a kind (user-seed / system / judge / conversation-driver) and a domain (telco support, retail banking, hospital scheduling, government enquiries, e-commerce returns, etc.). Mention the formality register, primary language, code-switch behaviour if any, and which Mustache variables it should reference ({{persona.name}}, {{persona.region}}, {{persona.urbanity}}, {{taxonomy.path}}, {{language.primary}}). ONE or TWO sentences — used as input to a downstream form-filling LLM.",
             context: [
               taxonomyNodes && taxonomyNodes.length > 0
                 ? `Project taxonomy topics (pick one when relevant):\n${taxonomyNodes.map((t) => `- ${t}`).join("\n")}`
@@ -182,14 +209,24 @@ export function TemplateForm({
         <p className="text-xs text-muted-foreground">
           Mustache-style: <code>{"{{persona.name}}"}</code>, <code>{"{{persona.region}}"}</code>,{" "}
           <code>{"{{persona.urbanity}}"}</code>, <code>{"{{taxonomy.path}}"}</code>,{" "}
-          <code>{"{{language.primary}}"}</code>, <code>{"{{difficulty}}"}</code>.
+          <code>{"{{language.primary}}"}</code>.
         </p>
       </div>
 
       <div className="space-y-2">
         <Button type="submit" disabled={pending}>
-          <Plus className="mr-2 h-4 w-4" />
-          {pending ? "Creating…" : "Create template"}
+          {isEditing ? (
+            <Save className="mr-2 h-4 w-4" />
+          ) : (
+            <Plus className="mr-2 h-4 w-4" />
+          )}
+          {pending
+            ? isEditing
+              ? "Saving…"
+              : "Creating…"
+            : isEditing
+              ? "Save changes"
+              : "Create template"}
         </Button>
         {error && (
           <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">

@@ -17,11 +17,11 @@ import logging
 import random
 import re
 import time
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from . import db
 from .ids import cuid_like
-from .providers import chat_completion
+from .providers import chat_completion, chat_completion_stream
 from .validators import ValidatorContext, run_pipeline
 
 
@@ -219,13 +219,28 @@ async def _mock_tool_result(
     api_key: str,
     model: str,
     extra_headers: dict[str, Any] | None,
+    sampling_params: dict[str, Any] | None = None,
+    reasoning_effort: str | None = None,
+    chat_template_kwargs: dict[str, Any] | None = None,
+    on_delta: Callable[..., Awaitable[None]] | None = None,
 ) -> str:
     """Synthesize a realistic tool response. Order of preference:
         1. tool.mockSeed (deterministic).
         2. tool.mockResponseSchema (LLM fills in JSON conforming to schema).
         3. Fallback: ask the LLM to invent a plausible response given the tool
            description and args.
+        4. Final fallback: stub `{"status": "ok", ...}` keyed by tool name + args.
     Returns a JSON string suitable for use as a tool message `content`.
+
+    `sampling_params`, `reasoning_effort`, and `chat_template_kwargs` are passed
+    through verbatim from the calling run — same temperature, max_tokens, seed,
+    and reasoning controls the assistant uses. That way a Qwen3-thinking run
+    with max_tokens=21248 doesn't get throttled to 600 here.
+
+    When `on_delta` is provided we stream the underlying LLM call and forward
+    each content / reasoning fragment via the callback (signature: same as
+    generation._notify — `(text, reasoning=bool)`). That way the Live job
+    preview can show the synthetic backend's reasoning + JSON materializing.
     """
     if tool_def.get("mockSeed"):
         try:
@@ -233,6 +248,7 @@ async def _mock_tool_result(
         except Exception:  # noqa: BLE001
             pass
 
+    sp = sampling_params or {}
     schema = tool_def.get("mockResponseSchema")
     sys = (
         "You are a mock backend for a tool/function. Given the tool name, "
@@ -245,30 +261,121 @@ async def _mock_tool_result(
         f"Description: {tool_def.get('description') or ''}\n"
         f"Caller arguments (JSON): {args_text}\n"
         + (f"Response schema (JSON Schema): {json.dumps(schema, ensure_ascii=False)}\n" if schema else "")
-        + "Make the response Malaysia-locale-appropriate when relevant."
+        + "Make the response Malaysia-locale-appropriate when relevant. Always "
+        + "include realistic-looking values for any keys you invent — never "
+        + "return an empty object."
     )
     try:
-        r = await chat_completion(
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-            messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
-            temperature=0.3,
-            max_tokens=600,
-            extra_headers=extra_headers,
-        )
-        text = (r.content or "").strip()
+        if on_delta is not None:
+            # Stream + collect so the user sees the synthetic backend "think"
+            # in the Live job preview. Same loop the assistant uses.
+            content_parts: list[str] = []
+            async for ev in chat_completion_stream(
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+                temperature=float(sp.get("temperature", 0.3)),
+                top_p=float(sp.get("top_p", 1.0)),
+                max_tokens=int(sp.get("max_tokens") or 4000),
+                seed=sp.get("seed"),
+                extra_headers=extra_headers,
+                reasoning_effort=reasoning_effort,
+                chat_template_kwargs=chat_template_kwargs,
+            ):
+                if ev.done:
+                    break
+                if ev.delta:
+                    if not ev.reasoning:
+                        content_parts.append(ev.delta)
+                    await on_delta(ev.delta, reasoning=ev.reasoning)
+            text = "".join(content_parts).strip()
+        else:
+            r = await chat_completion(
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+                temperature=float(sp.get("temperature", 0.3)),
+                top_p=float(sp.get("top_p", 1.0)),
+                max_tokens=int(sp.get("max_tokens") or 4000),
+                seed=sp.get("seed"),
+                extra_headers=extra_headers,
+                reasoning_effort=reasoning_effort,
+                chat_template_kwargs=chat_template_kwargs,
+            )
+            text = (r.content or "").strip()
         # Strip code fences if present.
         text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
-        # Sanity-check it parses; if not, wrap as {"raw": ...}.
-        try:
-            json.loads(text)
-            return text
-        except Exception:  # noqa: BLE001
-            return json.dumps({"raw": text}, ensure_ascii=False)
+        if text:
+            try:
+                json.loads(text)
+                return text
+            except Exception:  # noqa: BLE001
+                # Try to extract the first balanced {...} from prose.
+                first = text.find("{")
+                last = text.rfind("}")
+                if first >= 0 and last > first:
+                    candidate = text[first : last + 1]
+                    try:
+                        json.loads(candidate)
+                        return candidate
+                    except Exception:  # noqa: BLE001
+                        pass
+                return json.dumps({"raw": text}, ensure_ascii=False)
     except Exception as e:  # noqa: BLE001
         log.warning("mock tool result failed for %s: %s", tool_def.get("name"), e)
-        return json.dumps({"status": "ok", "note": "stub response"}, ensure_ascii=False)
+
+    # Final fallback: synthesize a plausible-looking stub from the tool's
+    # mockResponseSchema (when present) OR a generic ok payload echoing the
+    # arguments. Better than `{"raw": ""}` which makes the assistant refuse.
+    log.warning(
+        "mock tool result empty for %s — falling back to schema-derived stub",
+        tool_def.get("name"),
+    )
+    try:
+        args = json.loads(args_text) if isinstance(args_text, str) else (args_text or {})
+    except Exception:  # noqa: BLE001
+        args = {}
+    return json.dumps(
+        _synthesize_stub_response(tool_def, args),
+        ensure_ascii=False,
+    )
+
+
+def _synthesize_stub_response(
+    tool_def: dict[str, Any], args: dict[str, Any]
+) -> dict[str, Any]:
+    """Build a deterministic stub response from the tool's mockResponseSchema
+    properties (filling with type-appropriate placeholders) OR — when there's
+    no schema — a generic `{status: ok, ...}` that echoes the call args. The
+    goal is to keep the conversation flowing rather than handing the assistant
+    an empty blob it will refuse to act on."""
+    schema = tool_def.get("mockResponseSchema") or {}
+    out: dict[str, Any] = {
+        "status": "ok",
+        "tool": tool_def.get("name"),
+        "request": args,
+    }
+    props = schema.get("properties") if isinstance(schema, dict) else None
+    if isinstance(props, dict):
+        for name, pschema in props.items():
+            if name in out or not isinstance(pschema, dict):
+                continue
+            ptype = pschema.get("type")
+            if isinstance(pschema.get("enum"), list) and pschema["enum"]:
+                out[name] = pschema["enum"][0]
+            elif ptype == "string":
+                out[name] = pschema.get("description") or "ok"
+            elif ptype in ("number", "integer"):
+                out[name] = pschema.get("minimum") if isinstance(pschema.get("minimum"), (int, float)) else 0
+            elif ptype == "boolean":
+                out[name] = True
+            elif ptype == "array":
+                out[name] = []
+            elif ptype == "object":
+                out[name] = {}
+    return out
 
 
 async def _run_action(
@@ -344,6 +451,12 @@ async def _run_action(
                         api_key=api_key,
                         model=model,
                         extra_headers=extra_headers,
+                        sampling_params={
+                            "temperature": temperature,
+                            "max_tokens": max_tokens,
+                        },
+                        reasoning_effort=reasoning_effort,
+                        chat_template_kwargs=chat_template_kwargs,
                     )
                 messages.append({
                     "role": "tool",
@@ -868,8 +981,13 @@ async def execute_flow_job(
             for m in messages:
                 role = m.get("role")
                 content = m.get("content") or ""
-                tool_calls_json = (
-                    json.dumps(m["tool_calls"], ensure_ascii=False)
+                # Pass the Python list directly — the asyncpg jsonb codec
+                # already json.dumps() encodes it. Pre-stringifying here causes
+                # the column to hold `"[{…}]"` (a JSON string of a JSON
+                # string) instead of `[{…}]`, which then renders as a string
+                # in the UI.
+                tool_calls_obj = (
+                    m.get("tool_calls")
                     if role == "assistant" and m.get("tool_calls")
                     else None
                 )
@@ -886,7 +1004,7 @@ async def execute_flow_job(
                     ordinal,
                     role,
                     content,
-                    tool_calls_json,
+                    tool_calls_obj,
                     tool_call_id,
                     primary_lang if role == "assistant" else None,
                     lp.get("script") or "latin" if role == "assistant" else None,

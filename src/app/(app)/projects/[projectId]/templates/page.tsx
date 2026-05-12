@@ -47,8 +47,8 @@ export default async function TemplatesPage({
         <h1 className="text-2xl font-bold tracking-tight">Prompt templates</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Mustache-style templates with variables: <code>{"{{persona.name}}"}</code>,{" "}
-          <code>{"{{taxonomy.path}}"}</code>, <code>{"{{language.primary}}"}</code>,{" "}
-          <code>{"{{difficulty}}"}</code>. The runtime style guide for formality is auto-prepended.
+          <code>{"{{taxonomy.path}}"}</code>, <code>{"{{language.primary}}"}</code>.
+          The runtime style guide for formality is auto-prepended.
         </p>
       </div>
 
@@ -83,12 +83,18 @@ export default async function TemplatesPage({
           <TemplatesTable
             projectId={projectId}
             canWrite={canWrite}
+            providers={providers}
+            taxonomyNodes={taxonomyNodes.map((t) => t.name)}
+            languageProfiles={languageProfiles.map(
+              (p) => `${p.name} (primary=${p.primary}, register=${p.register})`,
+            )}
             templates={templates.map((t) => ({
               id: t.id,
               name: t.name,
               kind: t.kind,
               description: t.description,
               version: t.version,
+              body: t.body,
               bodyPreview: t.body.slice(0, 200),
             }))}
           />

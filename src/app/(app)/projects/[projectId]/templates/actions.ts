@@ -42,6 +42,52 @@ export async function createTemplate(input: z.infer<typeof templateSchema>) {
   return { ok: true };
 }
 
+const updateSchema = templateSchema.extend({ id: z.string() });
+
+export async function updateTemplate(input: z.infer<typeof updateSchema>) {
+  const parsed = updateSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
+  const { user } = await requireProjectPermission(parsed.data.projectId, "templates.write");
+
+  // Belt-and-braces — make sure the template actually belongs to this project.
+  const existing = await prisma.promptTemplate.findFirst({
+    where: { id: parsed.data.id, projectId: parsed.data.projectId },
+    select: { id: true, name: true, kind: true, body: true, version: true },
+  });
+  if (!existing) return { error: "Template not found in this project" };
+
+  // Bump version when the body changes — historical runs that already
+  // snapshotted the body keep theirs; future runs see the new version.
+  const bodyChanged = existing.body !== parsed.data.body;
+  const updated = await prisma.promptTemplate.update({
+    where: { id: existing.id },
+    data: {
+      name: parsed.data.name,
+      kind: parsed.data.kind,
+      description: parsed.data.description ?? null,
+      body: parsed.data.body,
+      version: bodyChanged ? existing.version + 1 : existing.version,
+    },
+  });
+
+  await logAudit({
+    projectId: parsed.data.projectId,
+    actorUserId: user.id,
+    action: "template.update",
+    targetKind: "PromptTemplate",
+    targetId: updated.id,
+    metadata: {
+      name: updated.name,
+      kind: updated.kind,
+      bodyChanged,
+      newVersion: updated.version,
+    },
+  });
+
+  revalidatePath(`/projects/${parsed.data.projectId}/templates`);
+  return { ok: true, version: updated.version };
+}
+
 export async function deleteTemplate(projectId: string, id: string) {
   const { user } = await requireProjectPermission(projectId, "templates.write");
   const refCount = await prisma.generationRun.count({ where: { templateId: id } });

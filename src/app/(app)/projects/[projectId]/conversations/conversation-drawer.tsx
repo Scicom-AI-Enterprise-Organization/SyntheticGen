@@ -8,11 +8,22 @@ import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 
+interface ToolCall {
+  id?: string;
+  type?: string;
+  function?: { name?: string; arguments?: string };
+}
+
 interface Message {
   id: string;
   role: string;
   content: string | null;
   reasoningContent: string | null;
+  // [{ id, type: "function", function: { name, arguments: "<json-string>" } }]
+  // for role=assistant turns that invoked one or more tools.
+  toolCalls: ToolCall[] | null;
+  // The tool_call.id this row is replying to, for role=tool messages.
+  toolCallId: string | null;
   ordinal: number;
   language: string | null;
   tokenCount: number | null;
@@ -246,6 +257,31 @@ export function ConversationDrawer({
                 {data.topic && <Badge variant="outline">{data.topic}</Badge>}
               </div>
 
+              {(() => {
+                // Surface "Open run page · <name>" above the tabs so the user
+                // doesn't have to flip to Trace to navigate up. data.run comes
+                // from the conversation API fallback we added earlier.
+                const runId =
+                  data.run && typeof data.run === "object" && typeof (data.run as { id?: unknown }).id === "string"
+                    ? ((data.run as { id: string }).id)
+                    : null;
+                const runName =
+                  data.run && typeof data.run === "object" && typeof (data.run as { name?: unknown }).name === "string"
+                    ? ((data.run as { name: string }).name)
+                    : null;
+                if (!runId) return null;
+                return (
+                  <div className="mb-3 text-[11px]">
+                    <a
+                      href={`/projects/${projectId}/runs/${runId}`}
+                      className="font-medium text-primary underline-offset-2 hover:underline"
+                    >
+                      ← Open run page{runName ? ` · ${runName}` : ""}
+                    </a>
+                  </div>
+                );
+              })()}
+
               <Tabs value={tab} onValueChange={(v) => onTabChange(v as typeof tab)}>
                 <TabsList>
                   <TabsTrigger value="messages">Messages</TabsTrigger>
@@ -301,7 +337,32 @@ export function ConversationDrawer({
                     </h3>
                     <div className="space-y-2">
                       {data.messages.map((m) => {
-                        const preview = (m.content ?? "").replace(/\s+/g, " ").trim().slice(0, 80);
+                        // The worker used to double-json-encode `toolCalls`
+                        // before the jsonb-codec fix, so historical rows in
+                        // the DB store a JSON STRING containing a JSON array.
+                        // Parse strings defensively so those old conversations
+                        // still render their function calls.
+                        const rawToolCalls: unknown = m.toolCalls;
+                        const toolCalls: ToolCall[] = Array.isArray(rawToolCalls)
+                          ? (rawToolCalls as ToolCall[])
+                          : typeof rawToolCalls === "string"
+                            ? ((): ToolCall[] => {
+                                try {
+                                  const p = JSON.parse(rawToolCalls);
+                                  return Array.isArray(p) ? (p as ToolCall[]) : [];
+                                } catch {
+                                  return [];
+                                }
+                              })()
+                            : [];
+                        const preview =
+                          (m.content ?? "").replace(/\s+/g, " ").trim().slice(0, 80) ||
+                          (toolCalls.length > 0
+                            ? `${toolCalls.length} tool call${toolCalls.length === 1 ? "" : "s"}: ${toolCalls
+                                .map((tc) => tc.function?.name)
+                                .filter(Boolean)
+                                .join(", ")}`
+                            : "");
                         const charCount = (m.content ?? "").length;
                         return (
                           <details
@@ -315,7 +376,9 @@ export function ConversationDrawer({
                                   ? "border-blue-500/30 bg-blue-500/5"
                                   : m.role === "assistant"
                                     ? "border-emerald-500/30 bg-emerald-500/5"
-                                    : "border-border",
+                                    : m.role === "tool"
+                                      ? "border-cyan-500/30 bg-cyan-500/5"
+                                      : "border-border",
                             )}
                           >
                             <summary className="flex cursor-pointer select-none items-center justify-between gap-2 [&::-webkit-details-marker]:hidden">
@@ -327,6 +390,11 @@ export function ConversationDrawer({
                                   ▸
                                 </span>
                                 <span className="font-mono uppercase">{m.role}</span>
+                                {m.role === "tool" && m.toolCallId && (
+                                  <code className="rounded bg-muted/60 px-1 font-mono text-[10px] text-muted-foreground">
+                                    ↪ {m.toolCallId.slice(-8)}
+                                  </code>
+                                )}
                                 <span className="truncate text-muted-foreground group-open:hidden">
                                   {preview || <em className="opacity-70">empty</em>}
                                 </span>
@@ -338,9 +406,52 @@ export function ConversationDrawer({
                                 {m.model && ` · ${m.model}`}
                               </span>
                             </summary>
-                            <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-sans text-xs leading-snug">
-                              {m.content ?? ""}
-                            </pre>
+                            {(m.content ?? "").trim().length > 0 && (
+                              <pre className="mt-2 overflow-x-auto whitespace-pre-wrap break-words font-sans text-xs leading-snug">
+                                {/* Strip leading/trailing whitespace — reasoning
+                                models often emit `\n\n` before the actual reply,
+                                which renders as a visible gap inside the pre. */}
+                                {(m.content ?? "").replace(/^\s+|\s+$/g, "")}
+                              </pre>
+                            )}
+                            {toolCalls.length > 0 && (
+                              <div className="mt-2 space-y-1">
+                                {toolCalls.map((tc, i) => {
+                                  const fnName = tc.function?.name ?? "?";
+                                  let parsedArgs: unknown = tc.function?.arguments;
+                                  if (typeof parsedArgs === "string") {
+                                    try {
+                                      parsedArgs = JSON.parse(parsedArgs);
+                                    } catch {
+                                      // keep as raw string
+                                    }
+                                  }
+                                  return (
+                                    <div
+                                      key={tc.id ?? i}
+                                      className="rounded border border-emerald-500/40 bg-emerald-500/5 p-2"
+                                    >
+                                      <div className="mb-1 flex flex-wrap items-center gap-2 text-[10px]">
+                                        <span className="font-mono font-semibold">tool_call</span>
+                                        <code className="rounded bg-muted/60 px-1 font-mono">
+                                          {fnName}
+                                        </code>
+                                        {tc.id && (
+                                          <code className="rounded bg-muted/40 px-1 font-mono text-muted-foreground">
+                                            id: {tc.id.slice(-8)}
+                                          </code>
+                                        )}
+                                      </div>
+                                      <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded border border-border/60 bg-background/60 p-1.5 font-mono text-[11px] leading-snug">
+                                        {typeof parsedArgs === "string"
+                                          ? parsedArgs
+                                          : JSON.stringify(parsedArgs, null, 2)}
+                                      </pre>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
                             {m.reasoningContent && (
                               <details className="mt-2 rounded-md border border-border/70 bg-background/60">
                                 <summary className="cursor-pointer select-none px-2 py-1 text-[10px] font-medium text-muted-foreground">
@@ -418,10 +529,52 @@ function TraceView({ trace }: { trace: TraceDoc }) {
   const sampling = run ? pick(run, "samplingParams") : null;
   const config = run ? pick(run, "configSnapshot") : null;
   const grid = run ? pick(run, "gridSpec") : null;
+  // Run id/name/href are still used by inner panels (Run header, timeline
+  // hint about Jumpstart) — only the top-of-trace link was hoisted out.
+  const runId = asString(run, "id") || asString(conv, "runId");
+  const runName = asString(run, "name");
+  const runHref = runId ? `../runs/${runId}` : null;
 
   return (
     <div className="space-y-3">
-      {events.length > 0 && <Timeline events={events} />}
+      {events.length > 0 ? (
+        <Timeline events={events} />
+      ) : (
+        <Panel title="Build timeline">
+          <div className="space-y-2 text-[11px] text-muted-foreground">
+            <p>
+              No <code className="font-mono">JobEvent</code> rows exist for the
+              job that produced this conversation. Most common causes:
+            </p>
+            <ul className="ml-4 list-disc space-y-0.5">
+              <li>
+                The job ran on a worker build that pre-dates job-event logging
+                (added 2026-05-11).
+              </li>
+              <li>
+                The worker hit a transient DB error while writing events — look
+                for{" "}
+                <code className="font-mono">JOBEVENT_INSERT_FAILED</code> in{" "}
+                <code className="font-mono">
+                  docker compose logs synthgen-worker
+                </code>
+                .
+              </li>
+              <li>
+                The job rendered an unusually small prompt and finished before
+                the worker reloaded with the new event-logging code path.
+              </li>
+            </ul>
+            {runHref && (
+              <p>
+                Open the run page from the link above and click{" "}
+                <strong>Jumpstart</strong> on this row — the rebuilt worker
+                will repopulate the timeline.
+              </p>
+            )}
+          </div>
+        </Panel>
+      )}
 
       <Panel title="Conversation" subtitle={asString(conv, "id")}>
         <KV
@@ -444,7 +597,21 @@ function TraceView({ trace }: { trace: TraceDoc }) {
         fallbackConv={conv}
       />
 
-      <Panel title="Run" subtitle={asString(run, "name")}>
+      <Panel
+        title="Run"
+        subtitle={
+          runHref ? (
+            <a
+              href={runHref}
+              className="text-primary underline-offset-2 hover:underline"
+            >
+              {runName || runId}
+            </a>
+          ) : (
+            runName
+          )
+        }
+      >
         <KV
           rows={[
             ["id", asString(run, "id")],
@@ -597,13 +764,25 @@ const EVENT_KIND_LABEL: Record<string, string> = {
   "context.loaded": "Context loaded (persona / topic / profile / template)",
   "knowledge.loaded": "Knowledge base entries loaded",
   "prompt.rendered": "Prompt rendered",
+  "user.tool_aware": "User prompt regenerated (tool-aware)",
   "provider.request": "Provider call dispatched",
   "provider.stream.reasoning.start": "Reasoning stream started",
   "provider.stream.content.start": "Content stream started",
   "provider.response": "Provider response complete",
   "validator.run": "Validator ran",
+  "turn.plan": "Multi-turn plan",
+  "turn.user.simulated": "User turn simulated",
+  "turn.user.empty": "User simulator returned empty",
+  "turn.user.end_sentinel_stripped": "User simulator [END] stripped",
+  "turn.user.end_sentinel": "User simulator ended early",
+  "turn.assistant": "Assistant turn complete",
+  "turn.error": "Turn failed",
+  "turn.end": "Turn 1 complete (waiting for follow-ups)",
   "conversation.persisted": "Conversation persisted",
   "job.error": "Job failed",
+  // Flow-driven (flow_runner.py) events.
+  "flow.loaded": "Flow graph loaded",
+  "flow.step": "Flow step executed",
 };
 
 const EVENT_KIND_COLOR: Record<string, string> = {
@@ -611,13 +790,24 @@ const EVENT_KIND_COLOR: Record<string, string> = {
   "context.loaded": "border-blue-500/30 bg-blue-500/5",
   "knowledge.loaded": "border-fuchsia-500/30 bg-fuchsia-500/5",
   "prompt.rendered": "border-purple-500/30 bg-purple-500/5",
+  "user.tool_aware": "border-purple-500/30 bg-purple-500/5",
   "provider.request": "border-cyan-500/30 bg-cyan-500/5",
   "provider.stream.reasoning.start": "border-muted-foreground/30 bg-muted/30 italic",
   "provider.stream.content.start": "border-emerald-500/30 bg-emerald-500/5",
   "provider.response": "border-emerald-500/40 bg-emerald-500/10",
   "validator.run": "border-amber-500/30 bg-amber-500/5",
+  "turn.plan": "border-blue-500/30 bg-blue-500/5",
+  "turn.user.simulated": "border-blue-500/30 bg-blue-500/5",
+  "turn.user.empty": "border-amber-500/40 bg-amber-500/10",
+  "turn.user.end_sentinel_stripped": "border-amber-500/30 bg-amber-500/5",
+  "turn.user.end_sentinel": "border-amber-500/40 bg-amber-500/10",
+  "turn.assistant": "border-emerald-500/30 bg-emerald-500/5",
+  "turn.error": "border-destructive/40 bg-destructive/10 text-destructive",
+  "turn.end": "border-emerald-500/30 bg-emerald-500/5",
   "conversation.persisted": "border-emerald-500/40 bg-emerald-500/10",
   "job.error": "border-destructive/40 bg-destructive/10 text-destructive",
+  "flow.loaded": "border-cyan-500/30 bg-cyan-500/5",
+  "flow.step": "border-blue-500/30 bg-blue-500/5",
 };
 
 function Timeline({ events }: { events: TraceEvent[] }) {
@@ -730,6 +920,47 @@ function summarizeEvent(e: TraceEvent): string | null {
       return `${(p as { status?: string }).status ?? ""}`;
     case "job.error":
       return ((p as { error?: string }).error ?? "").slice(0, 120);
+    case "user.tool_aware": {
+      const t = (p as { toolCount?: number }).toolCount;
+      return t != null ? `${t} tool(s) in catalog` : null;
+    }
+    case "turn.plan": {
+      const t = (p as { targetTurns?: number; toolMode?: boolean }).targetTurns;
+      const mode = (p as { toolMode?: boolean }).toolMode;
+      return `${t ?? "?"} turn(s)${mode ? " · tools enabled" : ""}`;
+    }
+    case "turn.user.simulated":
+    case "turn.user.empty":
+    case "turn.user.end_sentinel":
+    case "turn.user.end_sentinel_stripped":
+    case "turn.assistant":
+    case "turn.error":
+    case "turn.end": {
+      const t = (p as { turn?: number }).turn;
+      const text = (p as { text?: string }).text;
+      const err = (p as { error?: string }).error;
+      const ms = (p as { latencyMs?: number }).latencyMs;
+      const ti = (p as { tokensIn?: number }).tokensIn;
+      const to = (p as { tokensOut?: number }).tokensOut;
+      const bits: (string | false | null | undefined)[] = [];
+      if (t != null) bits.push(`turn ${t}`);
+      if (text) bits.push(`"${text.slice(0, 60)}${text.length > 60 ? "…" : ""}"`);
+      if (ti != null && to != null) bits.push(`${ti}/${to} tok`);
+      if (ms != null) bits.push(`${ms} ms`);
+      if (err) bits.push(err.slice(0, 80));
+      return bits.filter(Boolean).join(" · ") || null;
+    }
+    case "flow.loaded": {
+      const name = (p as { name?: string }).name;
+      const n = (p as { nodeCount?: number }).nodeCount;
+      const e = (p as { edgeCount?: number }).edgeCount;
+      return `${name ?? "flow"} · ${n ?? "?"} nodes · ${e ?? "?"} edges`;
+    }
+    case "flow.step": {
+      const kind = (p as { kind?: string }).kind;
+      const label = (p as { label?: string }).label;
+      return label ? `${kind ?? "?"} · ${label}` : kind ?? null;
+    }
     default:
       return null;
   }
@@ -770,6 +1001,13 @@ function SettingsPanel({
     const tmpl = (pick(fallbackRun, "template") ?? {}) as Record<string, unknown>;
     const lp = (pick(fallbackRun, "languageProfile") ?? {}) as Record<string, unknown>;
     const prov = (pick(fallbackRun, "provider") ?? {}) as Record<string, unknown>;
+    // Tool names are resolved server-side from configSnapshot.toolIds.
+    const toolDefs = Array.isArray((fallbackRun as { toolDefs?: unknown }).toolDefs)
+      ? ((fallbackRun as { toolDefs: Array<{ name?: unknown }> }).toolDefs)
+      : [];
+    const toolNames = toolDefs
+      .map((t) => (typeof t.name === "string" ? t.name : null))
+      .filter((n): n is string => Boolean(n));
     s = {
       mode: "single-turn",
       model: fallbackRun.model ?? null,
@@ -783,7 +1021,7 @@ function SettingsPanel({
       register: lp.register ?? null,
       samplingParams: sp,
       toolIds: Array.isArray(cfg.toolIds) ? cfg.toolIds : [],
-      toolNames: [],
+      toolNames,
       taxonomyNodeId: (fallbackTaxonomy as { id?: unknown })?.id ?? null,
       taxonomyNodeName: (fallbackTaxonomy as { name?: unknown })?.name ?? null,
       taxonomyNodePath: (fallbackTaxonomy as { path?: unknown })?.path ?? null,
@@ -879,7 +1117,7 @@ function Panel({
   children,
 }: {
   title: string;
-  subtitle?: string | null;
+  subtitle?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (

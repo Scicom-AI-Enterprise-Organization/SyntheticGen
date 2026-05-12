@@ -54,6 +54,22 @@ export async function GET(
     });
   }
 
+  // Resolve toolIds in the run's configSnapshot to names, for the Settings
+  // panel fallback when settingsSnapshot is null. Newer snapshots already
+  // carry `toolNames`; this is only used when the drawer falls back to `run`.
+  const cfgToolIds = (() => {
+    const cfg = c.run?.configSnapshot as Record<string, unknown> | null | undefined;
+    const ids = cfg?.toolIds;
+    return Array.isArray(ids) ? (ids.filter((x) => typeof x === "string") as string[]) : [];
+  })();
+  const toolDefs =
+    cfgToolIds.length > 0
+      ? await prisma.toolDef.findMany({
+          where: { id: { in: cfgToolIds } },
+          select: { id: true, name: true },
+        })
+      : [];
+
   return new Response(
     JSON.stringify({
       id: c.id,
@@ -74,6 +90,7 @@ export async function GET(
             provider: c.run.providerCredential,
             template: c.run.template,
             languageProfile: c.run.languageProfile,
+            toolDefs,
           }
         : null,
       personaInfo: c.persona,
@@ -83,6 +100,12 @@ export async function GET(
         role: m.role,
         content: m.content,
         reasoningContent: m.reasoningContent,
+        // When the assistant invokes tools, `content` is usually empty and the
+        // actual signal is in `toolCalls`. Include it (plus the matching
+        // `toolCallId` on role=tool messages) so the drawer can render the
+        // full function-calling exchange.
+        toolCalls: m.toolCalls,
+        toolCallId: m.toolCallId,
         ordinal: m.ordinal,
         language: m.language,
         tokenCount: m.tokenCount,

@@ -6,11 +6,14 @@ import { executeJob } from "@/lib/synthgen-api";
 
 export const runtime = "nodejs";
 
-// Re-kick a job that's not yet succeeded. Common cases:
-//   - status="failed" — the previous attempt errored, user wants to retry.
+// Re-kick a job. Common cases:
+//   - status="failed" — previous attempt errored.
 //   - status="running" but stuck (worker crash, SSE disconnected mid-stream).
-//   - status="queued" but never picked up (rare; worker hadn't started).
-// Refuses jobs already in a terminal-success state (succeeded with conversationId).
+//   - status="queued" but never picked up.
+//   - status="succeeded" — user wants to regenerate the conversation.
+// For succeeded jobs we orphan (but don't delete) the existing conversation
+// so the dataset-version Restrict guard can't bite, and the user keeps the
+// old conversation visible in the project archive if they want to compare.
 export async function POST(
   _req: NextRequest,
   {
@@ -39,16 +42,11 @@ export async function POST(
       headers: { "content-type": "application/json" },
     });
   }
-  if (job.status === "succeeded" && job.conversationId) {
-    return new Response(
-      JSON.stringify({ error: "job already succeeded; nothing to restart" }),
-      { status: 409, headers: { "content-type": "application/json" } },
-    );
-  }
 
   // Reset to queued so the worker's UPDATE→running transition behaves cleanly.
-  // Keep attempts so retry pressure stays observable, but clear lastError so
-  // the UI doesn't show a stale message during the next attempt.
+  // Clear conversationId for succeeded re-runs so the new attempt writes a
+  // fresh conversation row. Keep attempts so retry pressure stays observable,
+  // but clear lastError so the UI doesn't show a stale message.
   await prisma.generationJob.update({
     where: { id: jobId },
     data: {
@@ -56,7 +54,19 @@ export async function POST(
       startedAt: null,
       finishedAt: null,
       lastError: null,
+      conversationId: null,
     },
+  });
+
+  // Flip a finalised run back to "running" so RunLiveStatus + LiveJobPreview
+  // re-mount and show the re-run's progress. The self-heal block in the run
+  // detail page will flip it back to "completed" once the re-run finishes.
+  await prisma.generationRun.updateMany({
+    where: {
+      id: runId,
+      status: { in: ["completed", "failed", "cancelled"] },
+    },
+    data: { status: "running", completedAt: null },
   });
 
   try {

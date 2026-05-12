@@ -18,7 +18,6 @@ const startRunSchema = z.object({
   model: z.string().min(1),
   taxonomyNodeIds: z.array(z.string()),
   personaIds: z.array(z.string()).min(1),
-  difficulties: z.array(z.string()).min(1),
   rowsPerCell: z.number().int().min(1).max(200),
   turns: z.number().int().min(1).max(20).default(1),
   relatedTopics: z.number().int().min(0).max(6).default(0),
@@ -45,8 +44,7 @@ export async function createAndStartRun(input: z.infer<typeof startRunSchema>) {
   }
 
   const primaryAxis = flowMode ? data.flowIds.length : data.taxonomyNodeIds.length;
-  const totalCells =
-    primaryAxis * data.personaIds.length * data.difficulties.length * data.rowsPerCell;
+  const totalCells = primaryAxis * data.personaIds.length * data.rowsPerCell;
   if (totalCells > 1000) {
     return { error: `Slice 1 caps runs at 1000 cells (this would create ${totalCells}).` };
   }
@@ -64,7 +62,6 @@ export async function createAndStartRun(input: z.infer<typeof startRunSchema>) {
   const gridSpec = {
     taxonomyNodeIds: data.taxonomyNodeIds,
     personaIds: data.personaIds,
-    difficulties: data.difficulties,
     rowsPerCell: data.rowsPerCell,
   };
 
@@ -118,16 +115,14 @@ export async function createAndStartRun(input: z.infer<typeof startRunSchema>) {
   const primaryKey = flowMode ? "f" : "t";
   for (const primaryId of primaryIds) {
     for (const personaId of data.personaIds) {
-      for (const difficulty of data.difficulties) {
-        for (let idx = 0; idx < data.rowsPerCell; idx++) {
-          jobs.push({
-            runId: run.id,
-            cellKey: `${primaryKey}:${primaryId}|p:${personaId}|d:${difficulty}|i:${idx}`,
-            inputContext: flowMode
-              ? { flowId: primaryId, personaId, difficulty, idx }
-              : { taxonomyNodeId: primaryId, personaId, difficulty, idx },
-          });
-        }
+      for (let idx = 0; idx < data.rowsPerCell; idx++) {
+        jobs.push({
+          runId: run.id,
+          cellKey: `${primaryKey}:${primaryId}|p:${personaId}|i:${idx}`,
+          inputContext: flowMode
+            ? { flowId: primaryId, personaId, idx }
+            : { taxonomyNodeId: primaryId, personaId, idx },
+        });
       }
     }
   }

@@ -16,12 +16,27 @@ export async function GET(
     return Response.json({ error: perm.reason }, { status: 403 });
   }
 
-  const jobs = await prisma.generationJob.findMany({
-    where: { runId, run: { projectId }, status: "running" },
-    select: { id: true, cellKey: true },
-    orderBy: { startedAt: "asc" },
-    take: 32,
-  });
+  // Return BOTH running and recently-terminal jobs so the Live Job Preview can
+  // replay a job's saved tokens after it's already finished. Running jobs are
+  // sorted first (live streams), then most-recent terminal jobs.
+  const [running, recent] = await Promise.all([
+    prisma.generationJob.findMany({
+      where: { runId, run: { projectId }, status: "running" },
+      select: { id: true, cellKey: true, status: true },
+      orderBy: { startedAt: "asc" },
+      take: 32,
+    }),
+    prisma.generationJob.findMany({
+      where: {
+        runId,
+        run: { projectId },
+        status: { in: ["succeeded", "failed", "cancelled", "skipped"] },
+      },
+      select: { id: true, cellKey: true, status: true },
+      orderBy: { finishedAt: "desc" },
+      take: 32,
+    }),
+  ]);
 
-  return Response.json({ jobs });
+  return Response.json({ jobs: [...running, ...recent] });
 }

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { Play, AlertTriangle, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,7 +58,6 @@ interface Flow {
   version: number;
 }
 
-const DIFFICULTIES = ["easy", "medium", "hard"];
 
 export function RunWizard({
   projectId,
@@ -79,7 +78,17 @@ export function RunWizard({
   tools: Tool[];
   flows: Flow[];
 }) {
-  const [name, setName] = useState("Run " + new Date().toISOString().slice(0, 16).replace("T", " "));
+  // SSR-stable default. `new Date()` would tick between server render and
+  // hydrate, breaking Radix's useId-based aria-controls on every Select. Fill
+  // the timestamp on mount instead — by then no SSR comparison is happening.
+  const [name, setName] = useState("Run");
+  useEffect(() => {
+    setName((cur) =>
+      cur === "Run"
+        ? "Run " + new Date().toISOString().slice(0, 16).replace("T", " ")
+        : cur,
+    );
+  }, []);
   const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
   const [languageProfileId, setLanguageProfileId] = useState(languageProfiles[0]?.id ?? "");
   const [providerId, setProviderId] = useState(providers[0]?.id ?? "");
@@ -88,7 +97,6 @@ export function RunWizard({
   const [personaIds, setPersonaIds] = useState<string[]>(
     personas.length > 0 ? [personas[0].id] : [],
   );
-  const [difficulties, setDifficulties] = useState<string[]>(["medium"]);
   const [rowsPerCell, setRowsPerCell] = useState(5);
   const [turns, setTurns] = useState(1);
   const [formalityPolicy, setFormalityPolicy] = useState<"inherit" | "formal" | "semi-formal" | "colloquial" | "mixed">(
@@ -110,7 +118,7 @@ export function RunWizard({
   // In flow mode the "first axis" of the grid is flows instead of taxonomy
   // nodes; everything else still combines.
   const primaryAxis = flowMode ? flowIds.length : nodeIds.length;
-  const totalCells = primaryAxis * personaIds.length * difficulties.length * rowsPerCell;
+  const totalCells = primaryAxis * personaIds.length * rowsPerCell;
 
   const lp = languageProfiles.find((p) => p.id === languageProfileId) ?? null;
   const formalityWarn = useMemo(() => {
@@ -135,8 +143,8 @@ export function RunWizard({
     if (totalCells === 0) {
       setSubmitError(
         flowMode
-          ? "Pick at least one flow, persona, and difficulty."
-          : "Pick at least one taxonomy node, persona, and difficulty.",
+          ? "Pick at least one flow and persona."
+          : "Pick at least one taxonomy node and persona.",
       );
       return;
     }
@@ -151,7 +159,6 @@ export function RunWizard({
         model,
         taxonomyNodeIds: flowMode ? [] : nodeIds,
         personaIds,
-        difficulties,
         rowsPerCell,
         turns: flowMode ? 1 : turns,
         relatedTopics: flowMode ? 0 : relatedTopics,
@@ -276,7 +283,7 @@ export function RunWizard({
         </div>
 
         <div className="space-y-2">
-          <Label>Rows per cell</Label>
+          <Label>Conversations per combination</Label>
           <Input
             type="number"
             min={1}
@@ -285,6 +292,10 @@ export function RunWizard({
             onChange={(e) => setRowsPerCell(Number(e.target.value))}
             required
           />
+          <p className="text-xs text-muted-foreground">
+            How many conversations to generate for each (taxonomy node × persona)
+            combination. Total cells = nodes × personas × this number.
+          </p>
         </div>
 
         <div className="space-y-2">
@@ -380,38 +391,6 @@ export function RunWizard({
                   </Badge>
                 )}
               </span>
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <div>
-        <div className="mb-2 flex items-center justify-between">
-          <Label>Difficulties ({difficulties.length} selected)</Label>
-          <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-            <Checkbox
-              checked={
-                difficulties.length === DIFFICULTIES.length
-                  ? true
-                  : difficulties.length === 0
-                    ? false
-                    : "indeterminate"
-              }
-              onCheckedChange={(v) =>
-                setDifficulties(v === true ? [...DIFFICULTIES] : [])
-              }
-            />
-            {difficulties.length === DIFFICULTIES.length ? "Unselect all" : "Select all"}
-          </label>
-        </div>
-        <div className="flex gap-2">
-          {DIFFICULTIES.map((d) => (
-            <label key={d} className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-xs">
-              <Checkbox
-                checked={difficulties.includes(d)}
-                onCheckedChange={() => setDifficulties((arr) => toggleArr(arr, d))}
-              />
-              {d}
             </label>
           ))}
         </div>
@@ -625,11 +604,11 @@ export function RunWizard({
             ) : (
               <span title="taxonomy nodes">{nodeIds.length}</span>
             )}{" "}
-            × {personaIds.length} × {difficulties.length} × {rowsPerCell} ={" "}
+            × {personaIds.length} × {rowsPerCell} ={" "}
             <span className="font-bold">{totalCells}</span>
           </span>
           <span className="ml-2 text-xs text-muted-foreground">
-            ({flowMode ? "flows" : "nodes"} × personas × difficulties × rows)
+            ({flowMode ? "flows" : "nodes"} × personas × conversations-per-combination)
           </span>
           {totalCells > 1000 && (
             <span className="ml-3 text-amber-600">⚠ exceeds 1000-cell slice 1 cap</span>

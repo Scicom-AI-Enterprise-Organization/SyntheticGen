@@ -5,6 +5,7 @@ Architecture allows multi-turn / tool-calls to slot in later without schema chan
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -173,8 +174,33 @@ def _snapshot_persona(p: dict[str, Any] | None) -> dict[str, Any] | None:
     }
 
 
+async def _emit_event(job_id: str, run_id: str, **payload: Any) -> None:
+    """Emit a structured pg_notify event on the synthgen_job channel. The SSE
+    route forwards every field verbatim; the live preview client decides how to
+    render based on `event`. Best-effort — never throws."""
+    try:
+        async with db.acquire() as ncon:
+            await ncon.execute(
+                "SELECT pg_notify('synthgen_job', $1)",
+                json.dumps(
+                    {"jobId": job_id, "runId": run_id, **payload},
+                    ensure_ascii=False,
+                ),
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 async def _log_event(job_id: str, kind: str, payload: dict[str, Any] | None = None) -> None:
-    """Append a step in the job's trace timeline. Best-effort — never throws."""
+    """Append a step in the job's trace timeline.
+
+    Never throws — but logs failures *loudly* at ERROR level with the actual
+    exception text. Previously this swallowed everything via `log.exception`,
+    which left users staring at empty Build timelines for jobs that had
+    silently failed every JobEvent insert (e.g. transient pool exhaustion or
+    a schema mismatch after a migration). Now you'll see a clear marker in
+    the worker logs that something needs fixing.
+    """
     try:
         await db.execute(
             'INSERT INTO "JobEvent" (id, "jobId", kind, payload, ts) VALUES ($1, $2, $3, $4::jsonb, NOW())',
@@ -183,8 +209,15 @@ async def _log_event(job_id: str, kind: str, payload: dict[str, Any] | None = No
             kind,
             json.dumps(payload) if payload else None,
         )
-    except Exception:  # noqa: BLE001
-        log.exception("failed to log job event %s for %s", kind, job_id)
+    except Exception as exc:  # noqa: BLE001
+        # ERROR (not just exception) so it stands out in `docker compose logs`,
+        # and include the exception class + message in the line itself so
+        # grepping for "JOBEVENT_INSERT_FAILED" surfaces every occurrence.
+        log.error(
+            "JOBEVENT_INSERT_FAILED job=%s kind=%s err=%s: %s",
+            job_id, kind, type(exc).__name__, exc,
+            exc_info=True,
+        )
 
 
 async def _load_template(template_id: str) -> dict[str, Any]:
@@ -230,6 +263,150 @@ def _resolve_formality(
     )
 
 
+def _summarize_tools_for_user(tool_defs: list[dict[str, Any]]) -> str:
+    """Per-tool block for prompting the user simulator. Includes name,
+    description, parameter shape (name + type + which are required), and one
+    realistic example argument set (from ToolDef.examples) so the simulator
+    knows what kind of identifying info the user should naturally provide —
+    e.g. quoting a real 12-digit MyKad rather than a vague "my IC".
+    """
+    if not tool_defs:
+        return ""
+    lines: list[str] = []
+    for t in tool_defs[:20]:
+        name = t.get("name") or "?"
+        desc = (t.get("description") or "").strip().replace("\n", " ")
+        if len(desc) > 200:
+            desc = desc[:200] + "…"
+
+        # Parameter schema → "<arg> (<type>, required)" bullets.
+        params = t.get("parameters") or {}
+        props = (params.get("properties") if isinstance(params, dict) else None) or {}
+        required_list = set(params.get("required") or []) if isinstance(params, dict) else set()
+        param_bits: list[str] = []
+        for pname, pschema in list(props.items())[:8]:
+            if not isinstance(pschema, dict):
+                continue
+            ptype = pschema.get("type") or "any"
+            pdesc = (pschema.get("description") or "").strip().replace("\n", " ")
+            if len(pdesc) > 80:
+                pdesc = pdesc[:80] + "…"
+            tag = "required" if pname in required_list else "optional"
+            extra = f" — {pdesc}" if pdesc else ""
+            # Surface common constraints so the simulator emits valid-shaped values.
+            constraints: list[str] = []
+            if isinstance(pschema.get("enum"), list) and pschema["enum"]:
+                vals = ", ".join(str(v) for v in pschema["enum"][:6])
+                constraints.append(f"enum: {vals}")
+            if pschema.get("pattern"):
+                constraints.append(f"pattern: {pschema['pattern']}")
+            if pschema.get("format"):
+                constraints.append(f"format: {pschema['format']}")
+            if pschema.get("minimum") is not None or pschema.get("maximum") is not None:
+                constraints.append(
+                    f"range: [{pschema.get('minimum', '-∞')}..{pschema.get('maximum', '∞')}]",
+                )
+            cstr = f" ({'; '.join(constraints)})" if constraints else ""
+            param_bits.append(f"    - {pname} ({ptype}, {tag}){extra}{cstr}")
+
+        # One realistic example so the simulator can quote concrete values.
+        examples = t.get("examples")
+        example_text = ""
+        if isinstance(examples, list) and examples:
+            first = examples[0]
+            try:
+                example_text = f"\n    example args: {json.dumps(first, ensure_ascii=False)}"
+            except Exception:  # noqa: BLE001
+                example_text = ""
+
+        block = f"- {name}: {desc or '(no description)'}"
+        if param_bits:
+            block += "\n  parameters:\n" + "\n".join(param_bits)
+        block += example_text
+        lines.append(block)
+    return "\n".join(lines)
+
+
+async def _generate_tool_aware_user_text(
+    *,
+    fallback_text: str,
+    persona: dict[str, Any] | None,
+    lp: dict[str, Any],
+    policy: FormalityPolicy,
+    tool_defs: list[dict[str, Any]],
+    base_url: str,
+    api_key: str,
+    model: str,
+    extra_headers: dict[str, Any] | None,
+    reasoning_effort: str | None,
+    chat_template_kwargs: dict[str, Any] | None,
+) -> tuple[str, int, int, float]:
+    """Generate the FIRST user message such that it naturally requires the
+    assistant to invoke one of the available tools.
+
+    `fallback_text` is the rendered template body — used as scenario context
+    (so the conversation still anchors to the chosen domain), and returned
+    verbatim if the LLM call fails. Returns (text, tokens_in, tokens_out, cost).
+    """
+    if not tool_defs:
+        return fallback_text, 0, 0, 0.0
+    persona_lines: list[str] = []
+    if persona:
+        for k in ("name", "description", "ethnicity", "region", "urbanity", "ageRange", "formality"):
+            v = persona.get(k)
+            if v:
+                persona_lines.append(f"- {k}: {v}")
+        if persona.get("dialectTags"):
+            persona_lines.append(f"- dialectTags: {', '.join(persona['dialectTags'])}")
+    persona_block = "\n".join(persona_lines) or "(none — generic Malaysian customer)"
+
+    sys = (
+        "You write realistic OPENING user messages for a synthetic customer-support "
+        "conversation. The assistant has function-calling tools available; your "
+        "message must give it a real reason to invoke at least one of them.\n\n"
+        f"Persona:\n{persona_block}\n\n"
+        f"Target language: {lp.get('primary') or 'ms'} (register: {policy.register}).\n"
+        f"Scenario hint (the original template body — use as inspiration, not "
+        f"copy verbatim):\n{fallback_text}\n\n"
+        f"Available tools the assistant can call:\n{_summarize_tools_for_user(tool_defs)}\n\n"
+        "Hard rules:\n"
+        "- Pick ONE tool (or two related tools) to target. The user shouldn't say "
+        "  the tool's name — just describe what they need such that the assistant "
+        "  will obviously call that tool.\n"
+        "- For each REQUIRED parameter on the chosen tool, weave a realistic value "
+        "  into the user's message: match the parameter's `type`, `pattern`, "
+        "  `format`, `enum`, and range constraints exactly. Use the `example args` "
+        "  shown above as a guide for what plausible values look like, but vary "
+        "  the actual values so they don't repeat.\n"
+        "- Locale (Malaysia): MyKad = 12-digit `^\\d{6}-\\d{2}-\\d{4}$`, mobile = "
+        "  `^\\+?60\\d{9,10}$`, MYR amounts are decimals, ISO dates are `YYYY-MM-DD`, "
+        "  state codes from {KUL,SGR,PNG,JHR,KTN,TRG,KDH,PRK,MLK,NSN,PHG,PLS,SBH,SWK,PJY,LBN}.\n"
+        "- 1-3 sentences. In-character for the persona. Target language + register.\n"
+        "- Reply with ONLY the user's utterance — no role tag, no quotes, no preamble, "
+        "  no markdown, no labelled fields like `IC: ...`."
+    )
+    try:
+        r = await chat_completion(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            messages=[
+                {"role": "system", "content": sys},
+                {"role": "user", "content": "Write the opening user message now."},
+            ],
+            temperature=0.8,
+            max_tokens=300,
+            extra_headers=extra_headers,
+            reasoning_effort=reasoning_effort,
+            chat_template_kwargs=chat_template_kwargs,
+        )
+        text = (r.content or "").strip().strip('"').strip("'")
+        return (text or fallback_text), r.tokens_in, r.tokens_out, r.cost_usd
+    except Exception as e:  # noqa: BLE001
+        log.warning("tool-aware user-text generation failed: %s", e)
+        return fallback_text, 0, 0, 0.0
+
+
 async def _simulate_user_turn(
     *,
     persona: dict[str, Any] | None,
@@ -243,6 +420,7 @@ async def _simulate_user_turn(
     reasoning_effort: str | None,
     chat_template_kwargs: dict[str, Any] | None,
     max_tokens: int,
+    tool_defs: list[dict[str, Any]] | None = None,
     turn_number: int = 2,
     total_turns: int = 1,
 ) -> tuple[str, int, int, float]:
@@ -271,6 +449,38 @@ async def _simulate_user_turn(
     # the "last" turn — because total_turns is the user-requested CONVERSATION
     # length and the model would otherwise cut it short by one turn. The loop
     # caller only honors an exact "[END]" reply as a defensive safety valve.
+
+    # If tools are configured, list them so the simulator can pick a follow-up
+    # that nudges the assistant to invoke a *different* tool than the one(s)
+    # already called. We figure out which ones have been called by walking
+    # the transcript's tool messages.
+    already_called: set[str] = set()
+    for m in transcript:
+        if m.get("role") == "assistant":
+            for tc in m.get("tool_calls") or []:
+                name = (tc.get("function") or {}).get("name") if isinstance(tc, dict) else None
+                if isinstance(name, str):
+                    already_called.add(name)
+    tool_hint = ""
+    if tool_defs:
+        unused = [t for t in tool_defs if (t.get("name") or "") not in already_called]
+        target_pool = unused if unused else tool_defs
+        tool_lines = _summarize_tools_for_user(target_pool)
+        if tool_lines:
+            tool_hint = (
+                "\n\nThe assistant has these function-calling tools available "
+                "(prefer ones it hasn't used yet — push it to cover more of them):\n"
+                f"{tool_lines}\n"
+                "Phrase your next message so the assistant has a real reason to invoke "
+                "ONE of these tools. For each REQUIRED parameter on the chosen tool, "
+                "weave a realistic value into your message that matches the parameter's "
+                "type / pattern / enum / format constraints (see the schema lines above; "
+                "use the `example args` as a shape guide but don't copy them verbatim). "
+                "Locale: MyKad `^\\d{6}-\\d{2}-\\d{4}$`, mobile `^\\+?60\\d{9,10}$`, "
+                "ISO dates `YYYY-MM-DD`. Don't say the tool name out loud — describe "
+                "what you need."
+            )
+
     sys = (
         "You are role-playing the USER side of a Malaysian customer-support conversation. "
         "Given the persona profile and conversation transcript so far, write ONLY the user's "
@@ -286,6 +496,7 @@ async def _simulate_user_turn(
         "- Do NOT wrap the conversation up yet. The script expects you to keep going for "
         f"  {max(0, total_turns - turn_number)} more turn(s) after this one. Don't say goodbye, "
         "  don't thank-and-close, don't reply with [END]."
+        + tool_hint
     )
 
     transcript_lines: list[str] = []
@@ -358,7 +569,7 @@ async def _settings_snapshot(
     provider: dict[str, Any],
     policy: FormalityPolicy,
     sampling: dict[str, Any],
-    difficulty: str,
+    difficulty: str | None,
     mode: str,
     flow: dict[str, Any] | None = None,
     tools_invoked: list[dict[str, Any]] | None = None,
@@ -410,7 +621,22 @@ def _content_hash(text: str) -> str:
 
 
 async def execute_job(job_id: str) -> str:
-    """Run one generation job. Returns the conversation id created."""
+    """Run one generation job. Returns the conversation id created.
+
+    Bookends the work with `job.invoked` / `job.end` events so the trace
+    timeline always shows at least these two markers — even when something
+    explodes before any other event gets written. The actual generation is
+    in `_execute_job_inner`; transient upstream failures are handled by the
+    per-turn retry inside that function (chat_completion_stream-wrapped).
+    """
+    await _log_event(job_id, "job.invoked", {"pid": __import__("os").getpid()})
+    try:
+        return await _execute_job_inner(job_id)
+    finally:
+        await _log_event(job_id, "job.end", {"pid": __import__("os").getpid()})
+
+
+async def _execute_job_inner(job_id: str) -> str:
     job = await db.fetch_one(
         """
         SELECT id, "runId", "cellKey", "inputContext", status, attempts
@@ -429,7 +655,10 @@ async def execute_job(job_id: str) -> str:
     ctx_blob = _as_dict(job.get("inputContext"))
     persona_id = ctx_blob.get("personaId")
     node_id = ctx_blob.get("taxonomyNodeId")
-    difficulty = ctx_blob.get("difficulty") or "medium"
+    # Optional — newer runs don't include it (difficulty was removed from the
+    # wizard since it was effectively a noop unless the template referenced
+    # `{{difficulty}}`). Older jobs still carry the field, so we keep reading.
+    difficulty = ctx_blob.get("difficulty")
 
     await _log_event(
         job_id,
@@ -571,7 +800,10 @@ async def execute_job(job_id: str) -> str:
             "script": lp.get("script"),
             "register": policy.register,
         },
-        difficulty=difficulty,
+        # `{{difficulty}}` falls back to empty string when the wizard didn't
+        # supply one — keeps templates that reference it from showing literal
+        # "None".
+        difficulty=difficulty or "",
         knowledge=knowledge_text,
     )
 
@@ -584,6 +816,78 @@ async def execute_job(job_id: str) -> str:
         )
 
     user_text = render(template["body"], rctx.to_dict())
+
+    # ── Tool support ────────────────────────────────────────────────────────
+    # Load every tool def the run made available. When the list is non-empty
+    # we use the non-streaming path with `tools=…` so the model can actually
+    # invoke them (chat_completion_stream doesn't support tools today). When
+    # there are no tools, we keep the streaming nicety from slice 1.
+    # Loaded BEFORE the messages array so the tool catalog can be described in
+    # the system prompt — without that, models routinely refuse with "I don't
+    # have access to that" even though `tools=…` is present in the request.
+    from .flow_runner import (
+        _load_tool_defs,
+        _tools_payload,
+        _mock_tool_result,
+        _normalise_tool_calls,
+    )
+
+    grid_cfg = _as_dict(run.get("configSnapshot"))
+    tool_ids = [t for t in (grid_cfg.get("toolIds") or []) if isinstance(t, str)]
+    tool_defs = await _load_tool_defs(tool_ids) if tool_ids else []
+    tools_payload = _tools_payload(tool_defs) if tool_defs else None
+    tools_by_name = {t["name"]: t for t in tool_defs}
+
+    # When tools are configured, replace the rendered template body with an
+    # LLM-generated opening that is engineered to trigger a tool call. The
+    # template body becomes the *scenario hint* so the conversation still
+    # anchors to the chosen domain.
+    if tool_defs:
+        sim_in0, sim_out0 = 0, 0
+        sim_cost0 = 0.0
+        new_user_text, sim_in0, sim_out0, sim_cost0 = await _generate_tool_aware_user_text(
+            fallback_text=user_text,
+            persona=persona,
+            lp=lp,
+            policy=policy,
+            tool_defs=tool_defs,
+            base_url=base_url,
+            api_key=api_key,
+            model=run["model"],
+            extra_headers=extra_headers,
+            reasoning_effort=provider.get("reasoningEffort"),
+            chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")) or None,
+        )
+        await _log_event(
+            job_id,
+            "user.tool_aware",
+            {
+                "fallback": user_text[:500],
+                "generated": new_user_text[:500],
+                "tokensIn": sim_in0,
+                "tokensOut": sim_out0,
+                "toolCount": len(tool_defs),
+            },
+        )
+        user_text = new_user_text
+
+    # Surface the tool catalog in the system prompt so the model knows it can
+    # (and *should*) call them. Some models (Qwen3 included) won't pick tools
+    # up from the API `tools=` array alone — they need a prose mention too.
+    if tool_defs:
+        tool_lines = ["## Available tools",
+                      "You have these function-calling tools available — invoke them via "
+                      "tool_calls (NOT plain text) whenever the user needs data lookup, "
+                      "verification, or an action that one of them performs. Never claim "
+                      "you lack access to something a listed tool provides."]
+        for t in tool_defs:
+            desc = (t.get("description") or "").strip().replace("\n", " ")
+            tool_lines.append(f"- `{t['name']}` — {desc or '(no description)'}")
+        tool_lines.append(
+            "After a tool returns, integrate its result into a natural reply for the user."
+        )
+        tools_block = "\n".join(tool_lines)
+        system_text = f"{system_text}\n\n{tools_block}" if system_text else tools_block
 
     messages: list[dict[str, Any]] = []
     if system_text:
@@ -601,6 +905,7 @@ async def execute_job(job_id: str) -> str:
                 "allowParticles": policy.allow_particles,
                 "requireFormalMalay": policy.require_formal_malay,
             },
+            "toolsAvailable": [t["name"] for t in tool_defs],
         },
     )
 
@@ -613,24 +918,6 @@ async def execute_job(job_id: str) -> str:
         job_id,
     )
 
-    # ── Tool support ────────────────────────────────────────────────────────
-    # Load every tool def the run made available. When the list is non-empty
-    # we use the non-streaming path with `tools=…` so the model can actually
-    # invoke them (chat_completion_stream doesn't support tools today). When
-    # there are no tools, we keep the streaming nicety from slice 1.
-    from .flow_runner import (
-        _load_tool_defs,
-        _tools_payload,
-        _mock_tool_result,
-        _normalise_tool_calls,
-    )
-
-    grid_cfg = _as_dict(run.get("configSnapshot"))
-    tool_ids = [t for t in (grid_cfg.get("toolIds") or []) if isinstance(t, str)]
-    tool_defs = await _load_tool_defs(tool_ids) if tool_ids else []
-    tools_payload = _tools_payload(tool_defs) if tool_defs else None
-    tools_by_name = {t["name"]: t for t in tool_defs}
-
     async def _run_turn_with_tools(
         msgs: list[dict[str, Any]],
     ) -> dict[str, Any]:
@@ -640,13 +927,15 @@ async def execute_job(job_id: str) -> str:
         for the follow-up. Returns the messages appended this turn plus tokens
         + the final content/latency.
 
-        The streaming provider helper doesn't support tools, so this path is
-        non-streaming end-to-end. To keep the Live job preview from looking
-        frozen, we pg_notify 'delta' events at each step (model call begin,
-        assistant content, tool call, tool result) — the UI just appends them
-        as text, so the user sees progress even though tokens aren't streamed.
+        Uses chat_completion_stream (which now supports tools) so the Live job
+        preview gets real token-level deltas instead of one-shot dumps. Each
+        content/reasoning token + each tool_call name/arg fragment is forwarded
+        as a pg_notify delta on the same channel the streaming first turn
+        already uses.
         """
-        async def _notify(text: str) -> None:
+        async def _notify(text: str, reasoning: bool = False) -> None:
+            if not text:
+                return
             try:
                 async with db.acquire() as ncon:
                     await ncon.execute(
@@ -656,7 +945,7 @@ async def execute_job(job_id: str) -> str:
                             "runId": run["id"],
                             "event": "delta",
                             "text": text,
-                            "reasoning": False,
+                            "reasoning": reasoning,
                         }, ensure_ascii=False),
                     )
             except Exception:  # noqa: BLE001
@@ -670,9 +959,24 @@ async def execute_job(job_id: str) -> str:
         last_model = run["model"]
         last_latency = 0
         for turn_i in range(4):
-            await _notify(f"\n[turn {turn_i + 1}: calling {run['model']}…]\n")
+            # Inner iterations only fire when the model emitted tool_calls and
+            # we're feeding mock results back. Surface that explicitly via a
+            # structured event so the client renders a divider, not inline text.
+            if turn_i > 0:
+                await _emit_event(job_id, run["id"], event="turn.followup")
             t_start = __import__("time").perf_counter()
-            r = await chat_completion(
+
+            stream_content_parts: list[str] = []
+            stream_reasoning_parts: list[str] = []
+            stream_tokens_in = 0
+            stream_tokens_out = 0
+            stream_model = run["model"]
+            stream_tool_calls: list[dict[str, Any]] | None = None
+            # Track which (index, name) we've already announced so we only
+            # emit one "[calling foo(…)]" marker per tool call.
+            announced_tool_names: set[int] = set()
+
+            async for ev in chat_completion_stream(
                 base_url=base_url,
                 api_key=api_key,
                 model=run["model"],
@@ -685,22 +989,57 @@ async def execute_job(job_id: str) -> str:
                 extra_headers=extra_headers,
                 reasoning_effort=provider.get("reasoningEffort"),
                 chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")) or None,
-            )
-            t_in += r.tokens_in
-            t_out += r.tokens_out
-            t_cost += r.cost_usd
+            ):
+                if ev.done:
+                    stream_tokens_in = ev.tokens_in
+                    stream_tokens_out = ev.tokens_out
+                    stream_model = ev.model or run["model"]
+                    stream_tool_calls = ev.tool_calls
+                    break
+                if ev.delta:
+                    if ev.reasoning:
+                        stream_reasoning_parts.append(ev.delta)
+                        await _notify(ev.delta, reasoning=True)
+                    else:
+                        stream_content_parts.append(ev.delta)
+                        await _notify(ev.delta)
+                if ev.tool_call_delta:
+                    idx = int(ev.tool_call_delta.get("index", 0))
+                    name = ev.tool_call_delta.get("name") or ""
+                    frag = ev.tool_call_delta.get("argumentsFragment") or ""
+                    await _emit_event(
+                        job_id,
+                        run["id"],
+                        event="tool.call.frag",
+                        index=idx,
+                        name=name,
+                        fragment=frag,
+                    )
+                    if name:
+                        announced_tool_names.add(idx)
+
+            t_in += stream_tokens_in
+            t_out += stream_tokens_out
+            t_cost += estimate_cost(stream_model, stream_tokens_in, stream_tokens_out)
             last_latency = int((__import__("time").perf_counter() - t_start) * 1000)
-            last_model = r.model or run["model"]
-            tc = _normalise_tool_calls(r.tool_calls) if r.tool_calls else []
-            content = r.content or ""
-            if content:
-                await _notify(content)
+            last_model = stream_model
+            tc = _normalise_tool_calls(stream_tool_calls) if stream_tool_calls else []
+            content = "".join(stream_content_parts)
+
+            # Mark each streamed tool call as "args complete" so the client can
+            # stop the inline "..." indicator and freeze the card.
+            for idx in announced_tool_names:
+                await _emit_event(
+                    job_id, run["id"], event="tool.call.complete", index=idx,
+                )
+
             asst_msg: dict[str, Any] = {"role": "assistant", "content": content}
             if tc:
                 asst_msg["tool_calls"] = tc
-            asst_msg["_tokens_out"] = r.tokens_out
+            asst_msg["_tokens_out"] = stream_tokens_out
             asst_msg["_model"] = last_model
             asst_msg["_latency_ms"] = last_latency
+            asst_msg["_reasoning_content"] = "".join(stream_reasoning_parts) or None
             new_msgs.append(asst_msg)
             last_content = content
             if not tc:
@@ -710,16 +1049,18 @@ async def execute_job(job_id: str) -> str:
                 fn = call.get("function") or {}
                 tname = fn.get("name") or ""
                 args_text = fn.get("arguments") or "{}"
-                args_preview = args_text.replace("\n", " ")
-                if len(args_preview) > 120:
-                    args_preview = args_preview[:120] + "…"
-                await _notify(f"\n[tool call: {tname}({args_preview})]\n")
+                # No `[tool call: …]` echo here — the streaming
+                # `tool_call_delta` loop above already announced this call as
+                # the model emitted it. Duplicating it just clutters the UI.
                 tdef = tools_by_name.get(tname)
                 if tdef is None:
                     tool_text = json.dumps(
                         {"error": f"unknown tool {tname!r}"}, ensure_ascii=False
                     )
                 else:
+                    await _emit_event(
+                        job_id, run["id"], event="tool.mock.start", name=tname,
+                    )
                     tool_text = await _mock_tool_result(
                         tool_def=tdef,
                         args_text=args_text,
@@ -727,11 +1068,24 @@ async def execute_job(job_id: str) -> str:
                         api_key=api_key,
                         model=run["model"],
                         extra_headers=extra_headers,
+                        # Use the run's actual sampling params + reasoning
+                        # controls so the mock backend has the same budget the
+                        # assistant has (no more 600-token throttle that left
+                        # reasoning models with empty `content`).
+                        sampling_params=sampling,
+                        reasoning_effort=provider.get("reasoningEffort"),
+                        chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")) or None,
+                        # Forward each mock-backend delta (content + reasoning)
+                        # to the live preview so the user sees the synthetic
+                        # response materialize.
+                        on_delta=_notify,
                     )
-                result_preview = tool_text.replace("\n", " ")
-                if len(result_preview) > 200:
-                    result_preview = result_preview[:200] + "…"
-                await _notify(f"[tool result: {result_preview}]\n")
+                preview = tool_text.replace("\n", " ")
+                if len(preview) > 400:
+                    preview = preview[:400] + "…"
+                await _emit_event(
+                    job_id, run["id"], event="tool.result", name=tname, preview=preview,
+                )
                 new_msgs.append({
                     "role": "tool",
                     "tool_call_id": call.get("id") or cuid_like(),
@@ -770,7 +1124,7 @@ async def execute_job(job_id: str) -> str:
         {
             "url": (provider.get("baseUrl") or "").rstrip("/") + "/chat/completions",
             "model": run["model"],
-            "stream": tools_payload is None,
+            "stream": True,
             "tools": [t["function"]["name"] for t in (tools_payload or [])],
             "samplingParams": {
                 "temperature": sampling.get("temperature"),
@@ -803,15 +1157,13 @@ async def execute_job(job_id: str) -> str:
         # carries everything past the FIRST assistant content turn (tool calls
         # + tool results + any follow-up assistant content).
         # Open the Live job preview SSE before the first model call so the UI
-        # flips from "Connecting…" to "Streaming…" immediately.
-        try:
-            async with db.acquire() as ncon:
-                await ncon.execute(
-                    "SELECT pg_notify('synthgen_job', $1)",
-                    json.dumps({"jobId": job_id, "runId": run["id"], "event": "start"}),
-                )
-        except Exception:  # noqa: BLE001
-            pass
+        # flips from "Connecting…" to "Streaming…" immediately. Also emit the
+        # rendered seed user message as a structured turn.user event so the
+        # client can render it as a "User · turn 1" card.
+        await _emit_event(job_id, run["id"], event="start")
+        await _emit_event(
+            job_id, run["id"], event="turn.user", turn=1, text=user_text,
+        )
         try:
             first = await _run_turn_with_tools(messages)
         except Exception as e:  # noqa: BLE001
@@ -847,12 +1199,11 @@ async def execute_job(job_id: str) -> str:
         upstream_model = result.model
     else:
         # ── Streaming first turn (no tools) ──────────────────────────────────
+        await _emit_event(job_id, run["id"], event="start")
+        await _emit_event(
+            job_id, run["id"], event="turn.user", turn=1, text=user_text,
+        )
         try:
-            async with db.acquire() as ncon:
-                await ncon.execute(
-                    "SELECT pg_notify('synthgen_job', $1)",
-                    json.dumps({"jobId": job_id, "runId": run["id"], "event": "start"}),
-                )
             async for ev in chat_completion_stream(
                 base_url=base_url,
                 api_key=api_key,
@@ -1032,6 +1383,7 @@ async def execute_job(job_id: str) -> str:
             reasoning_effort=provider.get("reasoningEffort"),
             chat_template_kwargs=chat_template_kwargs_arg,
             max_tokens=int(sampling.get("max_tokens") or 1024),
+            tool_defs=tool_defs if tool_defs else None,
             turn_number=turn_i,
             total_turns=target_turns,
         )
@@ -1068,93 +1420,166 @@ async def execute_job(job_id: str) -> str:
             )
         user_text_next = stripped
 
-        # Surface the simulated user turn on the live preview SSE channel so
-        # the UI shows progress between assistant calls.
-        await _notify_delta(f"\n\n[user · turn {turn_i}] {user_text_next}\n\n")
+        # Surface the simulated user turn as a structured event so the live
+        # preview renders it as a "User · turn N" card, not inline text.
+        await _emit_event(
+            job_id, run["id"], event="turn.user", turn=turn_i, text=user_text_next,
+        )
 
         extra_messages.append({"role": "user", "content": user_text_next})
         transcript.append({"role": "user", "content": user_text_next})
 
-        try:
-            if tools_payload is not None:
-                # Use the tool-aware helper so the model can invoke tools here too.
-                next_first = await _run_turn_with_tools(transcript)
-                turn_msgs = next_first["messages"]
-                turn_tokens_in = next_first["tokens_in"]
-                turn_tokens_out = next_first["tokens_out"]
-                turn_cost = next_first["cost_usd"]
-                turn_latency = next_first["latency_ms"]
-                # Append every assistant/tool message to extra_messages + transcript.
-                for m in turn_msgs:
-                    extra_messages.append(m)
-                    transcript.append({k: v for k, v in m.items() if not k.startswith("_")})
-                # Track the LAST assistant content for validation / closing.
-                final_assistant = next(
-                    (m for m in reversed(turn_msgs) if m.get("role") == "assistant"),
-                    None,
+        # Each assistant turn gets up to MULTI_TURN_RETRIES attempts. A turn
+        # that errors transiently (network blip, upstream 5xx, dropped stream)
+        # used to silently `break` the loop and the job got marked succeeded
+        # with only turn 1 persisted — that's the "1 turn only / tokensIn=83"
+        # symptom. Now we retry with exponential backoff, and if we still
+        # can't complete the turn we re-raise so the outer handler marks the
+        # job failed (with lastError set) instead of pretending success.
+        MULTI_TURN_RETRIES = 3
+        last_err: Exception | None = None
+        succeeded_this_turn = False
+        for attempt in range(MULTI_TURN_RETRIES):
+            try:
+                if tools_payload is not None:
+                    next_first = await _run_turn_with_tools(transcript)
+                    turn_msgs = next_first["messages"]
+                    turn_tokens_in = next_first["tokens_in"]
+                    turn_tokens_out = next_first["tokens_out"]
+                    turn_cost = next_first["cost_usd"]
+                    turn_latency = next_first["latency_ms"]
+                    # Append every assistant/tool message to extra_messages + transcript.
+                    for m in turn_msgs:
+                        extra_messages.append(m)
+                        transcript.append({k: v for k, v in m.items() if not k.startswith("_")})
+                    final_assistant = next(
+                        (m for m in reversed(turn_msgs) if m.get("role") == "assistant"),
+                        None,
+                    )
+                    if final_assistant is not None:
+                        last_assistant_content = final_assistant.get("content") or ""
+                        last_assistant_model = final_assistant.get("_model") or run["model"]
+                        last_assistant_tokens_out = int(final_assistant.get("_tokens_out") or 0)
+                        last_assistant_latency = int(final_assistant.get("_latency_ms") or turn_latency)
+                    total_tokens_in += turn_tokens_in
+                    total_tokens_out += turn_tokens_out
+                    total_cost += turn_cost
+                    await _log_event(
+                        job_id,
+                        "turn.assistant",
+                        {
+                            "turn": turn_i,
+                            "model": last_assistant_model,
+                            "tokensIn": turn_tokens_in,
+                            "tokensOut": turn_tokens_out,
+                            "latencyMs": turn_latency,
+                            "contentChars": len(last_assistant_content),
+                            "withTools": True,
+                            "attempt": attempt + 1,
+                        },
+                    )
+                    succeeded_this_turn = True
+                    break
+
+                # Tool-less path: stream the response so the live preview gets
+                # token-by-token deltas, matching the turn-1 streaming experience.
+                t_start = __import__("time").perf_counter()
+                stream_content_parts = []
+                stream_reasoning_parts = []
+                stream_tokens_in = 0
+                stream_tokens_out = 0
+                stream_model = run["model"]
+
+                # Structured event so the client renders this as an "Assistant ·
+                # turn N" divider rather than inline text. Only emit on the first
+                # attempt; on retry we keep the same banner so the UI doesn't show
+                # duplicate dividers.
+                if attempt == 0:
+                    await _emit_event(
+                        job_id, run["id"], event="turn.assistant", turn=turn_i,
+                    )
+
+                async for ev in chat_completion_stream(
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=run["model"],
+                    messages=transcript,
+                    temperature=float(sampling.get("temperature", 0.7)),
+                    max_tokens=sampling.get("max_tokens", 1024),
+                    extra_headers=extra_headers,
+                    reasoning_effort=provider.get("reasoningEffort"),
+                    chat_template_kwargs=chat_template_kwargs_arg,
+                ):
+                    if ev.done:
+                        stream_tokens_in = ev.tokens_in
+                        stream_tokens_out = ev.tokens_out
+                        stream_model = ev.model or run["model"]
+                        break
+                    if ev.delta:
+                        if ev.reasoning:
+                            stream_reasoning_parts.append(ev.delta)
+                        else:
+                            stream_content_parts.append(ev.delta)
+                        await _notify_delta(ev.delta, reasoning=ev.reasoning)
+                turn_latency = int((__import__("time").perf_counter() - t_start) * 1000)
+
+                # An "empty" success (no content + no usage) is treated as a
+                # failure so the retry kicks in — otherwise we'd persist an
+                # empty assistant message and continue.
+                if not stream_content_parts and stream_tokens_out == 0:
+                    raise RuntimeError(
+                        f"turn {turn_i}: provider returned no content and no usage",
+                    )
+                succeeded_this_turn = True
+                last_err = None
+                break
+            except Exception as e:  # noqa: BLE001
+                last_err = e
+                log.warning(
+                    "turn %s attempt %s/%s failed: %s",
+                    turn_i, attempt + 1, MULTI_TURN_RETRIES, e,
                 )
-                if final_assistant is not None:
-                    last_assistant_content = final_assistant.get("content") or ""
-                    last_assistant_model = final_assistant.get("_model") or run["model"]
-                    last_assistant_tokens_out = int(final_assistant.get("_tokens_out") or 0)
-                    last_assistant_latency = int(final_assistant.get("_latency_ms") or turn_latency)
-                total_tokens_in += turn_tokens_in
-                total_tokens_out += turn_tokens_out
-                total_cost += turn_cost
                 await _log_event(
                     job_id,
-                    "turn.assistant",
-                    {
-                        "turn": turn_i,
-                        "model": last_assistant_model,
-                        "tokensIn": turn_tokens_in,
-                        "tokensOut": turn_tokens_out,
-                        "latencyMs": turn_latency,
-                        "contentChars": len(last_assistant_content),
-                        "withTools": True,
-                    },
+                    "turn.retry",
+                    {"turn": turn_i, "attempt": attempt + 1, "error": str(e)[:500]},
                 )
-                continue
+                if attempt + 1 < MULTI_TURN_RETRIES:
+                    await asyncio.sleep(min(2 ** attempt, 8))
 
-            # Tool-less path: a single chat_completion.
-            t_start = __import__("time").perf_counter()
-            next_resp = await chat_completion(
-                base_url=base_url,
-                api_key=api_key,
-                model=run["model"],
-                messages=transcript,
-                temperature=float(sampling.get("temperature", 0.7)),
-                top_p=float(sampling.get("top_p", 1.0)),
-                max_tokens=sampling.get("max_tokens", 1024),
-                seed=sampling.get("seed"),
-                extra_headers=extra_headers,
-                reasoning_effort=provider.get("reasoningEffort"),
-                chat_template_kwargs=chat_template_kwargs_arg,
+        if not succeeded_this_turn:
+            # All retries exhausted. Re-raise so the outer wrapper marks the
+            # job failed with lastError set — much better UX than the old
+            # silent `break` that left jobs as "succeeded with only 1 turn".
+            err_msg = (
+                f"turn {turn_i} failed after {MULTI_TURN_RETRIES} attempts: "
+                f"{last_err}"
             )
-            turn_latency = int((__import__("time").perf_counter() - t_start) * 1000)
-        except Exception as e:  # noqa: BLE001
-            log.warning("turn %s assistant call failed: %s", turn_i, e)
-            await _log_event(job_id, "turn.error", {"turn": turn_i, "error": str(e)[:500]})
-            break
+            await _log_event(job_id, "turn.error", {"turn": turn_i, "error": err_msg[:1000]})
+            raise last_err or RuntimeError(err_msg)
 
-        total_tokens_in += next_resp.tokens_in
-        total_tokens_out += next_resp.tokens_out
-        total_cost += next_resp.cost_usd
-        last_assistant_content = next_resp.content or ""
-        last_assistant_model = next_resp.model or run["model"]
-        last_assistant_tokens_out = next_resp.tokens_out
+        if tools_payload is not None:
+            # Tool-aware branch already appended messages + logged the event.
+            # Skip the tool-less bookkeeping below.
+            continue
+
+        # Materialize the streamed turn into the same shape the non-stream
+        # branch produced so the downstream code reads identically.
+        total_tokens_in += stream_tokens_in
+        total_tokens_out += stream_tokens_out
+        total_cost += estimate_cost(stream_model, stream_tokens_in, stream_tokens_out)
+        last_assistant_content = "".join(stream_content_parts)
+        last_assistant_model = stream_model
+        last_assistant_tokens_out = stream_tokens_out
         last_assistant_latency = turn_latency
-
-        # Push the assistant content onto the live preview as a single chunk
-        # (chat_completion is non-streaming so we don't have token-level deltas).
-        await _notify_delta(f"[assistant · turn {turn_i}]\n{last_assistant_content}\n")
 
         extra_messages.append({
             "role": "assistant",
             "content": last_assistant_content,
-            "_tokens_out": next_resp.tokens_out,
+            "_tokens_out": stream_tokens_out,
             "_model": last_assistant_model,
             "_latency_ms": turn_latency,
+            "_reasoning_content": "".join(stream_reasoning_parts) or None,
         })
         transcript.append({"role": "assistant", "content": last_assistant_content})
 
@@ -1164,12 +1589,29 @@ async def execute_job(job_id: str) -> str:
             {
                 "turn": turn_i,
                 "model": last_assistant_model,
-                "tokensIn": next_resp.tokens_in,
-                "tokensOut": next_resp.tokens_out,
+                "tokensIn": stream_tokens_in,
+                "tokensOut": stream_tokens_out,
                 "latencyMs": turn_latency,
                 "contentChars": len(last_assistant_content),
+                "reasoningChars": sum(len(p) for p in stream_reasoning_parts),
                 "withTools": False,
             },
+        )
+
+    actual_user_turns = 1 + sum(1 for m in extra_messages if m.get("role") == "user")
+    # Defensive assertion. With the per-turn retry above, the loop either
+    # produces a turn or raises — there's no path that silently drops one,
+    # so this should be unreachable. If it ever fires, something we haven't
+    # accounted for is breaking the loop and we want it loud.
+    if actual_user_turns < target_turns:
+        await _log_event(
+            job_id,
+            "turn.shortfall",
+            {"actualTurns": actual_user_turns, "targetTurns": target_turns},
+        )
+        raise RuntimeError(
+            f"BUG: multi-turn loop produced {actual_user_turns} of "
+            f"{target_turns} turns without raising — investigate"
         )
 
     # Multi-turn loop is done — close the SSE stream with a final `done` event
@@ -1186,8 +1628,6 @@ async def execute_job(job_id: str) -> str:
                 "latency_ms": last_assistant_latency,
             }),
         )
-
-    actual_user_turns = 1 + sum(1 for m in extra_messages if m.get("role") == "user")
     # Used by validators + persistence below. We deliberately validate the LAST
     # assistant turn (most reflective of how the conversation finishes); per-turn
     # validation can land later if needed.
@@ -1290,10 +1730,12 @@ async def execute_job(job_id: str) -> str:
             ordinal += 1
             await conn.execute(
                 """INSERT INTO "Message"
-                   (id, "conversationId", ordinal, role, content, language, script,
-                    "tokenCount", "latencyMs", model, "rawProviderResponse", "createdAt")
-                   VALUES ($1, $2, $3, 'assistant', $4, $5, $6, $7, $8, $9, $10, NOW())""",
+                   (id, "conversationId", ordinal, role, content, "reasoningContent",
+                    language, script, "tokenCount", "latencyMs", model,
+                    "rawProviderResponse", "createdAt")
+                   VALUES ($1, $2, $3, 'assistant', $4, $5, $6, $7, $8, $9, $10, $11, NOW())""",
                 asst_msg_id, conv_id, ordinal, result.content,
+                result.reasoning_content,
                 primary_lang, lp.get("script") or "latin",
                 result.tokens_out, result.latency_ms, result.model,
                 json.dumps(result.raw),
@@ -1314,21 +1756,24 @@ async def execute_job(job_id: str) -> str:
                         cuid_like(), conv_id, ordinal, content,
                     )
                 elif role == "assistant":
-                    tool_calls_json = (
-                        json.dumps(m["tool_calls"], ensure_ascii=False)
-                        if m.get("tool_calls")
-                        else None
-                    )
+                    # IMPORTANT: pass the Python list directly — db.py registers
+                    # an asyncpg jsonb codec with `encoder=json.dumps`, so
+                    # pre-stringifying causes a DOUBLE json.dumps (the column
+                    # ends up storing `"[{…}]"` — a JSON string of a JSON
+                    # string — instead of `[{…}]`).
+                    tool_calls_obj = m.get("tool_calls") or None
                     await conn.execute(
                         """INSERT INTO "Message"
-                           (id, "conversationId", ordinal, role, content, "toolCalls",
+                           (id, "conversationId", ordinal, role, content,
+                            "reasoningContent", "toolCalls",
                             language, script, "tokenCount", "latencyMs", model, "createdAt")
-                           VALUES ($1, $2, $3, 'assistant', $4, $5::jsonb, $6, $7, $8, $9, $10, NOW())""",
+                           VALUES ($1, $2, $3, 'assistant', $4, $5, $6::jsonb, $7, $8, $9, $10, $11, NOW())""",
                         cuid_like(),
                         conv_id,
                         ordinal,
                         content,
-                        tool_calls_json,
+                        m.get("_reasoning_content"),
+                        tool_calls_obj,
                         primary_lang,
                         lp.get("script") or "latin",
                         int(m.get("_tokens_out") or 0),
