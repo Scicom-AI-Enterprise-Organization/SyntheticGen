@@ -47,7 +47,7 @@ export default async function PersonasPage({
     <div className="space-y-6">
       <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Personas</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Personas</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Demographically-detailed personas: ethnicity × region × urbanity × age, with optional
             dialect tags and a default language profile. Drives realism in generated conversations.

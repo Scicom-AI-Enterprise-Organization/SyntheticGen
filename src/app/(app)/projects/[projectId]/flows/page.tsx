@@ -40,7 +40,7 @@ export default async function FlowsPage({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Flows</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Flows</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Hand-authored conversation graphs that drive multi-turn synthetic generation. Each flow
           is a DAG of <Badge variant="outline" className="text-[10px]">intent</Badge>{" "}

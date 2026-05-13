@@ -52,7 +52,7 @@ export default async function RubricDetailPage({
           Rubrics
         </Link>
         <div className="mt-1 flex flex-wrap items-center gap-2">
-          <h1 className="text-2xl font-bold tracking-tight">{rubric.name}</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">{rubric.name}</h1>
           {rubric.isPreset && <Badge variant="outline">preset</Badge>}
           {rubric.aiDrafted && <Badge variant="secondary">AI-drafted</Badge>}
         </div>

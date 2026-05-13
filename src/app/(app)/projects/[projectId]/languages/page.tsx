@@ -30,7 +30,7 @@ export default async function LanguagesPage({
     <div className="space-y-6">
       <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Language profiles</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Language profiles</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Each profile is a (language × script × register × code-switch policy) bundle. The two
             seeded presets cover most enterprise use cases.

@@ -72,7 +72,7 @@ export default async function NewRunPage({
   if (missing.length > 0) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-bold tracking-tight">New run</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">New run</h1>
         <Card>
           <CardHeader>
             <CardTitle>Missing prerequisites</CardTitle>
@@ -94,7 +94,7 @@ export default async function NewRunPage({
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold tracking-tight">New run</h1>
+      <h1 className="text-2xl font-semibold tracking-tight">New run</h1>
       <Card>
         <CardHeader>
           <CardTitle>Configuration</CardTitle>

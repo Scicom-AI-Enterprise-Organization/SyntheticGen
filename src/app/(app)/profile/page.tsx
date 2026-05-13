@@ -31,8 +31,8 @@ export default async function ProfilePage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Profile</h1>
-        <p className="mt-2 text-muted-foreground">
+        <h1 className="text-2xl font-semibold tracking-tight">Profile</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
           Manage your account details and password.
         </p>
       </div>

@@ -53,7 +53,7 @@ export default async function DatasetDetailPage({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">{dataset.name}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{dataset.name}</h1>
         {dataset.description && (
           <p className="mt-1 text-sm text-muted-foreground">{dataset.description}</p>
         )}

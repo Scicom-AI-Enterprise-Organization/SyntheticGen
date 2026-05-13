@@ -31,7 +31,7 @@ export default async function DatasetsPage({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Datasets</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Datasets</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           A dataset is a named collection. Frozen versions are immutable; exports are
           built from a version.

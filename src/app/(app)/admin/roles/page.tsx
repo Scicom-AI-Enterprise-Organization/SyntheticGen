@@ -17,8 +17,8 @@ export default async function AdminRolesPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold tracking-tight">Roles &amp; Permissions</h1>
-        <p className="mt-2 text-muted-foreground">
+        <h1 className="text-2xl font-semibold tracking-tight">Roles &amp; Permissions</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
           Toggle which permissions each role grants.
         </p>
       </div>

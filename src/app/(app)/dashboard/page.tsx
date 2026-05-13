@@ -223,10 +223,10 @@ export default async function DashboardPage() {
     <div className="space-y-6">
       <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">
+          <h1 className="text-2xl font-semibold tracking-tight">
             Welcome{user.name ? `, ${user.name}` : ""}
           </h1>
-          <p className="mt-2 text-sm text-muted-foreground">
+          <p className="mt-1 text-sm text-muted-foreground">
             {projectCount === 0
               ? "Create your first project to start generating localized synthetic datasets."
               : `Across ${projectCount} project${projectCount === 1 ? "" : "s"}.`}

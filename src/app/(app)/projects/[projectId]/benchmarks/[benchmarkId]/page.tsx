@@ -68,7 +68,7 @@ export default async function BenchmarkDetailPage({
               <ArrowLeft className="h-3 w-3" /> Benchmarks
             </Link>
           </div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight">
+          <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
             <FlaskConical className="h-5 w-5" />
             {benchmark.name}
             <Badge variant="outline" className="text-[10px]">

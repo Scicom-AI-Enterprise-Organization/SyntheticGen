@@ -39,7 +39,7 @@ export default async function RubricsPage({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Rubrics</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Rubrics</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Reusable scoring schemes for chat-replay benchmarks. Each rubric is a list of axes the
           LLM judge scores a candidate model on (e.g. language fidelity, register, helpfulness).

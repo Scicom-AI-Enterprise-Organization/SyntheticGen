@@ -79,7 +79,7 @@ export default async function BenchmarkRunPage({
           <ArrowLeft className="h-3 w-3" />
           {run.benchmark.name}
         </Link>
-        <h1 className="mt-1 flex flex-wrap items-center gap-2 text-2xl font-bold tracking-tight">
+        <h1 className="mt-1 flex flex-wrap items-center gap-2 text-2xl font-semibold tracking-tight">
           Run
           <code className="font-mono text-sm">{run.id.slice(0, 12)}</code>
           <Badge variant="outline" className="text-[10px]">

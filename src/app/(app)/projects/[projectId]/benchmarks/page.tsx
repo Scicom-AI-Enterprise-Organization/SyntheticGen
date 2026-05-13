@@ -56,7 +56,7 @@ export default async function BenchmarksPage({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Benchmarks</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Benchmarks</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Replay project-generated conversations through a candidate model and score against the
           reference assistant turns with deterministic validators + an LLM judge. Each run targets

@@ -38,7 +38,7 @@ export default async function ProvidersPage({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Providers</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Providers</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           OpenAI-compatible model endpoints. Same wire format works for vLLM, Together, OpenRouter,
           SGLang, and Anthropic via proxy. API keys are AES-256-GCM encrypted at rest and decrypted

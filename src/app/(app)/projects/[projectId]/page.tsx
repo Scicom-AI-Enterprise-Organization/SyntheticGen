@@ -60,7 +60,7 @@ export default async function ProjectOverviewPage({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">{project.name}</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
         {project.description && (
           <p className="mt-1 text-sm text-muted-foreground">{project.description}</p>
         )}

@@ -65,7 +65,7 @@ export default async function NewKnowledgeEntryPage({
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
-        <h1 className="text-2xl font-bold tracking-tight">New knowledge entry</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">New knowledge entry</h1>
         <Button asChild variant="outline" size="sm">
           <Link href={`/projects/${projectId}/knowledge`}>
             <ChevronLeft className="mr-1 h-4 w-4" />

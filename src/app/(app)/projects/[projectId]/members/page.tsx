@@ -28,7 +28,7 @@ export default async function ProjectMembersPage({
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">Members</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">Members</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           Project-scoped roles. Existing users only — invite via /admin/organization first.
         </p>

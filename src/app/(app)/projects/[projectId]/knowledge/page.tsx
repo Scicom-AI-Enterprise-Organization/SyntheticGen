@@ -76,7 +76,7 @@ export default async function KnowledgePage({
     <div className="space-y-6">
       <div className="flex items-end justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Knowledge base</h1>
+          <h1 className="text-2xl font-semibold tracking-tight">Knowledge base</h1>
           <p className="mt-1 text-sm text-muted-foreground">
             Domain facts the assistant should ground its answers in. Each entry can be
             linked to one or more taxonomy nodes; the worker auto-injects matching
