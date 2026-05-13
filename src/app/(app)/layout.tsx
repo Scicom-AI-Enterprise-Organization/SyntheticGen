@@ -1,9 +1,8 @@
-import Link from "next/link";
 import { requireUser, hasPermission } from "@/lib/rbac";
 import { prisma } from "@/lib/db";
 import { AppSidebar } from "@/components/auth/app-sidebar";
-import { UserMenu } from "@/components/auth/user-menu";
-import { ThemeToggle } from "@/components/theme-toggle";
+import { AppTopbar } from "@/components/auth/app-topbar";
+import { SidebarStateProvider } from "@/components/auth/sidebar-state";
 import { ConfirmDialogProvider } from "@/components/confirm-dialog";
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
@@ -12,8 +11,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     ["users:read", "roles:read"].includes(p),
   );
 
-  // Pre-fetch the user's projects so the sidebar can resolve the active
-  // project name from the pathname client-side without an extra round-trip.
   const isGlobalAdmin =
     hasPermission(user, "users:write") && hasPermission(user, "roles:write");
   const projects = await prisma.project.findMany({
@@ -27,24 +24,17 @@ export default async function AppLayout({ children }: { children: React.ReactNod
 
   return (
     <ConfirmDialogProvider>
-      <div className="flex h-screen flex-col overflow-hidden bg-background text-foreground">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-4 lg:px-6">
-          <Link href="/dashboard" className="text-sm font-semibold tracking-tight">
-            SyntheticGen
-          </Link>
-          <div className="flex items-center gap-2">
-            <ThemeToggle />
-            <UserMenu />
-          </div>
-        </header>
-
-        <div className="flex min-h-0 flex-1">
+      <SidebarStateProvider>
+        <div className="flex h-screen overflow-hidden bg-background text-foreground">
           <AppSidebar isAdmin={isAdmin} projects={projects} />
-          <main className="min-w-0 flex-1 overflow-y-auto px-4 py-8 lg:px-8">
-            {children}
-          </main>
+          <div className="flex min-w-0 flex-1 flex-col">
+            <AppTopbar projects={projects} />
+            <main className="min-w-0 flex-1 overflow-y-auto px-4 py-8 lg:px-8">
+              {children}
+            </main>
+          </div>
         </div>
-      </div>
+      </SidebarStateProvider>
     </ConfirmDialogProvider>
   );
 }

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { signOut, useSession } from "next-auth/react";
-import { ChevronDown, LogOut, User as UserIcon } from "lucide-react";
+import { LogOut, User as UserIcon } from "lucide-react";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -12,7 +12,6 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 
 export function UserMenu() {
@@ -20,24 +19,20 @@ export function UserMenu() {
   const user = session?.user;
   if (!user) return null;
 
-  const initials = (user.name ?? user.email ?? "U")
-    .split(/\s+/)
-    .map((s) => s[0])
-    .slice(0, 2)
-    .join("")
-    .toUpperCase();
+  const initial = (user.name ?? user.email ?? "U").charAt(0).toUpperCase();
 
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="sm" className="gap-2 pl-2 pr-1">
-          <Avatar className="h-7 w-7">
-            {user.image && <AvatarImage src={user.image} alt={user.name ?? ""} />}
-            <AvatarFallback className="bg-primary/10 text-xs text-primary">
-              {initials}
-            </AvatarFallback>
-          </Avatar>
-          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+        <Button
+          variant="ghost"
+          size="icon"
+          className="rounded-full p-0"
+          aria-label="Account menu"
+        >
+          <span className="flex h-7 w-7 items-center justify-center rounded-full bg-emerald-600 text-xs font-semibold text-emerald-50">
+            {initial}
+          </span>
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-56">
