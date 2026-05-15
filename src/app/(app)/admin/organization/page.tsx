@@ -1,19 +1,32 @@
 import { headers } from "next/headers";
-import { requirePermission } from "@/lib/rbac";
+import { UserPlus } from "lucide-react";
+import { requirePermission, hasPermission } from "@/lib/rbac";
 import { prisma } from "@/lib/db";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { InviteForm } from "./invite-form";
 import { InvitationsTable } from "./invitations-table";
+import { UsersTable } from "./users-table";
 
 export default async function OrganizationPage() {
-  await requirePermission("invites:read");
+  const user = await requirePermission("invites:read");
+  const canManageUsers = hasPermission(user, "users:read");
 
-  const [invitations, roles, h] = await Promise.all([
+  const [invitations, roles, users, h] = await Promise.all([
     prisma.invitation.findMany({
       orderBy: { createdAt: "desc" },
       include: { role: true, invitedBy: true, acceptedBy: true },
     }),
     prisma.role.findMany({ orderBy: { name: "asc" } }),
+    canManageUsers
+      ? prisma.user.findMany({
+          orderBy: { createdAt: "desc" },
+          include: {
+            roles: { include: { role: true } },
+            accounts: { select: { provider: true } },
+          },
+        })
+      : Promise.resolve([]),
     headers(),
   ]);
 
@@ -26,16 +39,16 @@ export default async function OrganizationPage() {
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Organization</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Invite people to your workspace by sharing a sign-up link.
+          Manage users and invitations
         </p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Create invite</CardTitle>
-          <CardDescription>
-            Optionally bind to an email and pre-assign a role. The link is shareable until it expires or is revoked.
-          </CardDescription>
+          <CardTitle className="flex items-center gap-2">
+            <UserPlus className="h-4 w-4" />
+            Invite by link
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <InviteForm roles={roles.map((r) => r.name)} baseUrl={baseUrl} />
@@ -67,6 +80,32 @@ export default async function OrganizationPage() {
           />
         </CardContent>
       </Card>
+
+      {canManageUsers && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              Members
+              <Badge variant="secondary">{users.length}</Badge>
+            </CardTitle>
+            <CardDescription>Manage users and role assignments.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <UsersTable
+              users={users.map((u) => ({
+                id: u.id,
+                email: u.email,
+                name: u.name,
+                roles: u.roles.map((ur) => ur.role.name),
+                hasLocalPassword: Boolean(u.passwordHash),
+                providers: u.accounts.map((a) => a.provider),
+                createdAt: u.createdAt.toISOString(),
+              }))}
+              allRoles={roles.map((r) => r.name)}
+            />
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

@@ -21,7 +21,6 @@ import {
   Settings,
   ShieldCheck,
   User,
-  Users,
   Users2,
   Wrench,
   type LucideIcon,
@@ -48,7 +47,6 @@ const WORKSPACE: Item[] = [
 const ACCOUNT: Item[] = [{ label: "Profile", href: "/profile", icon: User }];
 
 const ADMIN: Item[] = [
-  { label: "Users", href: "/admin/users", icon: Users },
   { label: "Roles", href: "/admin/roles", icon: ShieldCheck },
   { label: "Organization", href: "/admin/organization", icon: Building2 },
 ];

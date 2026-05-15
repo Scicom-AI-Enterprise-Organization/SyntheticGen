@@ -9,19 +9,19 @@ import { requirePermission } from "@/lib/rbac";
 const createSchema = z.object({
   email: z.string().email().optional().or(z.literal("")).transform((v) => (v ? v : undefined)),
   roleName: z.string().optional().or(z.literal("")).transform((v) => (v ? v : undefined)),
-  expiresInDays: z.coerce.number().int().min(1).max(365).optional(),
+  expiresInHours: z.coerce.number().int().min(1).max(8760).optional(),
 });
 
 export async function createInvitation(input: {
   email?: string;
   roleName?: string;
-  expiresInDays?: number;
+  expiresInHours?: number;
 }) {
   const inviter = await requirePermission("invites:write");
   const parsed = createSchema.safeParse(input);
   if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
 
-  const { email, roleName, expiresInDays } = parsed.data;
+  const { email, roleName, expiresInHours } = parsed.data;
 
   let roleId: string | null = null;
   if (roleName) {
@@ -31,8 +31,8 @@ export async function createInvitation(input: {
   }
 
   const token = randomBytes(24).toString("base64url");
-  const expiresAt = expiresInDays
-    ? new Date(Date.now() + expiresInDays * 24 * 60 * 60 * 1000)
+  const expiresAt = expiresInHours
+    ? new Date(Date.now() + expiresInHours * 60 * 60 * 1000)
     : null;
 
   await prisma.invitation.create({

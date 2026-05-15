@@ -439,13 +439,10 @@ export default async function DashboardPage() {
           </CardHeader>
           <CardContent className="flex flex-wrap gap-2">
             <Button asChild variant="outline" size="sm">
-              <Link href="/admin/users">Users</Link>
+              <Link href="/admin/organization">Users & invitations</Link>
             </Button>
             <Button asChild variant="outline" size="sm">
               <Link href="/admin/roles">Roles</Link>
-            </Button>
-            <Button asChild variant="outline" size="sm">
-              <Link href="/admin/organization">Invitations</Link>
             </Button>
           </CardContent>
         </Card>

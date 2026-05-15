@@ -98,10 +98,17 @@ export function CrawlCard({
   function openWithPreset(p: CrawlPreset) {
     const params = new URLSearchParams(Array.from(searchParams.entries()));
     params.set("crawl", "new");
-    params.set("url", p.startUrl);
-    params.set("depth", String(p.depth));
-    params.set("maxPages", String(p.maxPages));
-    params.set("sameOrigin", p.sameOriginOnly ? "1" : "0");
+    if (p.startUrl) params.set("url", p.startUrl);
+    else params.delete("url");
+    if (p.depth != null) params.set("depth", String(p.depth));
+    else params.delete("depth");
+    if (p.maxPages != null) params.set("maxPages", String(p.maxPages));
+    else params.delete("maxPages");
+    if (p.sameOriginOnly != null) {
+      params.set("sameOrigin", p.sameOriginOnly ? "1" : "0");
+    } else {
+      params.delete("sameOrigin");
+    }
     router.replace(`${pathname}?${params.toString()}`, { scroll: false });
   }
 
