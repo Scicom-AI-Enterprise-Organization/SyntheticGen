@@ -57,27 +57,6 @@ class LanguageProfilePreset:
 
 LANGUAGE_PROFILE_PRESETS: list[LanguageProfilePreset] = [
     LanguageProfilePreset(
-        name="Malaysia – Enterprise Formal (TM-style)",
-        primary="ms",
-        secondary=["en"],
-        script="latin",
-        code_switch_policy="inter-sentential",
-        code_switch_rate=0.15,
-        register="formal",
-        allow_particles=False,
-        banned_tokens=list(MANGLISH_PARTICLES),
-        banned_patterns=[],
-        require_formal_malay=True,
-        english_loanword_policy="allowlist",
-        loanword_allowlist=list(TELCO_LOANWORD_ALLOWLIST),
-        dialect_hints=[],
-        formality_default="formal",
-        notes=(
-            "Formal Malay for telco / enterprise customer support. "
-            "No Manglish particles. Limited English loanwords for technical terms."
-        ),
-    ),
-    LanguageProfilePreset(
         name="Malaysia – Casual (Manglish OK)",
         primary="ms",
         secondary=["en", "zh"],

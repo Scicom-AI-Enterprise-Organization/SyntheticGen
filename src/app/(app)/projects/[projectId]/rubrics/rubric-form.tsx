@@ -8,6 +8,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { AiAssistButton } from "@/components/ai-assist-button";
 import { createRubric, updateRubric } from "./actions";
 
@@ -81,10 +88,12 @@ export function RubricForm({
   projectId,
   providers,
   initial,
+  card,
 }: {
   projectId: string;
   providers: ProviderOption[];
   initial?: RubricFormInitial;
+  card?: { title: string; description?: React.ReactNode };
 }) {
   const router = useRouter();
   const isEdit = Boolean(initial?.id);
@@ -226,8 +235,8 @@ export function RubricForm({
     }
   }
 
-  return (
-    <form onSubmit={onSubmit} className="space-y-4">
+  const fields = (
+    <>
       <div className="flex items-center justify-between gap-2">
         <p className="text-xs text-muted-foreground">
           Rubrics define the axes an LLM judge uses to score candidate models in chat-replay
@@ -255,9 +264,6 @@ export function RubricForm({
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Malaysian Casual Support"
-            required
-            minLength={2}
-            maxLength={120}
           />
         </div>
         <div className="space-y-2">
@@ -267,7 +273,6 @@ export function RubricForm({
             value={description}
             onChange={(e) => setDescription(e.target.value)}
             placeholder="What this rubric measures"
-            maxLength={1000}
           />
         </div>
       </div>
@@ -296,22 +301,52 @@ export function RubricForm({
         </div>
       </div>
 
-      {error && (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">
-          {error}
-        </p>
-      )}
+    </>
+  );
 
-      <div className="flex items-center gap-2">
-        <Button type="submit" disabled={pending}>
-          {pending ? "Saving…" : isEdit ? "Save changes" : "Create rubric"}
-        </Button>
-        {aiDrafted && !isEdit && (
-          <Badge variant="outline" className="text-[10px]">
-            AI-drafted
-          </Badge>
-        )}
-      </div>
+  const errorBlock = error && (
+    <p className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive" role="alert">
+      {error}
+    </p>
+  );
+  const submitButton = (
+    <div className="flex items-center gap-2">
+      <Button type="submit" disabled={pending}>
+        {pending ? "Saving…" : isEdit ? "Save changes" : "Create rubric"}
+      </Button>
+      {aiDrafted && !isEdit && (
+        <Badge variant="outline" className="text-[10px]">
+          AI-drafted
+        </Badge>
+      )}
+    </div>
+  );
+
+  if (card) {
+    return (
+      <form onSubmit={onSubmit} className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>{card.title}</CardTitle>
+            {card.description && (
+              <CardDescription>{card.description}</CardDescription>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {fields}
+            {errorBlock}
+          </CardContent>
+        </Card>
+        <div className="flex justify-end">{submitButton}</div>
+      </form>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      {fields}
+      {errorBlock}
+      {submitButton}
     </form>
   );
 }

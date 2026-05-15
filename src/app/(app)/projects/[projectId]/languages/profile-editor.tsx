@@ -2,7 +2,6 @@
 
 import { useCallback, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { toast } from "sonner";
 import { Save } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +15,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { AiAssistButton } from "@/components/ai-assist-button";
 import { upsertLanguageProfile } from "./actions";
 
@@ -62,12 +68,14 @@ export function ProfileEditor({
   providers,
   existingProfiles,
   taxonomyNodes,
+  card,
 }: {
   projectId: string;
   initial: Initial;
   providers: Provider[];
   existingProfiles?: string[];
   taxonomyNodes?: string[];
+  card?: { title: string; description?: string };
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -85,6 +93,8 @@ export function ProfileEditor({
   );
 
   const [pending, start] = useTransition();
+  const [formError, setFormError] = useState<string | null>(null);
+  const [formSuccess, setFormSuccess] = useState<string | null>(null);
   const [form, setForm] = useState(initial);
   const [bannedText, setBannedText] = useState(csv(initial.bannedTokens));
   const [allowText, setAllowText] = useState(csv(initial.loanwordAllowlist));
@@ -98,6 +108,12 @@ export function ProfileEditor({
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setFormError(null);
+    setFormSuccess(null);
+    if (!form.name.trim()) {
+      setFormError("Name is required");
+      return;
+    }
     start(async () => {
       const res = await upsertLanguageProfile({
         id: form.id,
@@ -118,9 +134,10 @@ export function ProfileEditor({
         dialectHints: parseCsv(dialectText),
         notes: form.notes,
       });
-      if ("error" in res && res.error) toast.error(res.error);
-      else {
-        toast.success(form.id ? "Profile updated" : "Profile created");
+      if ("error" in res && res.error) {
+        setFormError(res.error);
+      } else {
+        setFormSuccess(form.id ? "Profile updated" : "Profile created");
         router.push(`/projects/${projectId}/languages`);
         router.refresh();
       }
@@ -166,8 +183,8 @@ export function ProfileEditor({
     if (arr("dialectHints")) setDialectText(arr("dialectHints")!.join(", "));
   }
 
-  return (
-    <form onSubmit={onSubmit} className="space-y-6">
+  const fields = (
+    <>
       <div className="flex justify-end">
         <AiAssistButton
           projectId={projectId}
@@ -410,11 +427,53 @@ export function ProfileEditor({
           rows={2}
         />
       </div>
+    </>
+  );
 
-      <Button type="submit" disabled={pending}>
-        <Save className="mr-2 h-4 w-4" />
-        {pending ? "Saving…" : form.id ? "Save changes" : "Create profile"}
-      </Button>
+  const errorBlock = formError && (
+    <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive" role="alert">
+      {formError}
+    </p>
+  );
+  const successBlock = formSuccess && (
+    <p className="text-xs text-green-600" role="status">
+      {formSuccess}
+    </p>
+  );
+  const submitButton = (
+    <Button type="submit" disabled={pending}>
+      <Save className="mr-2 h-4 w-4" />
+      {pending ? "Saving…" : form.id ? "Save changes" : "Create profile"}
+    </Button>
+  );
+
+  if (card) {
+    return (
+      <form onSubmit={onSubmit} className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>{card.title}</CardTitle>
+            {card.description && (
+              <CardDescription>{card.description}</CardDescription>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {fields}
+            {errorBlock}
+            {successBlock}
+          </CardContent>
+        </Card>
+        <div className="flex justify-end">{submitButton}</div>
+      </form>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-6">
+      {fields}
+      {errorBlock}
+      {successBlock}
+      {submitButton}
     </form>
   );
 }

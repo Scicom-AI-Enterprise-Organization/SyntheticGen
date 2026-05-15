@@ -1,5 +1,8 @@
+import Link from "next/link";
+import { Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission, projectRoleAllows } from "@/lib/project-rbac";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -7,7 +10,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ProviderForm } from "./provider-form";
 import { ProvidersTable } from "./providers-table";
 
 export default async function ProvidersPage({
@@ -37,25 +39,24 @@ export default async function ProvidersPage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Providers</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          OpenAI-compatible model endpoints. Same wire format works for vLLM, Together, OpenRouter,
-          SGLang, and Anthropic via proxy. API keys are AES-256-GCM encrypted at rest and decrypted
-          only inside the Python worker.
-        </p>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Providers</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            OpenAI-compatible model endpoints. Same wire format works for vLLM, Together, OpenRouter,
+            SGLang, and Anthropic via proxy. API keys are AES-256-GCM encrypted at rest and decrypted
+            only inside the Python worker.
+          </p>
+        </div>
+        {canWrite && (
+          <Button asChild size="sm">
+            <Link href={`/projects/${projectId}/providers/new`}>
+              <Plus className="mr-1 h-4 w-4" />
+              New provider
+            </Link>
+          </Button>
+        )}
       </div>
-
-      {canWrite && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Add provider</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ProviderForm projectId={projectId} />
-          </CardContent>
-        </Card>
-      )}
 
       <Card>
         <CardHeader>

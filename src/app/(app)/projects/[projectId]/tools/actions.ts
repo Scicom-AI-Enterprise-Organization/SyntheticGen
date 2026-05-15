@@ -64,6 +64,61 @@ export async function createToolDef(input: z.infer<typeof upsertToolSchema>) {
   return { ok: true, id: created.id };
 }
 
+const updateToolSchema = upsertToolSchema.extend({
+  id: z.string(),
+});
+
+export async function updateToolDef(input: z.infer<typeof updateToolSchema>) {
+  const parsed = updateToolSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
+  const { user } = await requireProjectPermission(parsed.data.projectId, "tools.write");
+
+  let parameters: Prisma.InputJsonValue;
+  try {
+    parameters = JSON.parse(parsed.data.parametersJson);
+  } catch (e) {
+    return { error: `parameters: invalid JSON — ${(e as Error).message}` };
+  }
+  if (typeof parameters !== "object" || parameters === null || Array.isArray(parameters)) {
+    return { error: "parameters: must be a JSON object (JSON Schema)" };
+  }
+
+  const existing = await prisma.toolDef.findUnique({
+    where: { id: parsed.data.id },
+    select: { catalog: { select: { projectId: true } } },
+  });
+  if (!existing || existing.catalog.projectId !== parsed.data.projectId) {
+    return { error: "Tool not found in this project" };
+  }
+
+  const updated = await prisma.toolDef.update({
+    where: { id: parsed.data.id },
+    data: {
+      name: parsed.data.name,
+      description: parsed.data.description,
+      parameters,
+      localePresets: parsed.data.localePresets,
+      examples:
+        parsed.data.examples && parsed.data.examples.length > 0
+          ? (parsed.data.examples as Prisma.InputJsonValue)
+          : Prisma.JsonNull,
+      version: { increment: 1 },
+    },
+  });
+
+  await logAudit({
+    projectId: parsed.data.projectId,
+    actorUserId: user.id,
+    action: "tool.update",
+    targetKind: "ToolDef",
+    targetId: updated.id,
+    metadata: { name: updated.name, version: updated.version },
+  });
+
+  revalidatePath(`/projects/${parsed.data.projectId}/tools`);
+  return { ok: true, id: updated.id, version: updated.version };
+}
+
 export async function deleteToolDef(projectId: string, id: string) {
   const { user } = await requireProjectPermission(projectId, "tools.write");
   await prisma.toolDef.delete({ where: { id } });

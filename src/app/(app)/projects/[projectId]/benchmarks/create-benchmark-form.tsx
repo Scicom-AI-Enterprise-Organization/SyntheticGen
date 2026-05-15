@@ -14,6 +14,13 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { createBenchmark } from "./actions";
 
 interface RunOption {
@@ -35,10 +42,12 @@ export function CreateBenchmarkForm({
   projectId,
   runs,
   rubrics,
+  card,
 }: {
   projectId: string;
   runs: RunOption[];
   rubrics: RubricOption[];
+  card?: { title: string; description?: string };
 }) {
   const router = useRouter();
   const [name, setName] = useState("");
@@ -85,8 +94,8 @@ export function CreateBenchmarkForm({
     });
   }
 
-  return (
-    <form onSubmit={onSubmit} className="space-y-4">
+  const fields = (
+    <>
       <p className="text-xs text-muted-foreground">
         Pick a Run (or leave as <em>any accepted</em>) — its conversations are frozen as the eval
         set. Every benchmark run replays the same prompts through the candidate model and scores
@@ -200,17 +209,46 @@ export function CreateBenchmarkForm({
         <Badge variant="outline">mode: {mode}</Badge>
         <Badge variant="outline">freezes ≤ {limit || 0} conversations</Badge>
       </div>
+    </>
+  );
 
-      {error && (
-        <p className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">
-          {error}
-        </p>
-      )}
+  const errorBlock = error && (
+    <p className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive" role="alert">
+      {error}
+    </p>
+  );
+  const submitButton = (
+    <Button type="submit" disabled={pending}>
+      <Plus className="mr-2 h-4 w-4" />
+      {pending ? "Freezing…" : "Create benchmark"}
+    </Button>
+  );
 
-      <Button type="submit" disabled={pending}>
-        <Plus className="mr-2 h-4 w-4" />
-        {pending ? "Freezing…" : "Create benchmark"}
-      </Button>
+  if (card) {
+    return (
+      <form onSubmit={onSubmit} className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>{card.title}</CardTitle>
+            {card.description && (
+              <CardDescription>{card.description}</CardDescription>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {fields}
+            {errorBlock}
+          </CardContent>
+        </Card>
+        <div className="flex justify-end">{submitButton}</div>
+      </form>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      {fields}
+      {errorBlock}
+      {submitButton}
     </form>
   );
 }

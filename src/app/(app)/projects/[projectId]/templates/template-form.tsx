@@ -14,6 +14,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { AiAssistButton } from "@/components/ai-assist-button";
 import { createTemplate, updateTemplate } from "./actions";
 
@@ -50,6 +57,7 @@ export function TemplateForm({
   languageProfiles,
   initial,
   onDone,
+  card,
 }: {
   projectId: string;
   providers: Provider[];
@@ -58,6 +66,7 @@ export function TemplateForm({
   languageProfiles?: string[];
   initial?: InitialTemplate;
   onDone?: () => void;
+  card?: { title: string; description?: string };
 }) {
   const isEditing = Boolean(initial);
   const [name, setName] = useState(initial?.name ?? "");
@@ -129,8 +138,8 @@ export function TemplateForm({
     });
   }
 
-  return (
-    <form onSubmit={onSubmit} className="space-y-4">
+  const fields = (
+    <>
       <div className="flex justify-end">
         <AiAssistButton
           projectId={projectId}
@@ -159,31 +168,29 @@ export function TemplateForm({
           }}
         />
       </div>
-      <div className="grid gap-4 sm:grid-cols-[1fr_180px]">
-        <div className="space-y-2">
-          <Label htmlFor="t-name">Name</Label>
-          <Input
-            id="t-name"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="TM Customer Inquiry — Single Turn"
-            required
-          />
-        </div>
-        <div className="space-y-2">
-          <Label>Kind</Label>
-          <Select value={kind} onValueChange={(v) => setKind(v as typeof kind)}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="user-seed">user-seed</SelectItem>
-              <SelectItem value="system">system</SelectItem>
-              <SelectItem value="conversation-driver">conversation-driver</SelectItem>
-              <SelectItem value="judge">judge</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
+      <div className="space-y-2">
+        <Label htmlFor="t-name">Name</Label>
+        <Input
+          id="t-name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="TM Customer Inquiry — Single Turn"
+          required
+        />
+      </div>
+      <div className="space-y-2">
+        <Label>Kind</Label>
+        <Select value={kind} onValueChange={(v) => setKind(v as typeof kind)}>
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="user-seed">user-seed</SelectItem>
+            <SelectItem value="system">system</SelectItem>
+            <SelectItem value="conversation-driver">conversation-driver</SelectItem>
+            <SelectItem value="judge">judge</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="space-y-2">
@@ -213,27 +220,64 @@ export function TemplateForm({
         </p>
       </div>
 
+    </>
+  );
+
+  const errorBlock = error && (
+    <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive" role="alert">
+      {error}
+    </p>
+  );
+  const successBlock = success && (
+    <p className="text-xs text-green-600" role="status">
+      {success}
+    </p>
+  );
+  const submitButton = (
+    <Button type="submit" disabled={pending}>
+      {isEditing ? (
+        <Save className="mr-2 h-4 w-4" />
+      ) : (
+        <Plus className="mr-2 h-4 w-4" />
+      )}
+      {pending
+        ? isEditing
+          ? "Saving…"
+          : "Creating…"
+        : isEditing
+          ? "Save changes"
+          : "Create template"}
+    </Button>
+  );
+
+  if (card) {
+    return (
+      <form onSubmit={onSubmit} className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>{card.title}</CardTitle>
+            {card.description && (
+              <CardDescription>{card.description}</CardDescription>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {fields}
+            {errorBlock}
+            {successBlock}
+          </CardContent>
+        </Card>
+        <div className="flex justify-end">{submitButton}</div>
+      </form>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      {fields}
       <div className="space-y-2">
-        <Button type="submit" disabled={pending}>
-          {isEditing ? (
-            <Save className="mr-2 h-4 w-4" />
-          ) : (
-            <Plus className="mr-2 h-4 w-4" />
-          )}
-          {pending
-            ? isEditing
-              ? "Saving…"
-              : "Creating…"
-            : isEditing
-              ? "Save changes"
-              : "Create template"}
-        </Button>
-        {error && (
-          <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
-            {error}
-          </p>
-        )}
-        {success && <p className="text-xs text-green-600">{success}</p>}
+        {submitButton}
+        {errorBlock}
+        {successBlock}
       </div>
     </form>
   );

@@ -1,6 +1,9 @@
+import Link from "next/link";
+import { Download } from "lucide-react";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission, projectRoleAllows } from "@/lib/project-rbac";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -88,18 +91,37 @@ export default async function ConversationsPage({
     .map((d) => d.primaryLanguage)
     .filter((l): l is string => Boolean(l));
 
+  const exportQs = new URLSearchParams();
+  if (sp.runId) exportQs.set("runId", sp.runId);
+  if (sp.status) exportQs.set("status", sp.status);
+  if (sp.topic) exportQs.set("topic", sp.topic);
+  if (sp.lang) exportQs.set("lang", sp.lang);
+  const exportHref = `/api/projects/${projectId}/conversations/export${
+    exportQs.toString() ? `?${exportQs.toString()}` : ""
+  }`;
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Conversations</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Generated samples. Click a row to inspect the full transcript and validation verdicts.
-          {sp.runId && (
-            <>
-              {" "}Filtered by run <code className="font-mono text-xs">{sp.runId}</code>.
-            </>
-          )}
-        </p>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Conversations</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Generated samples. Click a row to inspect the full transcript and validation verdicts.
+            {sp.runId && (
+              <>
+                {" "}Filtered by run <code className="font-mono text-xs">{sp.runId}</code>.
+              </>
+            )}
+          </p>
+        </div>
+        {totalCount > 0 && (
+          <Button asChild variant="outline" size="sm">
+            <Link href={exportHref} prefetch={false}>
+              <Download className="mr-1 h-4 w-4" />
+              Export JSONL
+            </Link>
+          </Button>
+        )}
       </div>
 
       <Card>

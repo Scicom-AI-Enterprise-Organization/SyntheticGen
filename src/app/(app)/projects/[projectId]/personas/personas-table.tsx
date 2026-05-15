@@ -1,34 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useTransition } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { useConfirm } from "@/components/confirm-dialog";
 import { deletePersona } from "./actions";
-import { PersonaForm, type InitialPersona } from "./persona-form";
-
-type Formality = "baku" | "colloquial" | "manglish" | "mixed";
-type Urbanity = "urban" | "suburban" | "kampung";
-
-interface LP {
-  id: string;
-  name: string;
-  register: string;
-  allowParticles: boolean;
-}
-interface Provider {
-  id: string;
-  name: string;
-  defaultModel: string | null;
-}
 
 interface Persona {
   id: string;
@@ -51,40 +29,14 @@ export function PersonasTable({
   projectId,
   canWrite,
   personas,
-  languageProfiles,
-  providers,
-  taxonomyNodes,
 }: {
   projectId: string;
   canWrite: boolean;
   personas: Persona[];
-  languageProfiles: LP[];
-  providers: Provider[];
-  taxonomyNodes: string[];
 }) {
   const [pending, start] = useTransition();
   const [actionError, setActionError] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
   const confirm = useConfirm();
-
-  const editing = personas.find((p) => p.id === editingId) ?? null;
-  const editingInitial: InitialPersona | null = editing
-    ? {
-        id: editing.id,
-        name: editing.name,
-        description: editing.description,
-        ethnicity: editing.ethnicity,
-        region: editing.region,
-        urbanity: (editing.urbanity as Urbanity | null) ?? null,
-        ageRange: editing.ageRange,
-        gender: editing.gender,
-        occupation: editing.occupation,
-        formality: (editing.formality as Formality | null) ?? null,
-        religionAware: editing.religionAware,
-        dialectTags: editing.dialectTags,
-        languageProfileId: editing.languageProfileId,
-      }
-    : null;
 
   async function onDelete(p: Persona) {
     setActionError(null);
@@ -161,13 +113,15 @@ export function PersonasTable({
                   {canWrite && (
                     <div className="flex justify-end gap-1">
                       <Button
+                        asChild
                         variant="ghost"
                         size="icon"
-                        onClick={() => setEditingId(p.id)}
                         aria-label="Edit"
                         title="Edit persona"
                       >
-                        <Pencil className="h-4 w-4" />
+                        <Link href={`/projects/${projectId}/personas/${p.id}`}>
+                          <Pencil className="h-4 w-4" />
+                        </Link>
                       </Button>
                       <Button
                         variant="ghost"
@@ -187,33 +141,6 @@ export function PersonasTable({
           </tbody>
         </table>
       </div>
-
-      <Dialog
-        open={Boolean(editing)}
-        onOpenChange={(open) => {
-          if (!open) setEditingId(null);
-        }}
-      >
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Edit persona</DialogTitle>
-            <DialogDescription>
-              Conversations already labelled with this persona keep their
-              snapshot — only future runs see the changes.
-            </DialogDescription>
-          </DialogHeader>
-          {editingInitial && (
-            <PersonaForm
-              projectId={projectId}
-              languageProfiles={languageProfiles}
-              providers={providers}
-              taxonomyNodes={taxonomyNodes}
-              initial={editingInitial}
-              onDone={() => setEditingId(null)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

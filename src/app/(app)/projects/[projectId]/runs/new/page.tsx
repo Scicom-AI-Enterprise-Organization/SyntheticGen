@@ -1,6 +1,8 @@
-import { redirect } from "next/navigation";
+import Link from "next/link";
+import { ChevronLeft } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission } from "@/lib/project-rbac";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -61,7 +63,6 @@ export default async function NewRunPage({
     }),
   ]);
 
-  // Block hard if prerequisites missing.
   const missing: string[] = [];
   if (!taxonomy || taxonomy.nodes.length === 0) missing.push("taxonomy nodes");
   if (personas.length === 0) missing.push("personas");
@@ -69,10 +70,22 @@ export default async function NewRunPage({
   if (providers.length === 0) missing.push("providers");
   if (templates.length === 0) missing.push("templates");
 
+  const backButton = (
+    <Button asChild variant="ghost" size="sm">
+      <Link href={`/projects/${projectId}/runs`}>
+        <ChevronLeft className="mr-1 h-4 w-4" />
+        Back to runs
+      </Link>
+    </Button>
+  );
+
   if (missing.length > 0) {
     return (
       <div className="space-y-6">
-        <h1 className="text-2xl font-semibold tracking-tight">New run</h1>
+        <div className="flex items-center justify-between gap-4">
+          <h1 className="text-2xl font-semibold tracking-tight">New run</h1>
+          {backButton}
+        </div>
         <Card>
           <CardHeader>
             <CardTitle>Missing prerequisites</CardTitle>
@@ -94,33 +107,30 @@ export default async function NewRunPage({
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-semibold tracking-tight">New run</h1>
-      <Card>
-        <CardHeader>
-          <CardTitle>Configuration</CardTitle>
-          <CardDescription>
-            The grid is taxonomyNodes × personas × difficulties × rowsPerCell. Slice 1 caps
-            total cells at 1000.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <RunWizard
-            projectId={projectId}
-            taxonomy={taxonomy!.nodes.map((n) => ({ id: n.id, name: n.name, path: n.path }))}
-            personas={personas}
-            languageProfiles={languageProfiles}
-            providers={providers}
-            templates={templates}
-            tools={tools.map((t) => ({
-              id: t.id,
-              name: t.name,
-              description: t.description,
-              localePresets: t.localePresets,
-            }))}
-            flows={flows}
-          />
-        </CardContent>
-      </Card>
+      <div className="flex items-center justify-between gap-4">
+        <h1 className="text-2xl font-semibold tracking-tight">New run</h1>
+        {backButton}
+      </div>
+      <RunWizard
+        projectId={projectId}
+        taxonomy={taxonomy!.nodes.map((n) => ({ id: n.id, name: n.name, path: n.path }))}
+        personas={personas}
+        languageProfiles={languageProfiles}
+        providers={providers}
+        templates={templates}
+        tools={tools.map((t) => ({
+          id: t.id,
+          name: t.name,
+          description: t.description,
+          localePresets: t.localePresets,
+        }))}
+        flows={flows}
+        card={{
+          title: "Configuration",
+          description:
+            "The grid is taxonomyNodes × personas × difficulties × rowsPerCell. Slice 1 caps total cells at 1000.",
+        }}
+      />
     </div>
   );
 }

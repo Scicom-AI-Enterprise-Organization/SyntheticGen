@@ -30,15 +30,7 @@ export default async function ProjectSettingsPage({
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>General</CardTitle>
-          <CardDescription>Name, description, default formality.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ProjectSettingsForm project={project} disabled={!canEdit} />
-        </CardContent>
-      </Card>
+      <ProjectSettingsForm project={project} disabled={!canEdit} />
 
       {canEdit && (
         <Card>

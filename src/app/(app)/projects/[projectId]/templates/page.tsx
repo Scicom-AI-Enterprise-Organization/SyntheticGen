@@ -21,27 +21,10 @@ export default async function TemplatesPage({
   const { role } = await requireProjectPermission(projectId, "templates.read");
   const canWrite = role ? projectRoleAllows(role, "templates.write") : false;
 
-  const [templates, providers, taxonomyNodes, languageProfiles] = await Promise.all([
-    prisma.promptTemplate.findMany({
-      where: { projectId },
-      orderBy: [{ kind: "asc" }, { name: "asc" }],
-    }),
-    prisma.providerCredential.findMany({
-      where: { projectId },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, defaultModel: true },
-    }),
-    prisma.taxonomyNode.findMany({
-      where: { taxonomy: { projectId } },
-      orderBy: { name: "asc" },
-      select: { name: true },
-    }),
-    prisma.languageProfile.findMany({
-      where: { projectId },
-      orderBy: { name: "asc" },
-      select: { name: true, primary: true, register: true },
-    }),
-  ]);
+  const templates = await prisma.promptTemplate.findMany({
+    where: { projectId },
+    orderBy: [{ kind: "asc" }, { name: "asc" }],
+  });
 
   return (
     <div className="space-y-6">
@@ -76,11 +59,6 @@ export default async function TemplatesPage({
           <TemplatesTable
             projectId={projectId}
             canWrite={canWrite}
-            providers={providers}
-            taxonomyNodes={taxonomyNodes.map((t) => t.name)}
-            languageProfiles={languageProfiles.map(
-              (p) => `${p.name} (primary=${p.primary}, register=${p.register})`,
-            )}
             templates={templates.map((t) => ({
               id: t.id,
               name: t.name,

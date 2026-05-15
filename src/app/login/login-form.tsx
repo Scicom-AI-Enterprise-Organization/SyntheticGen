@@ -4,7 +4,6 @@ import { useState } from "react";
 import Image from "next/image";
 import { motion } from "framer-motion";
 import { signIn } from "next-auth/react";
-import { toast } from "sonner";
 import {
   Mail,
   Lock,
@@ -34,9 +33,23 @@ export function LoginForm({ callbackUrl, error, providers }: LoginFormProps) {
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
   const [pending, setPending] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
+    setFormError(null);
+    if (!email.trim()) {
+      setFormError("Email is required");
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
+      setFormError("Enter a valid email address");
+      return;
+    }
+    if (!password) {
+      setFormError("Password is required");
+      return;
+    }
     setPending(true);
     const res = await signIn("credentials", {
       email,
@@ -46,57 +59,43 @@ export function LoginForm({ callbackUrl, error, providers }: LoginFormProps) {
     });
     setPending(false);
     if (res?.error) {
-      toast.error("Invalid email or password");
+      setFormError("Invalid email or password");
     } else if (res?.url) {
       window.location.href = res.url;
     }
   }
 
-  function notConfigured(name: string) {
-    return () =>
-      toast.error(`${name} is not configured`, {
-        description: `Set the ${name} env vars in .env to enable.`,
-      });
-  }
-
   const ssoButtons = [
-    {
+    providers.google && {
       key: "google",
       label: "Google",
       icon: <GoogleIcon className="h-4 w-4" />,
-      onClick: providers.google
-        ? () => signIn("google", { callbackUrl })
-        : notConfigured("Google"),
-      disabled: !providers.google,
+      onClick: () => signIn("google", { callbackUrl }),
     },
-    {
+    providers.azure && {
       key: "azure",
       label: "Azure AD",
       icon: <KeyRound className="h-4 w-4 text-[#0078D4]" />,
-      onClick: providers.azure
-        ? () => signIn("microsoft-entra-id", { callbackUrl })
-        : notConfigured("Azure AD"),
-      disabled: !providers.azure,
+      onClick: () => signIn("microsoft-entra-id", { callbackUrl }),
     },
-    {
+    providers.keycloak && {
       key: "keycloak",
       label: "Keycloak",
       icon: <Building2 className="h-4 w-4" />,
-      onClick: providers.keycloak
-        ? () => signIn("keycloak", { callbackUrl })
-        : notConfigured("Keycloak"),
-      disabled: !providers.keycloak,
+      onClick: () => signIn("keycloak", { callbackUrl }),
     },
-    {
+    providers.saml && {
       key: "saml",
       label: "SAML SSO",
       icon: <ShieldCheck className="h-4 w-4" />,
-      onClick: providers.saml
-        ? () => (window.location.href = "/api/auth/saml/login")
-        : notConfigured("SAML"),
-      disabled: !providers.saml,
+      onClick: () => (window.location.href = "/api/auth/saml/login"),
     },
-  ];
+  ].filter(Boolean) as Array<{
+    key: string;
+    label: string;
+    icon: React.ReactNode;
+    onClick: () => void;
+  }>;
 
   return (
     <div className="grid min-h-screen w-full lg:grid-cols-2">
@@ -168,8 +167,7 @@ export function LoginForm({ callbackUrl, error, providers }: LoginFormProps) {
                 <Mail className="h-4 w-4 text-muted-foreground" />
                 <input
                   id="email"
-                  type="email"
-                  required
+                  type="text"
                   autoComplete="email"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -196,7 +194,6 @@ export function LoginForm({ callbackUrl, error, providers }: LoginFormProps) {
                 <input
                   id="password"
                   type={showPassword ? "text" : "password"}
-                  required
                   autoComplete="current-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
@@ -234,6 +231,12 @@ export function LoginForm({ callbackUrl, error, providers }: LoginFormProps) {
               <span className="text-muted-foreground">Remember me</span>
             </label>
 
+            {formError && (
+              <p className="text-sm text-destructive" role="alert">
+                {formError}
+              </p>
+            )}
+
             <motion.button
               whileHover={{ scale: 1.005 }}
               whileTap={{ scale: 0.99 }}
@@ -245,32 +248,34 @@ export function LoginForm({ callbackUrl, error, providers }: LoginFormProps) {
             </motion.button>
           </form>
 
-          <div className="my-5 flex items-center gap-3">
-            <div className="h-px flex-1 bg-border" />
-            <span className="text-xs uppercase tracking-wide text-muted-foreground">
-              or continue with
-            </span>
-            <div className="h-px flex-1 bg-border" />
-          </div>
+          {ssoButtons.length > 0 && (
+            <>
+              <div className="my-5 flex items-center gap-3">
+                <div className="h-px flex-1 bg-border" />
+                <span className="text-xs uppercase tracking-wide text-muted-foreground">
+                  or continue with
+                </span>
+                <div className="h-px flex-1 bg-border" />
+              </div>
 
-          <div className="grid grid-cols-2 gap-2">
-            {ssoButtons.map((b) => (
-              <motion.button
-                key={b.key}
-                type="button"
-                whileHover={{ scale: 1.01 }}
-                whileTap={{ scale: 0.99 }}
-                onClick={b.onClick}
-                title={b.disabled ? `${b.label} (not configured)` : b.label}
-                className={`flex items-center justify-center gap-2 rounded-lg border border-border py-2.5 text-xs font-medium transition-colors hover:bg-muted ${
-                  b.disabled ? "text-muted-foreground" : "text-foreground"
-                }`}
-              >
-                {b.icon}
-                {b.label}
-              </motion.button>
-            ))}
-          </div>
+              <div className="grid grid-cols-2 gap-2">
+                {ssoButtons.map((b) => (
+                  <motion.button
+                    key={b.key}
+                    type="button"
+                    whileHover={{ scale: 1.01 }}
+                    whileTap={{ scale: 0.99 }}
+                    onClick={b.onClick}
+                    title={b.label}
+                    className="flex items-center justify-center gap-2 rounded-lg border border-border py-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+                  >
+                    {b.icon}
+                    {b.label}
+                  </motion.button>
+                ))}
+              </div>
+            </>
+          )}
 
           <p className="mt-6 text-center text-xs text-muted-foreground">
             By continuing, you agree to the Terms and Privacy Policy.

@@ -14,6 +14,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { createKnowledgeEntry, updateKnowledgeEntry } from "./actions";
 
 interface CrawlOption {
@@ -57,6 +64,7 @@ export function KnowledgeForm({
   crawls = [],
   existing,
   onSaved,
+  card,
 }: {
   projectId: string;
   taxonomyNodes: TaxonomyNode[];
@@ -64,6 +72,7 @@ export function KnowledgeForm({
   crawls?: CrawlOption[];
   existing?: ExistingEntry;
   onSaved?: () => void;
+  card?: { title: string; description?: string };
 }) {
   const isEdit = Boolean(existing);
   const [title, setTitle] = useState(existing?.title ?? "");
@@ -386,85 +395,81 @@ export function KnowledgeForm({
 
   const busy = uploading || autofilling;
 
-  return (
-    <form onSubmit={onSubmit} className="space-y-4">
+  const fields = (
+    <>
       {/* Upload first so we can use the LLM to autofill title + content + taxonomy. */}
       <div className="rounded-md border border-border bg-muted/20 p-3">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="space-y-1">
-            <Label className="text-[11px] text-muted-foreground">
-              Provider (for LLM autofill)
-            </Label>
-            <Select value={providerId} onValueChange={setProviderId} disabled={busy}>
-              <SelectTrigger size="sm" className="h-8 w-[260px] text-xs">
-                <SelectValue placeholder={providers.length === 0 ? "no providers configured" : "Pick a provider"} />
-              </SelectTrigger>
-              <SelectContent>
-                {providers.map((p) => (
-                  <SelectItem key={p.id} value={p.id}>
-                    {p.name}
-                    {p.defaultModel && (
-                      <span className="ml-1 text-muted-foreground">({p.defaultModel})</span>
-                    )}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="flex items-center gap-2">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".pdf,.docx,.html,.htm,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/html,text/plain"
-              className="hidden"
-              onChange={onFile}
-              disabled={busy || pending}
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => fileInputRef.current?.click()}
-              disabled={busy || pending}
-            >
-              {uploading ? (
-                <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-              ) : (
-                <Upload className="mr-1 h-3 w-3" />
-              )}
-              {uploading ? "Extracting…" : "Upload doc"}
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setCrawlPickerOpen((v) => !v)}
-              disabled={busy || pending || finishedCrawls.length === 0}
-              title={
-                finishedCrawls.length === 0
-                  ? "Crawl a URL first (see URL crawls card below)"
-                  : "Merge cached crawl pages into this single entry"
-              }
-            >
-              <Globe className="mr-1 h-3 w-3" />
-              Import crawled pages{finishedCrawls.length > 0 ? ` (${finishedCrawls.length})` : ""}
-            </Button>
-            {autofilling ? (
-              <Button
-                type="button"
-                variant="destructive"
-                size="sm"
-                onClick={onStopAutofill}
-              >
-                Stop autofill
-              </Button>
+        <Label className="mb-1 block text-[11px] text-muted-foreground">
+          Provider (for LLM autofill)
+        </Label>
+        <div className="flex flex-wrap items-center gap-2">
+          <Select value={providerId} onValueChange={setProviderId} disabled={busy}>
+            <SelectTrigger size="sm" className="h-8 w-[260px] text-xs">
+              <SelectValue placeholder={providers.length === 0 ? "no providers configured" : "Pick a provider"} />
+            </SelectTrigger>
+            <SelectContent>
+              {providers.map((p) => (
+                <SelectItem key={p.id} value={p.id}>
+                  {p.name}
+                  {p.defaultModel && (
+                    <span className="ml-1 text-muted-foreground">({p.defaultModel})</span>
+                  )}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept=".pdf,.docx,.html,.htm,.txt,.md,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/html,text/plain"
+            className="hidden"
+            onChange={onFile}
+            disabled={busy || pending}
+          />
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={busy || pending}
+          >
+            {uploading ? (
+              <Loader2 className="mr-1 h-3 w-3 animate-spin" />
             ) : (
-              <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-                <Sparkles className="h-3 w-3" />
-                After extract, the LLM drafts a title + auto-ticks taxonomy.
-              </span>
+              <Upload className="mr-1 h-3 w-3" />
             )}
-          </div>
+            {uploading ? "Extracting…" : "Upload doc"}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            onClick={() => setCrawlPickerOpen((v) => !v)}
+            disabled={busy || pending || finishedCrawls.length === 0}
+            title={
+              finishedCrawls.length === 0
+                ? "Crawl a URL first (see URL crawls card below)"
+                : "Merge cached crawl pages into this single entry"
+            }
+          >
+            <Globe className="mr-1 h-3 w-3" />
+            Import crawled pages{finishedCrawls.length > 0 ? ` (${finishedCrawls.length})` : ""}
+          </Button>
+          {autofilling ? (
+            <Button
+              type="button"
+              variant="destructive"
+              size="sm"
+              onClick={onStopAutofill}
+            >
+              Stop autofill
+            </Button>
+          ) : (
+            <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
+              <Sparkles className="h-3 w-3" />
+              After extract, the LLM drafts a title + auto-ticks taxonomy.
+            </span>
+          )}
         </div>
         {uploadInfo && (
           <p className="mt-2 text-[11px] text-muted-foreground">{uploadInfo}</p>
@@ -679,23 +684,60 @@ export function KnowledgeForm({
         </p>
       </div>
 
+    </>
+  );
+
+  const errorBlock = error && (
+    <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive" role="alert">
+      {error}
+    </p>
+  );
+  const successBlock = success && (
+    <p className="text-xs text-green-600" role="status">
+      {success}
+    </p>
+  );
+  const submitButton = (
+    <Button type="submit" disabled={pending || busy}>
+      <Plus className="mr-2 h-4 w-4" />
+      {pending
+        ? isEdit
+          ? "Saving…"
+          : "Adding…"
+        : isEdit
+          ? "Save changes"
+          : "Add entry"}
+    </Button>
+  );
+
+  if (card) {
+    return (
+      <form onSubmit={onSubmit} className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>{card.title}</CardTitle>
+            {card.description && (
+              <CardDescription>{card.description}</CardDescription>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {fields}
+            {errorBlock}
+            {successBlock}
+          </CardContent>
+        </Card>
+        <div className="flex justify-end">{submitButton}</div>
+      </form>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      {fields}
       <div className="space-y-2">
-        <Button type="submit" disabled={pending || busy}>
-          <Plus className="mr-2 h-4 w-4" />
-          {pending
-            ? isEdit
-              ? "Saving…"
-              : "Adding…"
-            : isEdit
-              ? "Save changes"
-              : "Add entry"}
-        </Button>
-        {error && (
-          <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
-            {error}
-          </p>
-        )}
-        {success && <p className="text-xs text-green-600">{success}</p>}
+        {submitButton}
+        {errorBlock}
+        {successBlock}
       </div>
     </form>
   );

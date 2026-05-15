@@ -22,7 +22,7 @@ export default async function KnowledgePage({
   const { role } = await requireProjectPermission(projectId, "knowledge.read");
   const canWrite = role ? projectRoleAllows(role, "knowledge.write") : false;
 
-  const [entries, taxonomyNodes, providers, crawls] = await Promise.all([
+  const [entries, taxonomyNodes, crawls] = await Promise.all([
     prisma.knowledgeBaseEntry.findMany({
       where: { projectId },
       orderBy: { createdAt: "desc" },
@@ -31,11 +31,6 @@ export default async function KnowledgePage({
       where: { taxonomy: { projectId } },
       orderBy: { name: "asc" },
       select: { id: true, name: true },
-    }),
-    prisma.providerCredential.findMany({
-      where: { projectId },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, defaultModel: true },
     }),
     prisma.knowledgeCrawl.findMany({
       where: { projectId },
@@ -112,8 +107,6 @@ export default async function KnowledgePage({
           <KnowledgeTable
             projectId={projectId}
             canWrite={canWrite}
-            taxonomyNodes={taxonomyNodes}
-            providers={providers}
             entries={entries.map((e) => ({
               id: e.id,
               title: e.title,

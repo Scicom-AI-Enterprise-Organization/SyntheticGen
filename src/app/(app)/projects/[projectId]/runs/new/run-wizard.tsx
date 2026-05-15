@@ -15,6 +15,13 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { createAndStartRun } from "../actions";
 
 interface Node {
@@ -68,6 +75,7 @@ export function RunWizard({
   templates,
   tools,
   flows,
+  card,
 }: {
   projectId: string;
   taxonomy: Node[];
@@ -77,6 +85,7 @@ export function RunWizard({
   templates: Template[];
   tools: Tool[];
   flows: Flow[];
+  card?: { title: string; description?: string };
 }) {
   // SSR-stable default. `new Date()` would tick between server render and
   // hydrate, breaking Radix's useId-based aria-controls on every Select. Fill
@@ -175,8 +184,8 @@ export function RunWizard({
     });
   }
 
-  return (
-    <form onSubmit={onSubmit} className="space-y-6">
+  const fields = (
+    <>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2 sm:col-span-2">
           <Label htmlFor="r-name">Run name</Label>
@@ -624,16 +633,47 @@ export function RunWizard({
         )}
       </div>
 
+    </>
+  );
+
+  const errorBlock = submitError && (
+    <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive" role="alert">
+      {submitError}
+    </p>
+  );
+  const submitButton = (
+    <Button type="submit" disabled={pending || totalCells === 0 || totalCells > 1000} size="lg">
+      <Play className="mr-2 h-4 w-4" />
+      {pending ? "Starting…" : `Start run (${totalCells} samples)`}
+    </Button>
+  );
+
+  if (card) {
+    return (
+      <form onSubmit={onSubmit} className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>{card.title}</CardTitle>
+            {card.description && (
+              <CardDescription>{card.description}</CardDescription>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-6">
+            {fields}
+            {errorBlock}
+          </CardContent>
+        </Card>
+        <div className="flex justify-end">{submitButton}</div>
+      </form>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-6">
+      {fields}
       <div className="space-y-2">
-        {submitError && (
-          <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
-            {submitError}
-          </p>
-        )}
-        <Button type="submit" disabled={pending || totalCells === 0 || totalCells > 1000} size="lg">
-          <Play className="mr-2 h-4 w-4" />
-          {pending ? "Starting…" : `Start run (${totalCells} samples)`}
-        </Button>
+        {errorBlock}
+        {submitButton}
       </div>
     </form>
   );

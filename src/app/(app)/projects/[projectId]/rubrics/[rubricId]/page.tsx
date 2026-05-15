@@ -1,8 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission, projectRoleAllows } from "@/lib/project-rbac";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
@@ -43,27 +44,28 @@ export default async function RubricDetailPage({
 
   return (
     <div className="space-y-6">
-      <div>
-        <Link
-          href={`/projects/${projectId}/rubrics`}
-          className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3 w-3" />
-          Rubrics
-        </Link>
-        <div className="mt-1 flex flex-wrap items-center gap-2">
-          <h1 className="text-2xl font-semibold tracking-tight">{rubric.name}</h1>
-          {rubric.isPreset && <Badge variant="outline">preset</Badge>}
-          {rubric.aiDrafted && <Badge variant="secondary">AI-drafted</Badge>}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-2xl font-semibold tracking-tight">{rubric.name}</h1>
+            {rubric.isPreset && <Badge variant="outline">preset</Badge>}
+            {rubric.aiDrafted && <Badge variant="secondary">AI-drafted</Badge>}
+          </div>
+          {rubric.description && (
+            <p className="mt-1 text-sm text-muted-foreground">{rubric.description}</p>
+          )}
+          <div className="mt-1 text-xs text-muted-foreground">
+            Used by {rubric._count.benchmarks} benchmark
+            {rubric._count.benchmarks === 1 ? "" : "s"} ·{" "}
+            {rubric._count.benchmarkRuns} run{rubric._count.benchmarkRuns === 1 ? "" : "s"}
+          </div>
         </div>
-        {rubric.description && (
-          <p className="mt-1 text-sm text-muted-foreground">{rubric.description}</p>
-        )}
-        <div className="mt-1 text-xs text-muted-foreground">
-          Used by {rubric._count.benchmarks} benchmark
-          {rubric._count.benchmarks === 1 ? "" : "s"} ·{" "}
-          {rubric._count.benchmarkRuns} run{rubric._count.benchmarkRuns === 1 ? "" : "s"}
-        </div>
+        <Button asChild variant="ghost" size="sm">
+          <Link href={`/projects/${projectId}/rubrics`}>
+            <ChevronLeft className="mr-1 h-4 w-4" />
+            Back to rubrics
+          </Link>
+        </Button>
       </div>
 
       <Card>

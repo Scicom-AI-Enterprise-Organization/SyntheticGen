@@ -1,7 +1,7 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useCallback } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Globe } from "lucide-react";
 import {
   Card,
@@ -36,6 +36,20 @@ interface Crawl {
   }[];
 }
 
+function parsePreset(sp: URLSearchParams): CrawlPreset | null {
+  if (sp.get("crawl") !== "new") return null;
+  const startUrl = sp.get("url") ?? "";
+  const depth = Number(sp.get("depth") ?? "1");
+  const maxPages = Number(sp.get("maxPages") ?? "15");
+  const sameOriginOnly = sp.get("sameOrigin") !== "0";
+  return {
+    startUrl,
+    depth: Number.isFinite(depth) ? depth : 1,
+    maxPages: Number.isFinite(maxPages) ? maxPages : 15,
+    sameOriginOnly,
+  };
+}
+
 export function CrawlCard({
   projectId,
   canWrite,
@@ -46,17 +60,49 @@ export function CrawlCard({
   crawls: Crawl[];
 }) {
   const router = useRouter();
-  const [open, setOpen] = useState(false);
-  const [preset, setPreset] = useState<CrawlPreset | undefined>(undefined);
+  const pathname = usePathname();
+  const searchParams = useSearchParams();
+
+  const sp = new URLSearchParams(Array.from(searchParams.entries()));
+  const preset = parsePreset(sp);
+  const open = preset !== null;
+
+  const setOpen = useCallback(
+    (next: boolean) => {
+      const params = new URLSearchParams(Array.from(searchParams.entries()));
+      if (next) {
+        params.set("crawl", "new");
+      } else {
+        params.delete("crawl");
+        params.delete("url");
+        params.delete("depth");
+        params.delete("maxPages");
+        params.delete("sameOrigin");
+      }
+      const qs = params.toString();
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
+    },
+    [pathname, router, searchParams],
+  );
 
   function openFresh() {
-    setPreset({ startUrl: "", depth: 1, maxPages: 15, sameOriginOnly: true });
-    setOpen(true);
+    const params = new URLSearchParams(Array.from(searchParams.entries()));
+    params.set("crawl", "new");
+    params.delete("url");
+    params.delete("depth");
+    params.delete("maxPages");
+    params.delete("sameOrigin");
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
   }
 
   function openWithPreset(p: CrawlPreset) {
-    setPreset(p);
-    setOpen(true);
+    const params = new URLSearchParams(Array.from(searchParams.entries()));
+    params.set("crawl", "new");
+    params.set("url", p.startUrl);
+    params.set("depth", String(p.depth));
+    params.set("maxPages", String(p.maxPages));
+    params.set("sameOrigin", p.sameOriginOnly ? "1" : "0");
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
   }
 
   return (
@@ -95,7 +141,7 @@ export function CrawlCard({
           projectId={projectId}
           open={open}
           onOpenChange={setOpen}
-          preset={preset}
+          preset={preset ?? undefined}
           trigger={false}
           onDone={() => router.refresh()}
         />

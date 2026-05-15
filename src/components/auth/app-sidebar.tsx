@@ -6,7 +6,6 @@ import { usePathname } from "next/navigation";
 import {
   BookOpen,
   Building2,
-  Database,
   FileCode,
   FlaskConical,
   FolderKanban,
@@ -65,7 +64,6 @@ const PROJECT_NAV: { label: string; segment: string; icon: LucideIcon }[] = [
   { label: "Tools", segment: "tools", icon: Wrench },
   { label: "Runs", segment: "runs", icon: Play },
   { label: "Conversations", segment: "conversations", icon: MessagesSquare },
-  { label: "Datasets", segment: "datasets", icon: Database },
   { label: "Benchmarks", segment: "benchmarks", icon: FlaskConical },
   { label: "Rubrics", segment: "rubrics", icon: Gauge },
   { label: "Providers", segment: "providers", icon: KeySquare },
@@ -74,7 +72,10 @@ const PROJECT_NAV: { label: string; segment: string; icon: LucideIcon }[] = [
 
 function activeProjectIdFrom(pathname: string): string | null {
   const m = pathname.match(/^\/projects\/([^/]+)/);
-  return m ? m[1] : null;
+  if (!m) return null;
+  const id = m[1];
+  if (id === "new") return null;
+  return id;
 }
 
 export function AppSidebar({

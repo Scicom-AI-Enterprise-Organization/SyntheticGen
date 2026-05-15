@@ -7,8 +7,24 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { AiAssistButton } from "@/components/ai-assist-button";
-import { createToolDef } from "./actions";
+import { createToolDef, updateToolDef } from "./actions";
+
+export interface InitialTool {
+  id: string;
+  name: string;
+  description: string;
+  parametersJson: string;
+  localePresets: string[];
+  examples: Record<string, unknown>[];
+}
 
 interface Provider {
   id: string;
@@ -33,18 +49,23 @@ export function ToolForm({
   providers,
   taxonomyNodes,
   existingTools,
+  initial,
+  card,
 }: {
   projectId: string;
   catalogId: string;
   providers: Provider[];
   taxonomyNodes?: string[];
   existingTools?: string[];
+  initial?: InitialTool;
+  card?: { title: string; description?: React.ReactNode };
 }) {
-  const [name, setName] = useState("");
-  const [description, setDescription] = useState("");
-  const [parametersJson, setParametersJson] = useState(STARTER_PARAMS);
-  const [presets, setPresets] = useState("");
-  const [examples, setExamples] = useState<Record<string, unknown>[]>([]);
+  const isEdit = Boolean(initial);
+  const [name, setName] = useState(initial?.name ?? "");
+  const [description, setDescription] = useState(initial?.description ?? "");
+  const [parametersJson, setParametersJson] = useState(initial?.parametersJson ?? STARTER_PARAMS);
+  const [presets, setPresets] = useState(initial ? initial.localePresets.join(", ") : "");
+  const [examples, setExamples] = useState<Record<string, unknown>[]>(initial?.examples ?? []);
   const [exampleWarnings, setExampleWarnings] = useState<string[]>([]);
   const [schemaWarnings, setSchemaWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -116,7 +137,7 @@ export function ToolForm({
     setError(null);
     setSuccess(null);
     start(async () => {
-      const res = await createToolDef({
+      const payload = {
         projectId,
         catalogId,
         name,
@@ -127,10 +148,16 @@ export function ToolForm({
           .map((s) => s.trim())
           .filter(Boolean),
         examples: examples.length > 0 ? examples : null,
-      });
+      };
+      const res = isEdit
+        ? await updateToolDef({ ...payload, id: initial!.id })
+        : await createToolDef(payload);
       if ("error" in res && res.error) {
         setError(res.error);
-      } else if (res.ok) {
+      } else if (isEdit) {
+        const v = (res as { version?: number }).version;
+        setSuccess(`Saved${v != null ? ` · v${v}` : ""}.`);
+      } else if ("ok" in res && res.ok) {
         setSuccess(`Tool “${name}” created.`);
         setName("");
         setDescription("");
@@ -143,8 +170,8 @@ export function ToolForm({
     });
   }
 
-  return (
-    <form onSubmit={onSubmit} className="space-y-4">
+  const fields = (
+    <>
       <div className="flex justify-end">
         <AiAssistButton
           projectId={projectId}
@@ -293,17 +320,60 @@ export function ToolForm({
         </div>
       </details>
 
+    </>
+  );
+
+  const errorBlock = error && (
+    <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive" role="alert">
+      {error}
+    </p>
+  );
+  const successBlock = success && (
+    <p className="text-xs text-green-600" role="status">
+      {success}
+    </p>
+  );
+  const submitButton = (
+    <Button type="submit" disabled={pending}>
+      <Plus className="mr-2 h-4 w-4" />
+      {pending
+        ? isEdit
+          ? "Saving…"
+          : "Creating…"
+        : isEdit
+          ? "Save changes"
+          : "Create tool"}
+    </Button>
+  );
+
+  if (card) {
+    return (
+      <form onSubmit={onSubmit} className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>{card.title}</CardTitle>
+            {card.description && (
+              <CardDescription>{card.description}</CardDescription>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {fields}
+            {errorBlock}
+            {successBlock}
+          </CardContent>
+        </Card>
+        <div className="flex justify-end">{submitButton}</div>
+      </form>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      {fields}
       <div className="space-y-2">
-        <Button type="submit" disabled={pending}>
-          <Plus className="mr-2 h-4 w-4" />
-          {pending ? "Creating…" : "Create tool"}
-        </Button>
-        {error && (
-          <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
-            {error}
-          </p>
-        )}
-        {success && <p className="text-xs text-green-600">{success}</p>}
+        {submitButton}
+        {errorBlock}
+        {successBlock}
       </div>
     </form>
   );

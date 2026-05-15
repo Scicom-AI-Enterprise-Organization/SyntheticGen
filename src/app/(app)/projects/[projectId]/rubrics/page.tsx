@@ -1,16 +1,15 @@
 import Link from "next/link";
-import { ArrowRight, Gauge } from "lucide-react";
+import { ArrowRight, Gauge, Plus } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission, projectRoleAllows } from "@/lib/project-rbac";
+import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { RubricForm } from "./rubric-form";
 
 export default async function RubricsPage({
   params,
@@ -21,46 +20,34 @@ export default async function RubricsPage({
   const { role } = await requireProjectPermission(projectId, "benchmarks.read");
   const canWrite = role ? projectRoleAllows(role, "benchmarks.write") : false;
 
-  const [rubrics, providers] = await Promise.all([
-    prisma.rubric.findMany({
-      where: { projectId },
-      orderBy: [{ isPreset: "desc" }, { createdAt: "desc" }],
-      include: {
-        _count: { select: { benchmarkRuns: true, benchmarks: true } },
-      },
-    }),
-    prisma.providerCredential.findMany({
-      where: { projectId },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, defaultModel: true },
-    }),
-  ]);
+  const rubrics = await prisma.rubric.findMany({
+    where: { projectId },
+    orderBy: [{ isPreset: "desc" }, { createdAt: "desc" }],
+    include: {
+      _count: { select: { benchmarkRuns: true, benchmarks: true } },
+    },
+  });
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">Rubrics</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Reusable scoring schemes for chat-replay benchmarks. Each rubric is a list of axes the
-          LLM judge scores a candidate model on (e.g. language fidelity, register, helpfulness).
-          Hand-write one or describe what you want in plain English and let AI draft it.
-        </p>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">Rubrics</h1>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Reusable scoring schemes for chat-replay benchmarks. Each rubric is a list of axes the
+            LLM judge scores a candidate model on (e.g. language fidelity, register, helpfulness).
+            Hand-write one or describe what you want in plain English and let AI draft it.
+          </p>
+        </div>
+        {canWrite && (
+          <Button asChild size="sm">
+            <Link href={`/projects/${projectId}/rubrics/new`}>
+              <Plus className="mr-1 h-4 w-4" />
+              New rubric
+            </Link>
+          </Button>
+        )}
       </div>
-
-      {canWrite && (
-        <Card>
-          <CardHeader>
-            <CardTitle>New rubric</CardTitle>
-            <CardDescription>
-              Start from the Malaysia-focused defaults below, edit them, or hit{" "}
-              <em>Fill with AI</em> to draft a rubric from a sentence.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <RubricForm projectId={projectId} providers={providers} />
-          </CardContent>
-        </Card>
-      )}
 
       <Card>
         <CardHeader>

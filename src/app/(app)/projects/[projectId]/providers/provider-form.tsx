@@ -12,6 +12,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { createProvider, testProviderConnection, updateProvider } from "./actions";
 
 type ProviderKind = "openai" | "vllm" | "together" | "openrouter" | "sglang" | "anthropic-proxy" | "custom";
@@ -75,10 +82,12 @@ export function ProviderForm({
   projectId,
   existing,
   onSaved,
+  card,
 }: {
   projectId: string;
   existing?: ExistingProvider;
   onSaved?: () => void;
+  card?: { title: string; description?: string };
 }) {
   const isEdit = Boolean(existing);
   const [name, setName] = useState(existing?.name ?? "");
@@ -239,8 +248,8 @@ export function ProviderForm({
     });
   }
 
-  return (
-    <form onSubmit={onSubmit} className="space-y-4">
+  const fields = (
+    <>
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-2">
           <Label htmlFor="pv-name">Name</Label>
@@ -419,57 +428,94 @@ export function ProviderForm({
         )}
       </div>
 
+    </>
+  );
+
+  const statusBlock = (
+    <>
+      {testError && (
+        <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive" role="alert">
+          <span className="font-medium">Test failed:</span> {testError}
+        </p>
+      )}
+      {tested && !testError && (
+        <p className="text-xs text-green-600">
+          Chat completion succeeded — you can {isEdit ? "save" : "add"} the provider.
+        </p>
+      )}
+      {!tested && !testError && (
+        <p className="text-xs text-muted-foreground">
+          Test a chat completion before {isEdit ? "saving" : "adding"}.
+        </p>
+      )}
+      {submitError && (
+        <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive" role="alert">
+          {submitError}
+        </p>
+      )}
+      {submitSuccess && (
+        <p className="text-xs text-green-600" role="status">
+          {submitSuccess}
+        </p>
+      )}
+    </>
+  );
+
+  const actionButtons = (
+    <div className="flex items-center gap-3">
+      <Button
+        type="button"
+        variant="outline"
+        onClick={onTest}
+        disabled={testing || !baseUrl || !defaultModel || (!isEdit && !apiKey)}
+      >
+        {testing ? (
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+        ) : tested ? (
+          <Check className="mr-2 h-4 w-4 text-green-600" />
+        ) : null}
+        {testing ? "Testing…" : tested ? "Connection OK" : "Test connection"}
+      </Button>
+
+      <Button type="submit" disabled={pending || !tested}>
+        {!isEdit && <Plus className="mr-2 h-4 w-4" />}
+        {pending
+          ? isEdit
+            ? "Saving…"
+            : "Adding…"
+          : isEdit
+            ? "Save changes"
+            : "Add provider"}
+      </Button>
+    </div>
+  );
+
+  if (card) {
+    return (
+      <form onSubmit={onSubmit} className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>{card.title}</CardTitle>
+            {card.description && (
+              <CardDescription>{card.description}</CardDescription>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {fields}
+            {statusBlock}
+          </CardContent>
+        </Card>
+        <div className="flex justify-end">{actionButtons}</div>
+      </form>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      {fields}
       <div className="space-y-2">
-        {testError && (
-          <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
-            <span className="font-medium">Test failed:</span> {testError}
-          </p>
-        )}
-        {tested && !testError && (
-          <p className="text-xs text-green-600">
-            Chat completion succeeded — you can {isEdit ? "save" : "add"} the provider.
-          </p>
-        )}
-        {!tested && !testError && (
-          <p className="text-xs text-muted-foreground">
-            Test a chat completion before {isEdit ? "saving" : "adding"}.
-          </p>
-        )}
-        {submitError && (
-          <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
-            {submitError}
-          </p>
-        )}
-        {submitSuccess && (
-          <p className="text-xs text-green-600">{submitSuccess}</p>
-        )}
-
-        <div className="flex items-center gap-3">
-          <Button
-            type="button"
-            variant="outline"
-            onClick={onTest}
-            disabled={testing || !baseUrl || !defaultModel || (!isEdit && !apiKey)}
-          >
-            {testing ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : tested ? (
-              <Check className="mr-2 h-4 w-4 text-green-600" />
-            ) : null}
-            {testing ? "Testing…" : tested ? "Connection OK" : "Test connection"}
-          </Button>
-
-          <Button type="submit" disabled={pending || !tested}>
-            {!isEdit && <Plus className="mr-2 h-4 w-4" />}
-            {pending
-              ? isEdit
-                ? "Saving…"
-                : "Adding…"
-              : isEdit
-                ? "Save changes"
-                : "Add provider"}
-          </Button>
-        </div>
+        {statusBlock}
+        {actionButtons}
       </div>
     </form>
   );

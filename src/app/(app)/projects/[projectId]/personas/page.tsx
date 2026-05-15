@@ -20,28 +20,11 @@ export default async function PersonasPage({
   const { role } = await requireProjectPermission(projectId, "personas.read");
   const canWrite = role ? projectRoleAllows(role, "personas.write") : false;
 
-  const [personas, languageProfiles, providers, taxonomyNodes] = await Promise.all([
-    prisma.persona.findMany({
-      where: { projectId },
-      orderBy: { name: "asc" },
-      include: { languageProfile: { select: { name: true, allowParticles: true, register: true } } },
-    }),
-    prisma.languageProfile.findMany({
-      where: { projectId },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, allowParticles: true, register: true },
-    }),
-    prisma.providerCredential.findMany({
-      where: { projectId },
-      orderBy: { name: "asc" },
-      select: { id: true, name: true, defaultModel: true },
-    }),
-    prisma.taxonomyNode.findMany({
-      where: { taxonomy: { projectId } },
-      orderBy: { name: "asc" },
-      select: { name: true },
-    }),
-  ]);
+  const personas = await prisma.persona.findMany({
+    where: { projectId },
+    orderBy: { name: "asc" },
+    include: { languageProfile: { select: { name: true, allowParticles: true, register: true } } },
+  });
 
   return (
     <div className="space-y-6">
@@ -71,9 +54,6 @@ export default async function PersonasPage({
           <PersonasTable
             projectId={projectId}
             canWrite={canWrite}
-            languageProfiles={languageProfiles}
-            providers={providers}
-            taxonomyNodes={taxonomyNodes.map((t) => t.name)}
             personas={personas.map((p) => ({
               id: p.id,
               name: p.name,

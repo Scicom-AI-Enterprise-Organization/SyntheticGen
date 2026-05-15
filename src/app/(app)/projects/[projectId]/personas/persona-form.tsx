@@ -15,6 +15,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { AiAssistButton } from "@/components/ai-assist-button";
 import { createPersona, updatePersona } from "./actions";
 
@@ -67,6 +74,7 @@ export function PersonaForm({
   taxonomyNodes,
   initial,
   onDone,
+  card,
 }: {
   projectId: string;
   languageProfiles: LP[];
@@ -74,6 +82,7 @@ export function PersonaForm({
   taxonomyNodes?: string[];
   initial?: InitialPersona;
   onDone?: () => void;
+  card?: { title: string; description?: string };
 }) {
   const isEditing = Boolean(initial);
   const [name, setName] = useState(initial?.name ?? "");
@@ -183,8 +192,8 @@ export function PersonaForm({
     }
   }
 
-  return (
-    <form onSubmit={onSubmit} className="space-y-4">
+  const fields = (
+    <>
       <div className="flex justify-end">
         <AiAssistButton
           projectId={projectId}
@@ -347,34 +356,71 @@ export function PersonaForm({
         </div>
       </div>
 
-      {conflict && (
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-          <p>{conflict}</p>
-        </div>
-      )}
+    </>
+  );
 
+  const conflictBanner = conflict && (
+    <div className="flex items-start gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-400">
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+      <p>{conflict}</p>
+    </div>
+  );
+
+  const errorBlock = error && (
+    <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+      {error}
+    </p>
+  );
+
+  const successBlock = success && <p className="text-xs text-green-600">{success}</p>;
+
+  const submitButton = (
+    <Button type="submit" disabled={pending}>
+      {isEditing ? (
+        <Save className="mr-2 h-4 w-4" />
+      ) : (
+        <Plus className="mr-2 h-4 w-4" />
+      )}
+      {pending
+        ? isEditing
+          ? "Saving…"
+          : "Creating…"
+        : isEditing
+          ? "Save changes"
+          : "Create persona"}
+    </Button>
+  );
+
+  if (card) {
+    return (
+      <form onSubmit={onSubmit} className="space-y-4">
+        <Card>
+          <CardHeader>
+            <CardTitle>{card.title}</CardTitle>
+            {card.description && (
+              <CardDescription>{card.description}</CardDescription>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            {fields}
+            {conflictBanner}
+            {errorBlock}
+            {successBlock}
+          </CardContent>
+        </Card>
+        <div className="flex justify-end">{submitButton}</div>
+      </form>
+    );
+  }
+
+  return (
+    <form onSubmit={onSubmit} className="space-y-4">
+      {fields}
+      {conflictBanner}
       <div className="space-y-2">
-        <Button type="submit" disabled={pending}>
-          {isEditing ? (
-            <Save className="mr-2 h-4 w-4" />
-          ) : (
-            <Plus className="mr-2 h-4 w-4" />
-          )}
-          {pending
-            ? isEditing
-              ? "Saving…"
-              : "Creating…"
-            : isEditing
-              ? "Save changes"
-              : "Create persona"}
-        </Button>
-        {error && (
-          <p className="whitespace-pre-wrap break-words rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
-            {error}
-          </p>
-        )}
-        {success && <p className="text-xs text-green-600">{success}</p>}
+        {submitButton}
+        {errorBlock}
+        {successBlock}
       </div>
     </form>
   );

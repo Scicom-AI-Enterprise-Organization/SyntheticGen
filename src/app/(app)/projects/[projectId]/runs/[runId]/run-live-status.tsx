@@ -30,10 +30,12 @@ export function RunLiveStatus({
   projectId,
   runId,
   initial,
+  headerActions,
 }: {
   projectId: string;
   runId: string;
   initial: Initial;
+  headerActions?: React.ReactNode;
 }) {
   const [s, setS] = useState(initial);
 
@@ -61,9 +63,12 @@ export function RunLiveStatus({
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between gap-3">
-          <CardTitle className="text-base">Progress</CardTitle>
-          <Badge variant={STATUS_VARIANT[s.status] ?? "outline"}>{s.status}</Badge>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <CardTitle className="text-base">Progress</CardTitle>
+            <Badge variant={STATUS_VARIANT[s.status] ?? "outline"}>{s.status}</Badge>
+          </div>
+          {headerActions && <div className="flex items-center gap-2">{headerActions}</div>}
         </div>
       </CardHeader>
       <CardContent>

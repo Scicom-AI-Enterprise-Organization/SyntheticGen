@@ -1,21 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useTransition } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { useConfirm } from "@/components/confirm-dialog";
 import { deleteTemplate } from "./actions";
-import { TemplateForm } from "./template-form";
-
-type Kind = "system" | "user-seed" | "judge" | "conversation-driver";
 
 interface T {
   id: string;
@@ -27,33 +18,18 @@ interface T {
   bodyPreview: string;
 }
 
-interface Provider {
-  id: string;
-  name: string;
-  defaultModel: string | null;
-}
-
 export function TemplatesTable({
   projectId,
   canWrite,
   templates,
-  providers,
-  taxonomyNodes,
-  languageProfiles,
 }: {
   projectId: string;
   canWrite: boolean;
   templates: T[];
-  providers: Provider[];
-  taxonomyNodes: string[];
-  languageProfiles: string[];
 }) {
   const [pending, start] = useTransition();
   const [actionError, setActionError] = useState<string | null>(null);
-  const [editingId, setEditingId] = useState<string | null>(null);
   const confirm = useConfirm();
-
-  const editing = templates.find((t) => t.id === editingId) ?? null;
 
   async function onDelete(t: T) {
     setActionError(null);
@@ -105,13 +81,15 @@ export function TemplatesTable({
             {canWrite && (
               <div className="flex shrink-0 items-center gap-1">
                 <Button
+                  asChild
                   variant="ghost"
                   size="icon"
-                  onClick={() => setEditingId(t.id)}
                   aria-label="Edit"
                   title="Edit template"
                 >
-                  <Pencil className="h-4 w-4" />
+                  <Link href={`/projects/${projectId}/templates/${t.id}`}>
+                    <Pencil className="h-4 w-4" />
+                  </Link>
                 </Button>
                 <Button
                   variant="ghost"
@@ -132,42 +110,6 @@ export function TemplatesTable({
           </pre>
         </div>
       ))}
-
-      <Dialog
-        open={Boolean(editing)}
-        onOpenChange={(open) => {
-          if (!open) setEditingId(null);
-        }}
-      >
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Edit template</DialogTitle>
-            <DialogDescription>
-              Body changes bump the template version. Runs that already started
-              keep their frozen copy.
-            </DialogDescription>
-          </DialogHeader>
-          {editing && (
-            <TemplateForm
-              projectId={projectId}
-              providers={providers}
-              taxonomyNodes={taxonomyNodes}
-              existingTemplates={templates
-                .filter((x) => x.id !== editing.id)
-                .map((x) => `${x.name} (${x.kind})`)}
-              languageProfiles={languageProfiles}
-              initial={{
-                id: editing.id,
-                name: editing.name,
-                kind: editing.kind as Kind,
-                description: editing.description,
-                body: editing.body,
-              }}
-              onDone={() => setEditingId(null)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

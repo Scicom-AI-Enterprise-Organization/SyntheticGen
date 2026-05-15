@@ -258,6 +258,22 @@ export default async function RunDetailPage({
     });
   }
 
+  const progressActions = (
+    <>
+      {canExecute && (
+        <RegenRunButton
+          projectId={projectId}
+          runId={runId}
+          totalJobs={jobsTotal}
+          succeededJobs={counts["succeeded"] ?? 0}
+        />
+      )}
+      {canCancel && (run.status === "queued" || run.status === "running") && (
+        <CancelRunButton projectId={projectId} runId={runId} />
+      )}
+    </>
+  );
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4">
@@ -272,24 +288,18 @@ export default async function RunDetailPage({
             )}
           </p>
         </div>
-        <div className="flex shrink-0 items-start gap-2">
-          {canExecute && (
-            <RegenRunButton
-              projectId={projectId}
-              runId={runId}
-              totalJobs={jobsTotal}
-              succeededJobs={counts["succeeded"] ?? 0}
-            />
-          )}
-          {canCancel && (run.status === "queued" || run.status === "running") && (
-            <CancelRunButton projectId={projectId} runId={runId} />
-          )}
-        </div>
+        <Button asChild variant="ghost" size="sm">
+          <Link href={`/projects/${projectId}/runs`}>
+            <ChevronLeft className="mr-1 h-4 w-4" />
+            Back to runs
+          </Link>
+        </Button>
       </div>
 
       <RunLiveStatus
         projectId={projectId}
         runId={runId}
+        headerActions={progressActions}
         initial={{
           status: run.status,
           producedCount: run.producedCount,

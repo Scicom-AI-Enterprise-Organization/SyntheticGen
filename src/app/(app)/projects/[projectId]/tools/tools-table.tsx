@@ -1,8 +1,8 @@
 "use client";
 
-import { useTransition } from "react";
-import { toast } from "sonner";
-import { Trash2 } from "lucide-react";
+import Link from "next/link";
+import { useState, useTransition } from "react";
+import { Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { useConfirm } from "@/components/confirm-dialog";
@@ -28,6 +28,7 @@ export function ToolsTable({
   tools: Tool[];
 }) {
   const [pending, start] = useTransition();
+  const [actionError, setActionError] = useState<string | null>(null);
   const confirm = useConfirm();
 
   async function onDelete(t: Tool) {
@@ -37,11 +38,12 @@ export function ToolsTable({
       destructive: true,
     });
     if (!ok) return;
+    setActionError(null);
     start(async () => {
       const res = await deleteToolDef(projectId, t.id);
-      if ("error" in res && (res as { error?: string }).error)
-        toast.error((res as { error: string }).error);
-      else toast.success("Tool deleted");
+      if ("error" in res && (res as { error?: string }).error) {
+        setActionError((res as { error: string }).error);
+      }
     });
   }
 
@@ -51,6 +53,11 @@ export function ToolsTable({
 
   return (
     <div className="space-y-2">
+      {actionError && (
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive">
+          {actionError}
+        </p>
+      )}
       {tools.map((t) => {
         let preview = "";
         try {
@@ -80,15 +87,27 @@ export function ToolsTable({
                 <div className="mt-1 text-xs text-muted-foreground">{t.description}</div>
               </div>
               {canWrite && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  disabled={pending}
-                  onClick={() => onDelete(t)}
-                  aria-label="Delete"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+                <div className="flex shrink-0 items-center gap-1">
+                  <Button
+                    asChild
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Edit"
+                  >
+                    <Link href={`/projects/${projectId}/tools/${t.id}`}>
+                      <Pencil className="h-4 w-4" />
+                    </Link>
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    disabled={pending}
+                    onClick={() => onDelete(t)}
+                    aria-label="Delete"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
               )}
             </div>
             <details className="mt-3">

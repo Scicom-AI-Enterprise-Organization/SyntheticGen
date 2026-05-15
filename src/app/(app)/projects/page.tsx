@@ -10,7 +10,6 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { CreateProjectForm } from "./create-project-form";
 
 export default async function ProjectsPage() {
   const user = await requirePermission("projects:read");
@@ -44,22 +43,15 @@ export default async function ProjectsPage() {
             profiles, prompt templates, runs, and datasets.
           </p>
         </div>
+        {canCreate && (
+          <Button asChild size="sm">
+            <Link href="/projects/new">
+              <Plus className="mr-1 h-4 w-4" />
+              New project
+            </Link>
+          </Button>
+        )}
       </div>
-
-      {canCreate && (
-        <Card>
-          <CardHeader>
-            <CardTitle>Create project</CardTitle>
-            <CardDescription>
-              You become the OWNER. Two LanguageProfile presets are seeded automatically —
-              edit them, clone them, or replace with profiles tuned for your locale.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <CreateProjectForm />
-          </CardContent>
-        </Card>
-      )}
 
       <Card>
         <CardHeader>
@@ -73,7 +65,16 @@ export default async function ProjectsPage() {
             <div className="rounded-md border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
               <FolderKanban className="mx-auto mb-2 h-6 w-6" />
               No projects yet.
-              {canCreate ? " Create your first one above." : " Ask an owner to add you."}
+              {canCreate ? (
+                <>
+                  {" "}
+                  <Link href="/projects/new" className="text-primary hover:underline">
+                    Create your first one.
+                  </Link>
+                </>
+              ) : (
+                " Ask an owner to add you."
+              )}
             </div>
           ) : (
             <ul className="divide-y divide-border">

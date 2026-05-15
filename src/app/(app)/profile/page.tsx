@@ -1,6 +1,6 @@
 import { requireUser } from "@/lib/rbac";
 import { prisma } from "@/lib/db";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ProfileForm } from "./profile-form";
 import { PasswordForm } from "./password-form";
@@ -37,34 +37,9 @@ export default async function ProfilePage() {
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Account</CardTitle>
-          <CardDescription>
-            Your email is set by your sign-in method and can&apos;t be changed here.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ProfileForm
-            initialName={dbUser.name ?? ""}
-            email={dbUser.email}
-          />
-        </CardContent>
-      </Card>
+      <ProfileForm initialName={dbUser.name ?? ""} email={dbUser.email} />
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Password</CardTitle>
-          <CardDescription>
-            {dbUser.passwordHash
-              ? "Change your password. You'll stay signed in on this device."
-              : "Set a password to enable email + password sign-in alongside SSO."}
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <PasswordForm hasPassword={!!dbUser.passwordHash} />
-        </CardContent>
-      </Card>
+      <PasswordForm hasPassword={!!dbUser.passwordHash} />
 
       <Card>
         <CardHeader>

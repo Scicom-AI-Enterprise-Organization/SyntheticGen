@@ -1,10 +1,15 @@
 "use client";
 
-import { useTransition } from "react";
-import { toast } from "sonner";
+import { useState, useTransition } from "react";
 import { Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Checkbox } from "@/components/ui/checkbox";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { useConfirm } from "@/components/confirm-dialog";
 import { setUserRoles, deleteUser } from "./actions";
 
@@ -15,18 +20,21 @@ interface User {
   roles: string[];
 }
 
+const NONE = "__none__";
+
 export function UsersTable({ users, allRoles }: { users: User[]; allRoles: string[] }) {
   const [pending, start] = useTransition();
+  const [error, setError] = useState<string | null>(null);
   const confirm = useConfirm();
 
-  function toggleRole(user: User, role: string, checked: boolean) {
-    const next = checked ? [...user.roles, role] : user.roles.filter((r) => r !== role);
+  function changeRole(user: User, role: string) {
+    setError(null);
+    const next = role === NONE ? [] : [role];
     start(async () => {
       try {
         await setUserRoles(user.id, next);
-        toast.success("Roles updated");
       } catch {
-        toast.error("Failed to update roles");
+        setError("Failed to update role");
       }
     });
   }
@@ -39,59 +47,77 @@ export function UsersTable({ users, allRoles }: { users: User[]; allRoles: strin
       destructive: true,
     });
     if (!ok) return;
+    setError(null);
     start(async () => {
       try {
         await deleteUser(user.id);
-        toast.success("User deleted");
       } catch {
-        toast.error("Failed to delete user");
+        setError("Failed to delete user");
       }
     });
   }
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b border-border text-left text-muted-foreground">
-            <th className="py-2 pr-4 font-medium">User</th>
-            {allRoles.map((r) => (
-              <th key={r} className="px-2 py-2 font-medium">{r}</th>
-            ))}
-            <th className="py-2 pl-4" />
-          </tr>
-        </thead>
-        <tbody>
-          {users.map((u) => (
-            <tr key={u.id} className="border-b border-border/50">
-              <td className="py-3 pr-4">
-                <div className="font-medium">{u.name ?? "—"}</div>
-                <div className="text-xs text-muted-foreground">{u.email}</div>
-              </td>
-              {allRoles.map((r) => (
-                <td key={r} className="px-2 py-3">
-                  <Checkbox
-                    checked={u.roles.includes(r)}
-                    disabled={pending}
-                    onCheckedChange={(v) => toggleRole(u, r, v === true)}
-                  />
-                </td>
-              ))}
-              <td className="py-3 pl-4 text-right">
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  disabled={pending}
-                  onClick={() => onDelete(u)}
-                  aria-label="Delete user"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </td>
+    <div className="space-y-3">
+      {error && (
+        <p className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-xs text-destructive" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-muted-foreground">
+              <th className="py-2 pr-4 font-medium">User</th>
+              <th className="py-2 pr-4 font-medium">Role</th>
+              <th className="py-2 pl-4" />
             </tr>
-          ))}
-        </tbody>
-      </table>
+          </thead>
+          <tbody>
+            {users.map((u) => {
+              const current = u.roles[0] ?? NONE;
+              return (
+                <tr key={u.id} className="border-b border-border/50">
+                  <td className="py-3 pr-4">
+                    <div className="font-medium">{u.name ?? "—"}</div>
+                    <div className="text-xs text-muted-foreground">{u.email}</div>
+                  </td>
+                  <td className="py-3 pr-4">
+                    <Select
+                      value={current}
+                      onValueChange={(v) => changeRole(u, v)}
+                      disabled={pending}
+                    >
+                      <SelectTrigger size="sm" className="w-48">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value={NONE}>—</SelectItem>
+                        {allRoles.map((r) => (
+                          <SelectItem key={r} value={r}>
+                            {r}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </td>
+                  <td className="py-3 pl-4 text-right">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      disabled={pending}
+                      onClick={() => onDelete(u)}
+                      aria-label="Delete user"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

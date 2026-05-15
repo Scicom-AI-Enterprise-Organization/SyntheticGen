@@ -1,19 +1,12 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useTransition } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { useConfirm } from "@/components/confirm-dialog";
 import { deleteProvider } from "./actions";
-import { ProviderForm, type ExistingProvider } from "./provider-form";
 
 interface P {
   id: string;
@@ -37,7 +30,6 @@ export function ProvidersTable({
 }) {
   const [pending, start] = useTransition();
   const [deleteError, setDeleteError] = useState<string | null>(null);
-  const [editing, setEditing] = useState<P | null>(null);
   const confirm = useConfirm();
 
   async function onDelete(p: P) {
@@ -59,19 +51,6 @@ export function ProvidersTable({
   if (providers.length === 0) {
     return <p className="text-sm text-muted-foreground">No providers configured.</p>;
   }
-
-  const editingExisting: ExistingProvider | null = editing
-    ? {
-        id: editing.id,
-        name: editing.name,
-        kind: editing.kind,
-        baseUrl: editing.baseUrl,
-        defaultModel: editing.defaultModel,
-        reasoningEffort: editing.reasoningEffort,
-        chatTemplateKwargs: editing.chatTemplateKwargs,
-        keyFingerprint: editing.keyFingerprint,
-      }
-    : null;
 
   return (
     <div className="space-y-3">
@@ -130,13 +109,14 @@ export function ProvidersTable({
                   {canWrite && (
                     <div className="flex justify-end gap-1">
                       <Button
+                        asChild
                         variant="ghost"
                         size="icon"
-                        disabled={pending}
-                        onClick={() => setEditing(p)}
                         aria-label="Edit"
                       >
-                        <Pencil className="h-4 w-4" />
+                        <Link href={`/projects/${projectId}/providers/${p.id}`}>
+                          <Pencil className="h-4 w-4" />
+                        </Link>
                       </Button>
                       <Button
                         variant="ghost"
@@ -155,31 +135,6 @@ export function ProvidersTable({
           </tbody>
         </table>
       </div>
-
-      <Dialog
-        open={Boolean(editing)}
-        onOpenChange={(next) => {
-          if (!next) setEditing(null);
-        }}
-      >
-        <DialogContent className="sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Edit provider</DialogTitle>
-            <DialogDescription>
-              Leave the API key blank to keep the current one. Changes require a
-              fresh test before saving.
-            </DialogDescription>
-          </DialogHeader>
-          {editingExisting && (
-            <ProviderForm
-              key={editingExisting.id}
-              projectId={projectId}
-              existing={editingExisting}
-              onSaved={() => setEditing(null)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

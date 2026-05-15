@@ -1,12 +1,8 @@
+import Link from "next/link";
+import { ChevronLeft } from "lucide-react";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission } from "@/lib/project-rbac";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { ProfileEditor } from "../profile-editor";
 
 export default async function NewLanguageProfilePage({
@@ -37,46 +33,45 @@ export default async function NewLanguageProfilePage({
 
   return (
     <div className="space-y-6">
-      <div>
+      <div className="flex items-center justify-between gap-4">
         <h1 className="text-2xl font-semibold tracking-tight">New language profile</h1>
+        <Button asChild variant="ghost" size="sm">
+          <Link href={`/projects/${projectId}/languages`}>
+            <ChevronLeft className="mr-1 h-4 w-4" />
+            Back to languages
+          </Link>
+        </Button>
       </div>
-      <Card>
-        <CardHeader>
-          <CardTitle>Profile</CardTitle>
-          <CardDescription>
-            Build a custom (language × script × register × code-switch) policy. For enterprise
-            customer-support data in any locale, set <code>register=formal</code>, turn off
-            colloquial particles, and enable the strict-spelling switch.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <ProfileEditor
-            projectId={projectId}
-            providers={providers}
-            existingProfiles={existingProfiles.map(
-              (p) => `${p.name} (primary=${p.primary}, register=${p.register})`,
-            )}
-            taxonomyNodes={taxonomyNodes.map((t) => t.name)}
-            initial={{
-              name: "",
-              primary: "ms",
-              secondary: ["en"],
-              script: "latin",
-              codeSwitchPolicy: "none",
-              codeSwitchRate: null,
-              register: "formal",
-              allowParticles: false,
-              bannedTokens: [],
-              bannedPatterns: [],
-              requireFormalMalay: false,
-              englishLoanwordPolicy: "free",
-              loanwordAllowlist: [],
-              dialectHints: [],
-              notes: null,
-            }}
-          />
-        </CardContent>
-      </Card>
+      <ProfileEditor
+        projectId={projectId}
+        providers={providers}
+        existingProfiles={existingProfiles.map(
+          (p) => `${p.name} (primary=${p.primary}, register=${p.register})`,
+        )}
+        taxonomyNodes={taxonomyNodes.map((t) => t.name)}
+        card={{
+          title: "Profile",
+          description:
+            "Build a custom (language × script × register × code-switch) policy. For enterprise customer-support data in any locale, set register=formal, turn off colloquial particles, and enable the strict-spelling switch.",
+        }}
+        initial={{
+          name: "",
+          primary: "ms",
+          secondary: ["en"],
+          script: "latin",
+          codeSwitchPolicy: "none",
+          codeSwitchRate: null,
+          register: "formal",
+          allowParticles: false,
+          bannedTokens: [],
+          bannedPatterns: [],
+          requireFormalMalay: false,
+          englishLoanwordPolicy: "free",
+          loanwordAllowlist: [],
+          dialectHints: [],
+          notes: null,
+        }}
+      />
     </div>
   );
 }

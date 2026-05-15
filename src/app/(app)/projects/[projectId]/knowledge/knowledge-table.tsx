@@ -1,19 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useState, useTransition } from "react";
 import { Pencil, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
 import { useConfirm } from "@/components/confirm-dialog";
 import { deleteKnowledgeEntry } from "./actions";
-import { KnowledgeForm, type ExistingEntry } from "./knowledge-form";
+import { type ExistingEntry } from "./knowledge-form";
 
 interface Row extends ExistingEntry {
   taxonomyNodeNames: string[];
@@ -24,17 +18,12 @@ export function KnowledgeTable({
   projectId,
   canWrite,
   entries,
-  taxonomyNodes,
-  providers,
 }: {
   projectId: string;
   canWrite: boolean;
   entries: Row[];
-  taxonomyNodes: { id: string; name: string }[];
-  providers: { id: string; name: string; defaultModel: string | null }[];
 }) {
   const [pending, start] = useTransition();
-  const [editing, setEditing] = useState<Row | null>(null);
   const [error, setError] = useState<string | null>(null);
   const confirm = useConfirm();
 
@@ -68,14 +57,22 @@ export function KnowledgeTable({
 
       <div className="space-y-2">
         {entries.map((e) => (
-          <div key={e.id} className="rounded-md border border-border bg-card p-3">
-            <div className="flex items-start justify-between gap-3">
+          <div
+            key={e.id}
+            className="relative rounded-md border border-border bg-card p-3 transition-colors hover:bg-muted/40"
+          >
+            <Link
+              href={`/projects/${projectId}/knowledge/${e.id}`}
+              aria-label={`Open ${e.title}`}
+              className="absolute inset-0 z-0 rounded-md"
+            />
+            <div className="relative z-10 flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <h4 className="truncate text-sm font-medium">{e.title}</h4>
                 <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
                   {e.content}
                 </p>
-                <div className="mt-2 flex flex-wrap gap-1">
+                <div className="mt-2 flex flex-wrap items-center gap-1">
                   {e.taxonomyNodeNames.length === 0 ? (
                     <Badge variant="outline" className="text-[10px]">
                       project-wide
@@ -97,7 +94,7 @@ export function KnowledgeTable({
                       href={e.sourceUrl}
                       target="_blank"
                       rel="noreferrer"
-                      className="text-[10px] text-primary hover:underline"
+                      className="relative z-10 text-[10px] text-primary hover:underline"
                     >
                       source ↗
                     </a>
@@ -105,15 +102,16 @@ export function KnowledgeTable({
                 </div>
               </div>
               {canWrite && (
-                <div className="flex shrink-0 gap-1">
+                <div className="relative z-10 flex shrink-0 gap-1">
                   <Button
+                    asChild
                     variant="ghost"
                     size="icon"
-                    disabled={pending}
-                    onClick={() => setEditing(e)}
                     aria-label="Edit"
                   >
-                    <Pencil className="h-4 w-4" />
+                    <Link href={`/projects/${projectId}/knowledge/${e.id}`}>
+                      <Pencil className="h-4 w-4" />
+                    </Link>
                   </Button>
                   <Button
                     variant="ghost"
@@ -130,33 +128,6 @@ export function KnowledgeTable({
           </div>
         ))}
       </div>
-
-      <Dialog
-        open={Boolean(editing)}
-        onOpenChange={(o) => {
-          if (!o) setEditing(null);
-        }}
-      >
-        <DialogContent className="sm:max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Edit knowledge entry</DialogTitle>
-            <DialogDescription>
-              Changes apply to future runs only. Existing conversations keep the
-              snapshot they were generated with.
-            </DialogDescription>
-          </DialogHeader>
-          {editing && (
-            <KnowledgeForm
-              key={editing.id}
-              projectId={projectId}
-              taxonomyNodes={taxonomyNodes}
-              providers={providers}
-              existing={editing}
-              onSaved={() => setEditing(null)}
-            />
-          )}
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }
