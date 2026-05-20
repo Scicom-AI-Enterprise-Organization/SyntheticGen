@@ -1,0 +1,1134 @@
+{
+  "workflow_name": "udr_slice_subscription_booking",
+  "description": "End-to-end workflow for reserving, provisioning, modifying, and cancelling 5G slice subscriptions and associated UDR profiles for devices and enterprise tenants.",
+  "domain": "telco_5g_deep/udr_management",
+  "shared_entities": {
+    "subscription_id": {
+      "type": "string",
+      "description": "Unique identifier of a UDR slice subscription booking instance."
+    },
+    "reservation_id": {
+      "type": "string",
+      "description": "Identifier for a provisional reservation of UDR and slice resources before final activation."
+    },
+    "device_id": {
+      "type": "string",
+      "description": "Unique device identifier (e.g., SUPI/IMSI or enterprise device ID)."
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Identifier of enterprise/tenant owning devices and UDR configurations."
+    },
+    "slice_id": {
+      "type": "string",
+      "description": "Identifier of the network slice (S-NSSAI or operator-specific slice key)."
+    },
+    "policy_profile_id": {
+      "type": "string",
+      "description": "Identifier of a reusable policy/profile template applied to UDR records."
+    },
+    "udr_profile_ref": {
+      "type": "object",
+      "description": "Reference to a specific UDR profile instance.",
+      "properties": {
+        "profile_id": {
+          "type": "string",
+          "description": "Unique identifier of the UDR profile record."
+        },
+        "version": {
+          "type": "integer",
+          "description": "Profile version for optimistic concurrency control."
+        }
+      },
+      "required": [
+        "profile_id"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "search_slice_offers",
+      "description": "Search for available 5G slice offers and UDR policy bundles for a tenant or device use-case.",
+      "stage": "search",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant requesting slice offers."
+          },
+          "use_case": {
+            "type": "string",
+            "description": "High-level use-case descriptor.",
+            "enum": [
+              "enhanced_mobile_broadband",
+              "massive_iot",
+              "critical_iot",
+              "private_network",
+              "fixed_wireless_access",
+              "custom"
+            ]
+          },
+          "device_profile": {
+            "type": "object",
+            "description": "Optional constraints based on typical device characteristics.",
+            "properties": {
+              "device_type": {
+                "type": "string",
+                "enum": [
+                  "smartphone",
+                  "industrial_sensor",
+                  "vehicle",
+                  "router_cpe",
+                  "ar_vr_headset",
+                  "other"
+                ]
+              },
+              "mobility_pattern": {
+                "type": "string",
+                "enum": [
+                  "stationary",
+                  "pedestrian",
+                  "vehicular",
+                  "airborne",
+                  "mixed"
+                ]
+              },
+              "expected_device_count": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "traffic_profile": {
+                "type": "object",
+                "properties": {
+                  "downlink_mbps": {
+                    "type": "number"
+                  },
+                  "uplink_mbps": {
+                    "type": "number"
+                  },
+                  "latency_ms": {
+                    "type": "number"
+                  },
+                  "jitter_ms": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          },
+          "sla_requirements": {
+            "type": "object",
+            "description": "Key SLA requirements for the slice.",
+            "properties": {
+              "availability_target": {
+                "type": "string",
+                "enum": [
+                  "99.0",
+                  "99.5",
+                  "99.9",
+                  "99.99"
+                ]
+              },
+              "priority_class": {
+                "type": "string",
+                "enum": [
+                  "bronze",
+                  "silver",
+                  "gold",
+                  "platinum"
+                ]
+              },
+              "security_level": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "enhanced",
+                  "regulated_critical"
+                ]
+              }
+            }
+          },
+          "region_filter": {
+            "type": "object",
+            "description": "Geographic and network location filters.",
+            "properties": {
+              "countries": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "mcc_mnc_list": {
+                "type": "array",
+                "description": "Specific PLMNs where slice should be available.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 20,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "tenant_id",
+          "use_case"
+        ]
+      },
+      "returns": "List of slice offers with associated policy bundles and indicative pricing."
+    },
+    {
+      "name": "get_slice_offer_details",
+      "description": "Retrieve detailed information about a specific slice offer including UDR schema and policy bundles.",
+      "stage": "search",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "offer_id": {
+            "type": "string",
+            "description": "Identifier of the slice offer returned from search_slice_offers."
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional sections to include in detail response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "udr_schema",
+                "default_policy_profiles",
+                "capacity_constraints",
+                "geographic_coverage",
+                "pricing_tiers",
+                "compatibility_matrix"
+              ]
+            }
+          }
+        },
+        "required": [
+          "offer_id"
+        ]
+      },
+      "returns": "Detailed slice offer specification with UDR schema, policies, constraints, and pricing details."
+    },
+    {
+      "name": "create_udr_reservation",
+      "description": "Create a provisional reservation for UDR resources and slice capacity prior to final subscription booking.",
+      "stage": "reserve",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "offer_id": {
+            "type": "string",
+            "description": "Selected slice offer to be reserved."
+          },
+          "slice_configuration": {
+            "type": "object",
+            "description": "Requested slice configuration overrides relative to the offer defaults.",
+            "properties": {
+              "slice_id": {
+                "type": "string",
+                "description": "Requested slice identifier if pre-assigned, otherwise generated."
+              },
+              "capacity": {
+                "type": "object",
+                "properties": {
+                  "max_devices": {
+                    "type": "integer",
+                    "minimum": 1
+                  },
+                  "aggregate_downlink_mbps": {
+                    "type": "number"
+                  },
+                  "aggregate_uplink_mbps": {
+                    "type": "number"
+                  }
+                }
+              },
+              "geographic_scope": {
+                "type": "object",
+                "properties": {
+                  "countries": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "plmn_list": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "edge_zones": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "sla_overrides": {
+                "type": "object",
+                "properties": {
+                  "latency_ms": {
+                    "type": "number"
+                  },
+                  "packet_loss_percent": {
+                    "type": "number"
+                  },
+                  "availability_target": {
+                    "type": "string",
+                    "enum": [
+                      "99.0",
+                      "99.5",
+                      "99.9",
+                      "99.99"
+                    ]
+                  }
+                }
+              }
+            },
+            "required": [
+              "capacity"
+            ]
+          },
+          "initial_devices": {
+            "type": "array",
+            "description": "Optional list of devices to pre-reserve UDR resources for.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "device_id": {
+                  "type": "string"
+                },
+                "device_type": {
+                  "type": "string"
+                },
+                "policy_profile_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "device_id"
+              ]
+            }
+          },
+          "reservation_ttl_minutes": {
+            "type": "integer",
+            "description": "Time-to-live for the reservation before expiry.",
+            "default": 30,
+            "minimum": 5,
+            "maximum": 1440
+          }
+        },
+        "required": [
+          "tenant_id",
+          "offer_id",
+          "slice_configuration"
+        ]
+      },
+      "returns": "Created reservation with reservation_id, provisional slice_id, reserved capacities, and expiry time."
+    },
+    {
+      "name": "check_reservation_status",
+      "description": "Check the current status of a UDR and slice reservation, including capacity holds and conflicts.",
+      "stage": "reserve",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reservation_id": {
+            "type": "string"
+          },
+          "include_conflicts": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, include information about conflicting reservations or capacity limits."
+          }
+        },
+        "required": [
+          "reservation_id"
+        ]
+      },
+      "returns": "Reservation status including state, capacity holds, conflicts (if requested), and time remaining until expiry."
+    },
+    {
+      "name": "confirm_udr_subscription",
+      "description": "Confirm a reservation into an active UDR slice subscription, creating initial UDR profiles and binding devices.",
+      "stage": "book",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reservation_id": {
+            "type": "string",
+            "description": "Reservation to be turned into an active subscription."
+          },
+          "tenant_contact": {
+            "type": "object",
+            "description": "Contact information for subscription ownership and notifications.",
+            "properties": {
+              "email": {
+                "type": "string",
+                "format": "email"
+              },
+              "phone": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "notification_preferences": {
+                "type": "object",
+                "properties": {
+                  "channels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "email",
+                        "sms",
+                        "webhook"
+                      ]
+                    }
+                  },
+                  "webhook": {
+                    "type": "object",
+                    "properties": {
+                      "url": {
+                        "type": "string"
+                      },
+                      "auth_header": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+              "email"
+            ]
+          },
+          "initial_udr_profiles": {
+            "type": "array",
+            "description": "Optional explicit initial UDR profile definitions; overrides reservation initial_devices if provided.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "device_id": {
+                  "type": "string"
+                },
+                "policy_profile_id": {
+                  "type": "string"
+                },
+                "custom_overrides": {
+                  "type": "object",
+                  "description": "Fine-grained policy overrides for this device.",
+                  "properties": {
+                    "qos": {
+                      "type": "object",
+                      "properties": {
+                        "5qi": {
+                          "type": "integer"
+                        },
+                        "max_downlink_mbps": {
+                          "type": "number"
+                        },
+                        "max_uplink_mbps": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "access_restrictions": {
+                      "type": "object",
+                      "properties": {
+                        "allowed_plmns": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "roaming_allowed": {
+                          "type": "boolean"
+                        }
+                      }
+                    },
+                    "charging": {
+                      "type": "object",
+                      "properties": {
+                        "charging_profile_id": {
+                          "type": "string"
+                        },
+                        "spending_limit_monthly": {
+                          "type": "number"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "device_id"
+              ]
+            }
+          },
+          "activation_mode": {
+            "type": "string",
+            "description": "Defines when the subscription becomes active.",
+            "enum": [
+              "immediate",
+              "scheduled"
+            ],
+            "default": "immediate"
+          },
+          "scheduled_activation_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Required if activation_mode is scheduled."
+          }
+        },
+        "required": [
+          "reservation_id",
+          "tenant_contact"
+        ]
+      },
+      "returns": "Confirmed subscription with subscription_id, activated slice_id, created UDR profile references, and activation status."
+    },
+    {
+      "name": "get_subscription",
+      "description": "Retrieve details of a UDR slice subscription including associated devices and UDR profiles.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "slice_configuration",
+                "device_bindings",
+                "udr_profiles",
+                "policy_profiles",
+                "audit_log",
+                "usage_counters"
+              ]
+            }
+          },
+          "device_filter": {
+            "type": "object",
+            "description": "Optional filter to limit device-related details.",
+            "properties": {
+              "device_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "device_type": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Subscription details including configuration, device list, and selected related entities."
+    },
+    {
+      "name": "list_subscription_devices",
+      "description": "List devices and their UDR profile references under a given subscription with paging and filters.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "status_filter": {
+            "type": "string",
+            "enum": [
+              "active",
+              "suspended",
+              "pending_activation",
+              "pending_deletion",
+              "all"
+            ],
+            "default": "all"
+          },
+          "policy_profile_ids": {
+            "type": "array",
+            "description": "Filter by one or more policy profile IDs.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50,
+            "maximum": 500
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Paged list of devices under the subscription with their status and udr_profile_ref objects."
+    },
+    {
+      "name": "modify_udr_subscription",
+      "description": "Modify an existing UDR slice subscription, including slice capacity, SLA, and bulk device policy updates.",
+      "stage": "modify",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "modification_reason": {
+            "type": "string",
+            "enum": [
+              "capacity_increase",
+              "capacity_decrease",
+              "sla_change",
+              "policy_update",
+              "geographic_change",
+              "other"
+            ]
+          },
+          "slice_updates": {
+            "type": "object",
+            "description": "Changes to slice-level configuration.",
+            "properties": {
+              "capacity": {
+                "type": "object",
+                "properties": {
+                  "max_devices": {
+                    "type": "integer"
+                  },
+                  "aggregate_downlink_mbps": {
+                    "type": "number"
+                  },
+                  "aggregate_uplink_mbps": {
+                    "type": "number"
+                  }
+                }
+              },
+              "geographic_scope": {
+                "type": "object",
+                "properties": {
+                  "add_countries": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "remove_countries": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "add_edge_zones": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "remove_edge_zones": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "sla_overrides": {
+                "type": "object",
+                "properties": {
+                  "latency_ms": {
+                    "type": "number"
+                  },
+                  "packet_loss_percent": {
+                    "type": "number"
+                  },
+                  "availability_target": {
+                    "type": "string",
+                    "enum": [
+                      "99.0",
+                      "99.5",
+                      "99.9",
+                      "99.99"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "device_policy_updates": {
+            "type": "array",
+            "description": "Per-device policy updates and UDR profile modifications.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "device_id": {
+                  "type": "string"
+                },
+                "current_udr_profile_ref": {
+                  "$ref": "#/shared_entities/udr_profile_ref"
+                },
+                "new_policy_profile_id": {
+                  "type": "string"
+                },
+                "partial_overrides": {
+                  "type": "object",
+                  "description": "Partial update of custom overrides.",
+                  "properties": {
+                    "qos": {
+                      "type": "object"
+                    },
+                    "access_restrictions": {
+                      "type": "object"
+                    },
+                    "charging": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "operation": {
+                  "type": "string",
+                  "enum": [
+                    "update",
+                    "suspend",
+                    "resume",
+                    "delete"
+                  ],
+                  "default": "update"
+                }
+              },
+              "required": [
+                "device_id",
+                "operation"
+              ]
+            }
+          },
+          "change_window": {
+            "type": "object",
+            "description": "Schedule information for when the modification should be applied.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "scheduled"
+                ],
+                "default": "immediate"
+              },
+              "start_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_time": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, returns an impact assessment without applying changes."
+          }
+        },
+        "required": [
+          "subscription_id",
+          "modification_reason"
+        ]
+      },
+      "returns": "Modification request acknowledgment with impact summary, change ticket ID, and updated projected subscription state."
+    },
+    {
+      "name": "add_devices_to_subscription",
+      "description": "Add one or more devices to an existing subscription, creating corresponding UDR profiles.",
+      "stage": "modify",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "devices": {
+            "type": "array",
+            "description": "List of devices to add with their policy assignment.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "device_id": {
+                  "type": "string"
+                },
+                "external_ref": {
+                  "type": "string",
+                  "description": "Optional external reference (e.g., customer asset ID)."
+                },
+                "policy_profile_id": {
+                  "type": "string"
+                },
+                "initial_status": {
+                  "type": "string",
+                  "enum": [
+                    "active",
+                    "suspended"
+                  ],
+                  "default": "active"
+                },
+                "custom_overrides": {
+                  "type": "object",
+                  "properties": {
+                    "qos": {
+                      "type": "object"
+                    },
+                    "access_restrictions": {
+                      "type": "object"
+                    },
+                    "charging": {
+                      "type": "object"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "device_id",
+                "policy_profile_id"
+              ]
+            }
+          },
+          "enforce_capacity_limits": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, operation fails if capacity limits would be exceeded."
+          }
+        },
+        "required": [
+          "subscription_id",
+          "devices"
+        ]
+      },
+      "returns": "Result with per-device status, created udr_profile_ref objects, and any capacity or policy violations."
+    },
+    {
+      "name": "get_udr_profile",
+      "description": "Retrieve a specific UDR profile by profile reference, including current and historical versions.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string",
+            "description": "Optional subscription scoping for multi-tenant validation."
+          },
+          "udr_profile_ref": {
+            "type": "object",
+            "description": "Reference of the UDR profile to retrieve.",
+            "properties": {
+              "profile_id": {
+                "type": "string"
+              },
+              "version": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "profile_id"
+            ]
+          },
+          "history": {
+            "type": "object",
+            "description": "Options for including historical versions.",
+            "properties": {
+              "include": {
+                "type": "boolean",
+                "default": false
+              },
+              "limit": {
+                "type": "integer",
+                "default": 5,
+                "maximum": 50
+              }
+            }
+          }
+        },
+        "required": [
+          "udr_profile_ref"
+        ]
+      },
+      "returns": "UDR profile data including current version, optional historical versions, and effective policy snapshot."
+    },
+    {
+      "name": "check_subscription_compliance",
+      "description": "Run compliance checks on a subscription and its UDR profiles against policy, capacity, and regulatory rules.",
+      "stage": "validate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "slice_only",
+              "devices_sample",
+              "devices_all"
+            ],
+            "default": "slice_only"
+          },
+          "device_sample": {
+            "type": "object",
+            "description": "Options to limit device-level checks when scope is devices_sample.",
+            "properties": {
+              "limit": {
+                "type": "integer",
+                "default": 100,
+                "maximum": 1000
+              },
+              "policy_profile_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rule_sets": {
+            "type": "array",
+            "description": "Specific rule sets to apply.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "capacity",
+                "sla",
+                "security",
+                "roaming",
+                "charging",
+                "regulatory_local",
+                "regulatory_cross_border"
+              ]
+            }
+          },
+          "auto_remediation": {
+            "type": "object",
+            "description": "Options to automatically remediate some violations.",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "max_changes": {
+                "type": "integer",
+                "default": 50
+              },
+              "allowed_actions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "downgrade_qos",
+                    "restrict_roaming",
+                    "adjust_capacity",
+                    "suspend_device",
+                    "update_charging_profile"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Compliance report with rule evaluations, violations, and any applied or suggested remediations."
+    },
+    {
+      "name": "retry_subscription_operation",
+      "description": "Retry a failed or partially applied operation (booking, modification, or device update) associated with a subscription.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string",
+            "description": "Identifier of the original operation (e.g., change ticket, booking job, bulk update job)."
+          },
+          "retry_strategy": {
+            "type": "object",
+            "description": "Strategy for retrying the operation.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "full_retry",
+                  "failed_items_only",
+                  "custom_selection"
+                ],
+                "default": "failed_items_only"
+              },
+              "backoff_seconds": {
+                "type": "integer",
+                "default": 0
+              },
+              "max_attempts": {
+                "type": "integer",
+                "default": 3
+              },
+              "custom_item_ids": {
+                "type": "array",
+                "description": "If mode is custom_selection, list of item IDs to retry (e.g., device IDs).",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "force_override": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, ignores some non-critical validation failures during retry."
+          }
+        },
+        "required": [
+          "subscription_id",
+          "operation_id"
+        ]
+      },
+      "returns": "Updated operation status, per-item retry outcomes, and consolidated error details if remaining failures exist."
+    },
+    {
+      "name": "cancel_udr_subscription",
+      "description": "Cancel a UDR slice subscription, optionally with a grace period and staged deactivation of devices.",
+      "stage": "cancel",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "cancel_reason": {
+            "type": "string",
+            "enum": [
+              "contract_end",
+              "non_payment",
+              "migrated_to_new_slice",
+              "tenant_request",
+              "policy_violation",
+              "other"
+            ]
+          },
+          "reason_details": {
+            "type": "string"
+          },
+          "cancellation_mode": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "scheduled",
+              "grace_period"
+            ],
+            "default": "scheduled"
+          },
+          "scheduled_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Time at which subscription will be cancelled if mode is scheduled."
+          },
+          "grace_period": {
+            "type": "object",
+            "description": "Grace period policy when cancellation_mode is grace_period.",
+            "properties": {
+              "end_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "device_deactivation_policy": {
+                "type": "string",
+                "enum": [
+                  "all_at_grace_end",
+                  "staged_by_policy_profile",
+                  "manual"
+                ],
+                "default": "all_at_grace_end"
+              },
+              "staged_policy": {
+                "type": "object",
+                "description": "Detailed staged deactivation when device_deactivation_policy is staged_by_policy_profile.",
+                "properties": {
+                  "stages": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "policy_profile_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "deactivation_time": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      },
+                      "required": [
+                        "policy_profile_ids",
+                        "deactivation_time"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "retain_udr_data": {
+            "type": "string",
+            "description": "Controls whether and how long UDR data is retained after cancellation.",
+            "enum": [
+              "no_retain",
+              "retain_30_days",
+              "retain_90_days",
+              "retain_1_year",
+              "retain_per_regulation"
+            ],
+            "default": "retain_per_regulation"
+          }
+        },
+        "required": [
+          "subscription_id",
+          "cancel_reason"
+        ]
+      },
+      "returns": "Cancellation order with effective end date, deactivation plan for devices, and UDR data retention policy outcome."
+    }
+  ]
+}

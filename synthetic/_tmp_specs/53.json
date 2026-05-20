@@ -1,0 +1,1450 @@
+{
+  "workflow_name": "sim_swap_fraud_migration_flow",
+  "description": "End-to-end migration workflow for consolidating SIM swap and account takeover fraud data into a new detection platform, including discovery, schema mapping, staged migration, verification, and rollback handling.",
+  "domain": "telco_fraud/sim_swap_fraud",
+  "shared_entities": {
+    "migration_id": {
+      "type": "string",
+      "description": "Unique identifier for a migration project or batch."
+    },
+    "source_system_id": {
+      "type": "string",
+      "description": "Identifier for the legacy/source system providing SIM swap fraud data."
+    },
+    "target_system_id": {
+      "type": "string",
+      "description": "Identifier for the destination system receiving normalized SIM swap fraud data."
+    },
+    "dataset_id": {
+      "type": "string",
+      "description": "Identifier for a logical dataset (e.g., events, cases, subscribers) within a migration."
+    },
+    "mapping_id": {
+      "type": "string",
+      "description": "Identifier for a schema or field mapping definition between source and target."
+    },
+    "batch_id": {
+      "type": "string",
+      "description": "Identifier for a specific migration batch execution."
+    },
+    "validation_job_id": {
+      "type": "string",
+      "description": "Identifier for a validation or reconciliation job."
+    },
+    "rollback_job_id": {
+      "type": "string",
+      "description": "Identifier for a rollback or restore operation."
+    },
+    "fraud_case_id": {
+      "type": "string",
+      "description": "Identifier for a fraud case or incident record in the target system."
+    },
+    "subscriber_id": {
+      "type": "string",
+      "description": "Identifier for a telecom subscriber (MSISDN, hashed MSISDN, or internal account ID)."
+    }
+  },
+  "functions": [
+    {
+      "name": "discover_source_assets",
+      "description": "Scan and catalog SIM swap fraud-related assets in a source system, including tables, event streams, and case records.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source_system_id": {
+            "type": "string",
+            "description": "Identifier of the source system to discover assets from."
+          },
+          "connection_profile": {
+            "type": "object",
+            "description": "Connection details for the source system.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "database",
+                  "data_warehouse",
+                  "file_storage",
+                  "event_stream"
+                ]
+              },
+              "host": {
+                "type": "string"
+              },
+              "port": {
+                "type": "integer"
+              },
+              "database": {
+                "type": "string",
+                "description": "Database or schema name when applicable."
+              },
+              "authentication": {
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "basic",
+                      "oauth2",
+                      "api_key",
+                      "service_account"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "password": {
+                    "type": "string"
+                  },
+                  "token": {
+                    "type": "string"
+                  },
+                  "api_key": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "method"
+                ]
+              },
+              "encryption": {
+                "type": "object",
+                "description": "Transport-level encryption configuration.",
+                "properties": {
+                  "tls_enabled": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "ca_cert_ref": {
+                    "type": "string",
+                    "description": "Reference to CA certificate when mutual TLS is required."
+                  }
+                }
+              }
+            },
+            "required": [
+              "type",
+              "authentication"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "description": "Discovery filters to limit scope to SIM swap fraud-related assets.",
+            "properties": {
+              "include_patterns": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Wildcard patterns for asset names, e.g. 'sim_swap_*', 'fraud_case_*'."
+              },
+              "exclude_patterns": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "asset_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "tables",
+                    "views",
+                    "files",
+                    "topics",
+                    "queues"
+                  ]
+                }
+              }
+            }
+          },
+          "sample_size": {
+            "type": "integer",
+            "description": "Number of sample records to inspect per asset for profiling.",
+            "default": 1000,
+            "minimum": 10,
+            "maximum": 100000
+          }
+        },
+        "required": [
+          "source_system_id",
+          "connection_profile"
+        ]
+      },
+      "returns": "Catalog of discovered assets with basic schema profiles, tagged for SIM swap, account takeover, subscriber master data, and related fraud signals."
+    },
+    {
+      "name": "create_migration_plan",
+      "description": "Create a migration plan defining datasets, priorities, and strategy for moving SIM swap fraud data from a source to a target system.",
+      "stage": "planning",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source_system_id": {
+            "type": "string"
+          },
+          "target_system_id": {
+            "type": "string"
+          },
+          "plan_name": {
+            "type": "string",
+            "description": "Human-readable name for the migration plan."
+          },
+          "datasets": {
+            "type": "array",
+            "description": "Datasets to be migrated as part of this plan.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "dataset_id": {
+                  "type": "string",
+                  "description": "Logical identifier for the dataset."
+                },
+                "source_assets": {
+                  "type": "array",
+                  "description": "List of source asset identifiers that compose this dataset.",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "category": {
+                  "type": "string",
+                  "enum": [
+                    "sim_swap_events",
+                    "fraud_cases",
+                    "subscriber_profiles",
+                    "network_logs",
+                    "device_fingerprints",
+                    "watchlists"
+                  ]
+                },
+                "priority": {
+                  "type": "string",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ]
+                },
+                "strategy": {
+                  "type": "string",
+                  "enum": [
+                    "full_load",
+                    "incremental",
+                    "cdc",
+                    "hybrid"
+                  ],
+                  "description": "Migration strategy: full load, incremental by timestamp, change data capture (CDC), or hybrid."
+                },
+                "incremental_key": {
+                  "type": "string",
+                  "description": "Column or field used for incremental or CDC strategy (e.g., event_timestamp, updated_at)."
+                },
+                "window": {
+                  "type": "object",
+                  "description": "Time window for initial migration cut.",
+                  "properties": {
+                    "from": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "to": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                },
+                "pii_handling": {
+                  "type": "object",
+                  "description": "Rules for handling PII such as MSISDN and identity numbers.",
+                  "properties": {
+                    "msisdn_policy": {
+                      "type": "string",
+                      "enum": [
+                        "plain",
+                        "hashed",
+                        "tokenized",
+                        "redacted"
+                      ]
+                    },
+                    "id_document_policy": {
+                      "type": "string",
+                      "enum": [
+                        "hashed",
+                        "tokenized",
+                        "redacted"
+                      ]
+                    },
+                    "masking_rules": {
+                      "type": "array",
+                      "description": "Custom masking rules applied at field level.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "field_name": {
+                            "type": "string"
+                          },
+                          "mask_type": {
+                            "type": "string",
+                            "enum": [
+                              "prefix_keep",
+                              "suffix_keep",
+                              "full_mask"
+                            ]
+                          },
+                          "visible_chars": {
+                            "type": "integer",
+                            "description": "Number of characters to keep visible for prefix/suffix masking."
+                          }
+                        },
+                        "required": [
+                          "field_name",
+                          "mask_type"
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "dataset_id",
+                "category",
+                "priority",
+                "strategy"
+              ]
+            }
+          },
+          "risk_controls": {
+            "type": "object",
+            "description": "Operational and fraud-risk controls for the migration.",
+            "properties": {
+              "max_concurrent_batches": {
+                "type": "integer",
+                "default": 3,
+                "minimum": 1,
+                "maximum": 50
+              },
+              "freeze_new_rules": {
+                "type": "boolean",
+                "description": "Whether to freeze new fraud rules creation on the target during cutover.",
+                "default": true
+              },
+              "sim_swap_block_window_minutes": {
+                "type": "integer",
+                "description": "Optional window to temporarily block high-risk SIM swap approvals around cutover.",
+                "minimum": 0,
+                "maximum": 1440
+              }
+            }
+          },
+          "notifications": {
+            "type": "object",
+            "description": "Notification settings for migration lifecycle events.",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "slack",
+                    "sms",
+                    "webhook"
+                  ]
+                }
+              },
+              "recipients": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "email"
+                }
+              },
+              "notify_on": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "plan_created",
+                    "batch_started",
+                    "batch_failed",
+                    "batch_completed",
+                    "cutover",
+                    "rollback"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "source_system_id",
+          "target_system_id",
+          "plan_name",
+          "datasets"
+        ]
+      },
+      "returns": "A new migration plan with assigned migration_id, detailed dataset configuration, and initial status."
+    },
+    {
+      "name": "define_schema_mapping",
+      "description": "Define or update schema mappings between source fraud data structures and target SIM swap fraud model, including field transformations and lookups.",
+      "stage": "mapping",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "mapping_id": {
+            "type": "string",
+            "description": "Existing mapping_id to update; omitted for new mappings."
+          },
+          "source_schema": {
+            "type": "object",
+            "description": "Subset of discovered source schema to be mapped.",
+            "properties": {
+              "assets": {
+                "type": "array",
+                "description": "List of source assets and their relevant fields.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "asset_name": {
+                      "type": "string"
+                    },
+                    "asset_type": {
+                      "type": "string",
+                      "enum": [
+                        "table",
+                        "view",
+                        "file",
+                        "topic"
+                      ]
+                    },
+                    "fields": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "field_name": {
+                            "type": "string"
+                          },
+                          "data_type": {
+                            "type": "string"
+                          },
+                          "nullable": {
+                            "type": "boolean"
+                          }
+                        },
+                        "required": [
+                          "field_name",
+                          "data_type"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "asset_name",
+                    "asset_type",
+                    "fields"
+                  ]
+                }
+              }
+            }
+          },
+          "target_entity": {
+            "type": "string",
+            "enum": [
+              "sim_swap_event",
+              "fraud_case",
+              "subscriber_profile",
+              "risk_signal",
+              "device_profile"
+            ],
+            "description": "Target entity type in the new fraud platform."
+          },
+          "field_mappings": {
+            "type": "array",
+            "description": "List of field-level mappings and transformations.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_field": {
+                  "type": "string",
+                  "description": "Field name in target entity."
+                },
+                "source_expression": {
+                  "type": "string",
+                  "description": "Expression to derive target field from source (e.g., simple field or SQL-like expression)."
+                },
+                "transformation": {
+                  "type": "object",
+                  "description": "Optional transformation applied to the source value.",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "cast",
+                        "hash",
+                        "tokenize",
+                        "mask",
+                        "lookup",
+                        "concat",
+                        "conditional"
+                      ]
+                    },
+                    "params": {
+                      "type": "object",
+                      "description": "Parameters for the selected transformation type (polymorphic)."
+                    }
+                  }
+                },
+                "sensitivity": {
+                  "type": "string",
+                  "enum": [
+                    "pii",
+                    "financial",
+                    "operational",
+                    "none"
+                  ]
+                },
+                "required": {
+                  "type": "boolean",
+                  "description": "Whether this field is mandatory in the target."
+                },
+                "default_value": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "target_field",
+                "source_expression"
+              ]
+            }
+          },
+          "primary_keys": {
+            "type": "array",
+            "description": "List of target fields that form the primary key for deduplication.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "deduplication_rules": {
+            "type": "object",
+            "description": "Rules to deduplicate duplicate SIM swap events or cases.",
+            "properties": {
+              "match_on": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "List of fields to match on (e.g., subscriber_id, sim_serial, event_timestamp_bucket)."
+              },
+              "window_minutes": {
+                "type": "integer",
+                "description": "Time window in minutes within which records are considered duplicates.",
+                "minimum": 0
+              },
+              "keep_strategy": {
+                "type": "string",
+                "enum": [
+                  "latest",
+                  "earliest",
+                  "highest_risk_score"
+                ]
+              }
+            }
+          },
+          "validation_rules": {
+            "type": "array",
+            "description": "Schema-level validation rules to enforce data quality.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rule_id": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "warning",
+                    "error"
+                  ]
+                },
+                "expression": {
+                  "type": "string",
+                  "description": "Boolean expression defining the rule (e.g., 'risk_score >= 0 AND risk_score <= 100')."
+                },
+                "applies_to": {
+                  "type": "string",
+                  "enum": [
+                    "record",
+                    "batch"
+                  ]
+                }
+              },
+              "required": [
+                "rule_id",
+                "severity",
+                "expression"
+              ]
+            }
+          }
+        },
+        "required": [
+          "migration_id",
+          "dataset_id",
+          "target_entity",
+          "field_mappings"
+        ]
+      },
+      "returns": "Created or updated mapping definition with mapping_id, validation status, and any detected issues in the mapping."
+    },
+    {
+      "name": "preview_migration_sample",
+      "description": "Run a dry-run sample migration for a dataset using the defined schema mapping to preview transformed SIM swap fraud records and potential issues.",
+      "stage": "mapping",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "mapping_id": {
+            "type": "string"
+          },
+          "sample_size": {
+            "type": "integer",
+            "default": 100,
+            "minimum": 10,
+            "maximum": 5000
+          },
+          "sampling_strategy": {
+            "type": "string",
+            "enum": [
+              "random",
+              "latest",
+              "oldest",
+              "high_risk_only"
+            ],
+            "description": "Strategy for sampling records from source data."
+          },
+          "risk_filters": {
+            "type": "object",
+            "description": "Optional filters for fraud risk-oriented sampling.",
+            "properties": {
+              "min_risk_score": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "sim_swap_only": {
+                "type": "boolean",
+                "default": false
+              },
+              "time_window": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              }
+            }
+          },
+          "include_raw_source": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether to include raw source records alongside transformed output for comparison."
+          }
+        },
+        "required": [
+          "migration_id",
+          "dataset_id",
+          "mapping_id"
+        ]
+      },
+      "returns": "Sample of transformed records, mapping diagnostics, validation rule violations, and basic metrics (null rates, distribution shifts)."
+    },
+    {
+      "name": "start_migration_batch",
+      "description": "Start a migration batch execution for one or more datasets, moving SIM swap-related data from source to target according to the plan and mappings.",
+      "stage": "execution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "dataset_ids": {
+            "type": "array",
+            "description": "List of dataset_ids to include in this batch.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "full_load",
+              "incremental",
+              "backfill",
+              "cdc_replay"
+            ]
+          },
+          "time_window_override": {
+            "type": "object",
+            "description": "Override time window for this batch, used for backfills or partial reloads.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "performance_tuning": {
+            "type": "object",
+            "description": "Controls for batch performance and impact on source/target.",
+            "properties": {
+              "max_parallel_tasks": {
+                "type": "integer",
+                "default": 4,
+                "minimum": 1,
+                "maximum": 100
+              },
+              "throttle_qps": {
+                "type": "integer",
+                "description": "Optional throttle of queries per second to the source system."
+              },
+              "target_write_mode": {
+                "type": "string",
+                "enum": [
+                  "append",
+                  "upsert",
+                  "overwrite_partition"
+                ]
+              }
+            }
+          },
+          "risk_safeguards": {
+            "type": "object",
+            "description": "Additional safeguards specific to SIM swap fraud workloads.",
+            "properties": {
+              "pause_realtime_scoring": {
+                "type": "boolean",
+                "description": "Whether to temporarily pause real-time SIM swap scoring ingest during heavy backfill.",
+                "default": false
+              },
+              "duplicate_event_handling": {
+                "type": "string",
+                "enum": [
+                  "drop",
+                  "deduplicate",
+                  "flag_only"
+                ]
+              }
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Client-supplied idempotency key to prevent duplicate batch creation."
+          }
+        },
+        "required": [
+          "migration_id",
+          "dataset_ids",
+          "execution_mode"
+        ]
+      },
+      "returns": "Details of the started batch including batch_id, initial status, and per-dataset execution plan."
+    },
+    {
+      "name": "get_migration_status",
+      "description": "Retrieve detailed status of a migration and its batches, including per-dataset progress and SIM swap fraud-specific metrics.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "include_batches": {
+            "type": "boolean",
+            "default": true
+          },
+          "batch_filter": {
+            "type": "object",
+            "description": "Optional filters for narrowing down batch status.",
+            "properties": {
+              "batch_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "completed",
+                    "failed",
+                    "cancelling",
+                    "cancelled",
+                    "rolled_back"
+                  ]
+                }
+              }
+            }
+          },
+          "include_metrics": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Overall migration status with per-batch and per-dataset progress, record counts, error summaries, and fraud-specific KPIs (e.g., SIM swap event coverage, case linkage completeness)."
+    },
+    {
+      "name": "pause_or_cancel_batch",
+      "description": "Pause or cancel an ongoing migration batch for fraud-safe handling when anomalies or operational issues are detected.",
+      "stage": "control",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "batch_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "cancel"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "Short description of why the action is being taken."
+          },
+          "reason_category": {
+            "type": "string",
+            "enum": [
+              "data_quality",
+              "performance",
+              "fraud_signal_anomaly",
+              "maintenance",
+              "other"
+            ]
+          },
+          "fraud_anomaly_context": {
+            "type": "object",
+            "description": "Optional fraud-related context when action is driven by fraud signal anomalies.",
+            "properties": {
+              "suspect_subscriber_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "suspect_fraud_case_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "observed_issue": {
+                "type": "string",
+                "description": "Description of anomaly (e.g., 'SIM swap approval rate dropped by 40% for prepaid')."
+              }
+            }
+          }
+        },
+        "required": [
+          "batch_id",
+          "action"
+        ]
+      },
+      "returns": "Updated batch control state with timestamps, previous state, and any immediate impact on in-flight tasks."
+    },
+    {
+      "name": "list_migration_errors",
+      "description": "List errors encountered during migration batches, with filters focused on SIM swap and fraud-case-related data quality issues.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "batch_id": {
+            "type": "string"
+          },
+          "dataset_id": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "info",
+                "warning",
+                "error",
+                "critical"
+              ]
+            }
+          },
+          "error_categories": {
+            "type": "array",
+            "description": "Filter error types.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "schema_mismatch",
+                "validation_failure",
+                "pii_violation",
+                "connectivity",
+                "performance",
+                "unknown"
+              ]
+            }
+          },
+          "fraud_focus": {
+            "type": "object",
+            "description": "Fraud-specific filters.",
+            "properties": {
+              "subscriber_id": {
+                "type": "string"
+              },
+              "fraud_case_id": {
+                "type": "string"
+              },
+              "entity_type": {
+                "type": "string",
+                "enum": [
+                  "sim_swap_event",
+                  "fraud_case",
+                  "subscriber_profile",
+                  "other"
+                ]
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "default": 1,
+                "minimum": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "default": 50,
+                "minimum": 1,
+                "maximum": 500
+              }
+            }
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Paginated list of migration errors with context (dataset, batch, entity type, sample payloads) and recommended remediation hints."
+    },
+    {
+      "name": "retry_failed_records",
+      "description": "Retry processing for failed records from previous migration attempts, with options for targeted fixes for SIM swap and fraud-case records.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "batch_id": {
+            "type": "string"
+          },
+          "error_ids": {
+            "type": "array",
+            "description": "Optional list of specific error record IDs to retry; if omitted, retries will be based on filters.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filter criteria for selecting failed records to retry.",
+            "properties": {
+              "severity": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "warning",
+                    "error",
+                    "critical"
+                  ]
+                }
+              },
+              "error_category": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "schema_mismatch",
+                    "validation_failure",
+                    "pii_violation",
+                    "connectivity",
+                    "performance"
+                  ]
+                }
+              },
+              "fraud_case_only": {
+                "type": "boolean",
+                "default": false
+              },
+              "sim_swap_only": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "fixup_strategies": {
+            "type": "array",
+            "description": "Strategies to apply before retrying failed records.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "strategy_type": {
+                  "type": "string",
+                  "enum": [
+                    "apply_default",
+                    "drop_field",
+                    "override_value",
+                    "relax_validation"
+                  ]
+                },
+                "target_fields": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "override_value": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "validation_rule_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "strategy_type"
+              ]
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, simulate retries and show expected impact without writing to target."
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Summary of retry job including counts of eligible records, simulated or actual outcomes, and a new validation_job_id if executed."
+    },
+    {
+      "name": "run_post_migration_validation",
+      "description": "Run post-migration validation to reconcile SIM swap events, fraud cases, and subscriber data between source and target systems.",
+      "stage": "validation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "batch_id": {
+            "type": "string"
+          },
+          "validation_scope": {
+            "type": "string",
+            "enum": [
+              "record_counts",
+              "field_level",
+              "fraud_outcome",
+              "full"
+            ],
+            "description": "Scope of validation to perform."
+          },
+          "entities": {
+            "type": "array",
+            "description": "Entity types to validate.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "sim_swap_event",
+                "fraud_case",
+                "subscriber_profile",
+                "risk_signal"
+              ]
+            }
+          },
+          "tolerances": {
+            "type": "object",
+            "description": "Allowed deviation thresholds.",
+            "properties": {
+              "max_record_count_delta_pct": {
+                "type": "number",
+                "default": 0,
+                "minimum": 0,
+                "maximum": 5
+              },
+              "max_distribution_shift_ks": {
+                "type": "number",
+                "description": "Max allowed Kolmogorov\u2013Smirnov statistic for key numeric features like risk_score.",
+                "minimum": 0,
+                "maximum": 1
+              }
+            }
+          },
+          "sampling": {
+            "type": "object",
+            "description": "Sampling configuration for field-level or outcome validation.",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "sample_size": {
+                "type": "integer",
+                "default": 1000,
+                "minimum": 100,
+                "maximum": 100000
+              },
+              "focus_high_risk": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "required": [
+          "migration_id",
+          "validation_scope"
+        ]
+      },
+      "returns": "Validation job details with validation_job_id, pass/fail status, discrepancies discovered, and recommended follow-up actions."
+    },
+    {
+      "name": "get_validation_results",
+      "description": "Retrieve detailed validation results including discrepancies in SIM swap fraud outcomes and case linkages.",
+      "stage": "validation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "validation_job_id": {
+            "type": "string"
+          },
+          "include_samples": {
+            "type": "boolean",
+            "default": false
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filters for narrowing down discrepancies.",
+            "properties": {
+              "entity_type": {
+                "type": "string",
+                "enum": [
+                  "sim_swap_event",
+                  "fraud_case",
+                  "subscriber_profile",
+                  "risk_signal"
+                ]
+              },
+              "discrepancy_type": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "missing_in_target",
+                    "missing_in_source",
+                    "field_mismatch",
+                    "outcome_mismatch"
+                  ]
+                }
+              },
+              "subscriber_id": {
+                "type": "string"
+              },
+              "fraud_case_id": {
+                "type": "string"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "default": 100,
+                "maximum": 1000
+              }
+            }
+          }
+        },
+        "required": [
+          "validation_job_id"
+        ]
+      },
+      "returns": "Validation results including summary metrics, per-entity discrepancy lists, and optional sample records from source and target for manual review."
+    },
+    {
+      "name": "rollback_migration_changes",
+      "description": "Rollback changes applied by one or more migration batches in the target fraud system, restoring SIM swap and fraud-case data to a consistent prior state.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "batch_ids": {
+            "type": "array",
+            "description": "List of batch_ids to rollback; if omitted, will determine scope from validation results or migration plan.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "rollback_strategy": {
+            "type": "string",
+            "enum": [
+              "logical_reverse",
+              "restore_snapshot",
+              "soft_delete"
+            ],
+            "description": "Strategy for rollback. Logical reverse applies inverse operations; restore_snapshot uses time-based snapshots; soft_delete marks data as inactive."
+          },
+          "scope": {
+            "type": "object",
+            "description": "Optional fine-grained rollback scope.",
+            "properties": {
+              "entities": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "sim_swap_event",
+                    "fraud_case",
+                    "subscriber_profile",
+                    "risk_signal"
+                  ]
+                }
+              },
+              "subscriber_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fraud_case_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for rollback, e.g., 'Incorrect risk scoring mapping causing false negatives'."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, simulate rollback and show affected counts without changing data."
+          }
+        },
+        "required": [
+          "migration_id",
+          "rollback_strategy"
+        ]
+      },
+      "returns": "Rollback job details including rollback_job_id, estimated or actual impacted records, and current rollback status."
+    },
+    {
+      "name": "finalize_cutover_and_switch_traffic",
+      "description": "Finalize migration cutover by switching live SIM swap fraud detection and case management traffic from the legacy system to the new platform.",
+      "stage": "cutover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "cutover_type": {
+            "type": "string",
+            "enum": [
+              "shadow_mode",
+              "percentage_rollout",
+              "full_cutover"
+            ]
+          },
+          "shadow_mode": {
+            "type": "object",
+            "description": "Configuration when cutover_type is 'shadow_mode'.",
+            "properties": {
+              "duration_minutes": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 10080
+              },
+              "compare_outcomes": {
+                "type": "boolean",
+                "default": true
+              },
+              "alert_thresholds": {
+                "type": "object",
+                "description": "Thresholds for discrepancies between legacy and new system decisions.",
+                "properties": {
+                  "max_decision_delta_pct": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 20
+                  },
+                  "max_false_negative_increase_pct": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 20
+                  }
+                }
+              }
+            }
+          },
+          "percentage_rollout": {
+            "type": "object",
+            "description": "Configuration when cutover_type is 'percentage_rollout'.",
+            "properties": {
+              "initial_percentage": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50
+              },
+              "ramp_up_schedule": {
+                "type": "array",
+                "description": "Schedule describing ramp-up steps.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "percentage": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    },
+                    "after_minutes": {
+                      "type": "integer",
+                      "minimum": 5,
+                      "maximum": 10080
+                    }
+                  },
+                  "required": [
+                    "percentage",
+                    "after_minutes"
+                  ]
+                }
+              },
+              "safeguards": {
+                "type": "object",
+                "description": "Automatic rollback triggers.",
+                "properties": {
+                  "enable_auto_rollback": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "max_incident_spike_pct": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 200
+                  }
+                }
+              }
+            }
+          },
+          "freeze_legacy_changes": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to freeze configuration changes in the legacy fraud system during cutover."
+          },
+          "stakeholder_signoff": {
+            "type": "object",
+            "description": "Approvals required to proceed with cutover.",
+            "properties": {
+              "risk_owner": {
+                "type": "string",
+                "format": "email"
+              },
+              "fraud_ops_lead": {
+                "type": "string",
+                "format": "email"
+              },
+              "it_ops_lead": {
+                "type": "string",
+                "format": "email"
+              }
+            }
+          }
+        },
+        "required": [
+          "migration_id",
+          "cutover_type"
+        ]
+      },
+      "returns": "Cutover plan execution details, including current routing state, monitoring hooks, and rollback options."
+    }
+  ]
+}

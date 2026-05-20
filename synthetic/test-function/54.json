@@ -1,0 +1,4346 @@
+{
+  "workflow_name": "lawful_intercept_partner_management",
+  "description": "End-to-end workflow to onboard, manage, and operate partner agencies and intercept requests in a telco lawful intercept context.",
+  "domain": "telco_regulatory/lawful_intercept",
+  "shared_entities": {
+    "partner_id": {
+      "type": "string",
+      "description": "Unique identifier for a partner agency (e.g., law enforcement or regulatory body)."
+    },
+    "intercept_request_id": {
+      "type": "string",
+      "description": "Unique identifier for a lawful intercept request."
+    },
+    "authorization_id": {
+      "type": "string",
+      "description": "Identifier for a legal authorization or warrant associated with an intercept request."
+    },
+    "case_id": {
+      "type": "string",
+      "description": "Identifier for the investigation/case under which intercepts are requested."
+    },
+    "subject_id": {
+      "type": "string",
+      "description": "Internal identifier for an intercept subject (target) mapped from identifiers like MSISDN/IMSI/IMEI)."
+    },
+    "delivery_channel_id": {
+      "type": "string",
+      "description": "Identifier for a configured delivery channel (e.g., ETSI HI2/HI3 interface) for a partner."
+    },
+    "audit_event_id": {
+      "type": "string",
+      "description": "Identifier for an audit log event."
+    },
+    "partner_contact": {
+      "type": "object",
+      "description": "Contact details for a partner agency representative.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "description": "Role or title of the contact person."
+        },
+        "email": {
+          "type": "string",
+          "format": "email"
+        },
+        "phone": {
+          "type": "string"
+        },
+        "pgp_key_id": {
+          "type": "string",
+          "description": "Identifier for the PGP key used for secure communications, if applicable."
+        }
+      },
+      "required": [
+        "name",
+        "email"
+      ]
+    },
+    "legal_authorization": {
+      "type": "object",
+      "description": "Common structure for legal authorization metadata.",
+      "properties": {
+        "authorization_id": {
+          "type": "string"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "warrant",
+            "court_order",
+            "emergency_request",
+            "administrative_order"
+          ]
+        },
+        "issuing_authority": {
+          "type": "string",
+          "description": "Name of the court or authority issuing the authorization."
+        },
+        "reference_number": {
+          "type": "string",
+          "description": "Reference number on the legal document."
+        },
+        "issue_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "expiry_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "documents": {
+          "type": "array",
+          "description": "List of document references associated with this authorization.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "document_id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "pdf",
+                  "image",
+                  "signed_xml",
+                  "other"
+                ]
+              },
+              "hash": {
+                "type": "string",
+                "description": "Cryptographic hash of the document for integrity verification."
+              },
+              "storage_uri": {
+                "type": "string",
+                "description": "Location of the stored document (e.g., secure object store URI)."
+              }
+            },
+            "required": [
+              "document_id",
+              "type",
+              "hash"
+            ]
+          }
+        }
+      },
+      "required": [
+        "type",
+        "issuing_authority",
+        "reference_number",
+        "issue_date"
+      ]
+    },
+    "subject_identifier": {
+      "type": "object",
+      "description": "Identifier used to describe an intercept target.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "msisdn",
+            "imsi",
+            "imei",
+            "ip_address",
+            "email",
+            "subscriber_id",
+            "other"
+          ]
+        },
+        "value": {
+          "type": "string"
+        },
+        "valid_from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "valid_to": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "register_partner_agency",
+      "description": "Onboard a new partner agency, including identity, credentials, and delivery capabilities.",
+      "stage": "partner_setup",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "agency_name": {
+            "type": "string",
+            "description": "Official name of the partner agency."
+          },
+          "agency_type": {
+            "type": "string",
+            "enum": [
+              "law_enforcement",
+              "intelligence",
+              "regulator",
+              "emergency_services",
+              "other"
+            ]
+          },
+          "jurisdiction": {
+            "type": "object",
+            "description": "Jurisdiction in which the agency is authorized to request intercepts.",
+            "properties": {
+              "country_code": {
+                "type": "string",
+                "description": "ISO 3166-1 alpha-2 country code."
+              },
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "description": "Sub-national regions (state/province/circle) where the agency operates."
+                }
+              }
+            },
+            "required": [
+              "country_code"
+            ]
+          },
+          "primary_contact": {
+            "$ref": "#/shared_entities/partner_contact"
+          },
+          "additional_contacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/partner_contact"
+            }
+          },
+          "technical_profile": {
+            "type": "object",
+            "description": "Technical capabilities of the partner for intercept delivery.",
+            "properties": {
+              "supported_interfaces": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "ETSI_HI2",
+                    "ETSI_HI3",
+                    "API_PULL",
+                    "SFTP_PUSH",
+                    "EMAIL_ENCRYPTED"
+                  ]
+                }
+              },
+              "encryption": {
+                "type": "object",
+                "properties": {
+                  "transport_tls_versions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "TLS1.2",
+                        "TLS1.3"
+                      ]
+                    }
+                  },
+                  "data_at_rest_required": {
+                    "type": "boolean"
+                  },
+                  "pgp_public_keys": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "key_id": {
+                          "type": "string"
+                        },
+                        "fingerprint": {
+                          "type": "string"
+                        },
+                        "valid_from": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "valid_to": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      },
+                      "required": [
+                        "key_id",
+                        "fingerprint"
+                      ]
+                    }
+                  }
+                }
+              },
+              "network_endpoints": {
+                "type": "array",
+                "description": "Endpoints through which intercept content and metadata will be delivered.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "endpoint_type": {
+                      "type": "string",
+                      "enum": [
+                        "HI2",
+                        "HI3",
+                        "API",
+                        "SFTP",
+                        "EMAIL"
+                      ]
+                    },
+                    "uri": {
+                      "type": "string",
+                      "description": "Endpoint URL or address."
+                    },
+                    "ip_whitelist": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "description": "Whitelisted IP or CIDR range."
+                      }
+                    }
+                  },
+                  "required": [
+                    "endpoint_type",
+                    "uri"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "supported_interfaces"
+            ]
+          },
+          "compliance_constraints": {
+            "type": "object",
+            "description": "Compliance rules specific to this partner.",
+            "properties": {
+              "max_retention_days": {
+                "type": "integer"
+              },
+              "requires_dual_approval": {
+                "type": "boolean",
+                "description": "Whether internal dual control is required before activating intercepts."
+              },
+              "allowed_intercept_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "call_content",
+                    "call_detail_records",
+                    "internet_metadata",
+                    "location",
+                    "sms_mms",
+                    "other"
+                  ]
+                }
+              }
+            }
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Free-form tags for classification."
+          }
+        },
+        "required": [
+          "agency_name",
+          "agency_type",
+          "jurisdiction",
+          "primary_contact",
+          "technical_profile"
+        ]
+      },
+      "returns": "Partner ID and full partner profile as registered in the system."
+    },
+    {
+      "name": "configure_partner_delivery_channel",
+      "description": "Create or update a delivery channel configuration for a partner agency.",
+      "stage": "partner_setup",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "partner_id": {
+            "$ref": "#/shared_entities/partner_id"
+          },
+          "delivery_channel_id": {
+            "type": "string",
+            "description": "Existing delivery channel identifier to update. Omit to create a new channel."
+          },
+          "channel_type": {
+            "type": "string",
+            "enum": [
+              "HI2",
+              "HI3",
+              "API",
+              "SFTP",
+              "EMAIL"
+            ]
+          },
+          "config": {
+            "type": "object",
+            "description": "Channel-specific configuration.",
+            "properties": {
+              "endpoint": {
+                "type": "string",
+                "description": "Primary endpoint URL or host."
+              },
+              "port": {
+                "type": "integer"
+              },
+              "auth": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "mutual_tls",
+                      "basic",
+                      "api_key",
+                      "ssh_key",
+                      "none"
+                    ]
+                  },
+                  "username": {
+                    "type": "string"
+                  },
+                  "api_key_id": {
+                    "type": "string"
+                  },
+                  "cert_ref": {
+                    "type": "string",
+                    "description": "Reference to certificate used for mutual TLS."
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              },
+              "delivery_format": {
+                "type": "object",
+                "properties": {
+                  "metadata_format": {
+                    "type": "string",
+                    "enum": [
+                      "ETSI_102232",
+                      "JSON_CUSTOM",
+                      "XML_CUSTOM"
+                    ]
+                  },
+                  "content_encoding": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "gzip",
+                      "zstd"
+                    ]
+                  }
+                }
+              },
+              "retry_policy": {
+                "type": "object",
+                "properties": {
+                  "max_attempts": {
+                    "type": "integer"
+                  },
+                  "backoff_strategy": {
+                    "type": "string",
+                    "enum": [
+                      "fixed",
+                      "exponential"
+                    ]
+                  },
+                  "initial_delay_seconds": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              }
+            },
+            "required": [
+              "endpoint",
+              "auth"
+            ]
+          }
+        },
+        "required": [
+          "partner_id",
+          "channel_type",
+          "config"
+        ]
+      },
+      "returns": "Delivery channel ID and effective configuration after validation."
+    },
+    {
+      "name": "create_intercept_request",
+      "description": "Create a new lawful intercept request associated with an existing partner and case, including subjects and legal authorization.",
+      "stage": "request_intake",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "partner_id": {
+            "$ref": "#/shared_entities/partner_id"
+          },
+          "case_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "requested_by": {
+            "type": "object",
+            "description": "Details of the requesting officer/agent.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "badge_id": {
+                "type": "string"
+              },
+              "department": {
+                "type": "string"
+              },
+              "contact": {
+                "$ref": "#/shared_entities/partner_contact"
+              }
+            },
+            "required": [
+              "name",
+              "badge_id"
+            ]
+          },
+          "legal_authorization": {
+            "$ref": "#/shared_entities/legal_authorization"
+          },
+          "intercept_scope": {
+            "type": "object",
+            "description": "Scope and type of intercept requested.",
+            "properties": {
+              "types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "call_content",
+                    "call_detail_records",
+                    "internet_metadata",
+                    "location",
+                    "sms_mms",
+                    "other"
+                  ]
+                }
+              },
+              "subject_identifiers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/subject_identifier"
+                }
+              },
+              "start_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Requested start time for intercept activation."
+              },
+              "end_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Requested end time or null for open-ended (subject to policy)."
+              },
+              "geographic_constraints": {
+                "type": "array",
+                "description": "Optional restrictions on where the intercept applies.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "country_code": {
+                      "type": "string"
+                    },
+                    "region": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+              "types",
+              "subject_identifiers"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "emergency"
+            ]
+          },
+          "delivery_preferences": {
+            "type": "object",
+            "description": "Preferences for delivery channel and frequency.",
+            "properties": {
+              "delivery_channel_id": {
+                "$ref": "#/shared_entities/delivery_channel_id"
+              },
+              "fallback_channel_id": {
+                "$ref": "#/shared_entities/delivery_channel_id"
+              },
+              "metadata_push_frequency": {
+                "type": "string",
+                "enum": [
+                  "realtime",
+                  "5min",
+                  "15min",
+                  "hourly",
+                  "daily"
+                ]
+              },
+              "content_delivery_mode": {
+                "type": "string",
+                "enum": [
+                  "realtime_stream",
+                  "near_realtime_batch",
+                  "post_event_batch"
+                ]
+              }
+            }
+          },
+          "internal_routing": {
+            "type": "object",
+            "description": "Internal classification to route the intercept within the operator.",
+            "properties": {
+              "business_unit": {
+                "type": "string"
+              },
+              "sensitivity_level": {
+                "type": "string",
+                "enum": [
+                  "public",
+                  "confidential",
+                  "secret",
+                  "top_secret"
+                ]
+              },
+              "handling_instructions": {
+                "type": "string"
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "description": "Additional supporting documents or annexes.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "attachment_id": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "hash": {
+                  "type": "string"
+                },
+                "storage_uri": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "attachment_id",
+                "hash"
+              ]
+            }
+          }
+        },
+        "required": [
+          "partner_id",
+          "case_id",
+          "requested_by",
+          "legal_authorization",
+          "intercept_scope"
+        ]
+      },
+      "returns": "Intercept request ID, initial status (e.g., PENDING_REVIEW), and a summary of the created request."
+    },
+    {
+      "name": "validate_intercept_compliance",
+      "description": "Run automated compliance checks on a newly created or modified intercept request.",
+      "stage": "compliance_review",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "$ref": "#/shared_entities/intercept_request_id"
+          },
+          "run_policy_sets": {
+            "type": "array",
+            "description": "Optional list of specific policy sets to evaluate. If omitted, all applicable policies are run.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "jurisdiction",
+                "authorization_validity",
+                "scope_proportionality",
+                "subject_identity_verification",
+                "retention_limits",
+                "partner_entitlement"
+              ]
+            }
+          },
+          "context_overrides": {
+            "type": "object",
+            "description": "Optional override data for what-if or manual checks (e.g., override current date).",
+            "properties": {
+              "reference_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "operator_region": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "intercept_request_id"
+        ]
+      },
+      "returns": "Compliance evaluation result including pass/fail status, per-policy outcomes, and required remediations if any."
+    },
+    {
+      "name": "approve_or_reject_intercept_request",
+      "description": "Record human approval or rejection decision for an intercept request following compliance and legal review.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "$ref": "#/shared_entities/intercept_request_id"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "request_changes"
+            ]
+          },
+          "decider": {
+            "type": "object",
+            "description": "Details of the approving authority or reviewer.",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "compliance_officer",
+                  "legal_counsel",
+                  "senior_manager",
+                  "system_admin",
+                  "other"
+                ]
+              },
+              "justification": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id",
+              "role",
+              "justification"
+            ]
+          },
+          "required_changes": {
+            "type": "array",
+            "description": "If decision is request_changes, list of required modifications.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field_path": {
+                  "type": "string",
+                  "description": "JSON path to the field that needs change."
+                },
+                "issue": {
+                  "type": "string"
+                },
+                "suggested_fix": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "field_path",
+                "issue"
+              ]
+            }
+          },
+          "dual_control": {
+            "type": "object",
+            "description": "If dual approval is required, track both approvers.",
+            "properties": {
+              "is_final_approval": {
+                "type": "boolean",
+                "description": "Indicates if this decision completes the dual control requirement."
+              },
+              "prior_approval_id": {
+                "type": "string",
+                "description": "Reference to the previous approval decision record if any."
+              }
+            }
+          }
+        },
+        "required": [
+          "intercept_request_id",
+          "decision",
+          "decider"
+        ]
+      },
+      "returns": "Updated approval status of the intercept request, including any pending dual approvals or requested changes."
+    },
+    {
+      "name": "activate_intercept",
+      "description": "Provision and activate an approved intercept request on network elements and mediation platforms.",
+      "stage": "activation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "$ref": "#/shared_entities/intercept_request_id"
+          },
+          "activation_mode": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "scheduled"
+            ]
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Schedule details if activation_mode is scheduled.",
+            "properties": {
+              "start_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "time_zone": {
+                "type": "string"
+              }
+            }
+          },
+          "network_scope": {
+            "type": "array",
+            "description": "Optional override of target network domains (e.g., mobile, fixed, IMS).",
+            "items": {
+              "type": "string",
+              "enum": [
+                "mobile_voice",
+                "mobile_data",
+                "fixed_voice",
+                "fixed_data",
+                "ims",
+                "wifi",
+                "roaming"
+              ]
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "If true, simulate activation and return a plan without applying changes."
+          }
+        },
+        "required": [
+          "intercept_request_id",
+          "activation_mode"
+        ]
+      },
+      "returns": "Activation status (or dry-run plan), including per-network element provisioning results and any failures."
+    },
+    {
+      "name": "check_intercept_status",
+      "description": "Get the current operational and legal status of an intercept request.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "$ref": "#/shared_entities/intercept_request_id"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional sections to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "provisioning_details",
+                "delivery_metrics",
+                "error_history",
+                "audit_trail"
+              ]
+            }
+          }
+        },
+        "required": [
+          "intercept_request_id"
+        ]
+      },
+      "returns": "Composite status including legal state (PENDING, ACTIVE, EXPIRED, SUSPENDED), technical state (PROVISIONED, PARTIAL_FAILURE, FAILED), and selected details."
+    },
+    {
+      "name": "pause_or_terminate_intercept",
+      "description": "Temporarily suspend or permanently terminate an active intercept, including rollback of provisioning state.",
+      "stage": "lifecycle_control",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "$ref": "#/shared_entities/intercept_request_id"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "terminate"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for the lifecycle action (e.g., court order expired, technical issue)."
+          },
+          "initiator": {
+            "type": "object",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          },
+          "effective_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Optional future time for scheduled pause/termination."
+          },
+          "rollback_on_failure": {
+            "type": "boolean",
+            "description": "If true, attempt to rollback partial changes when some network elements fail."
+          }
+        },
+        "required": [
+          "intercept_request_id",
+          "action",
+          "reason",
+          "initiator"
+        ]
+      },
+      "returns": "Updated lifecycle status and per-network element results for pause/resume/termination actions."
+    },
+    {
+      "name": "retry_failed_delivery",
+      "description": "Retry delivery of intercept metadata or content that previously failed to be delivered to a partner.",
+      "stage": "operations",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "partner_id": {
+            "$ref": "#/shared_entities/partner_id"
+          },
+          "delivery_channel_id": {
+            "$ref": "#/shared_entities/delivery_channel_id"
+          },
+          "scope": {
+            "type": "object",
+            "description": "Scope of failed deliveries to retry.",
+            "properties": {
+              "intercept_request_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/intercept_request_id"
+                }
+              },
+              "time_range": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "failure_codes": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "description": "System-specific delivery failure codes to filter on."
+                }
+              }
+            }
+          },
+          "retry_strategy": {
+            "type": "object",
+            "properties": {
+              "max_attempts": {
+                "type": "integer"
+              },
+              "ignore_original_backoff": {
+                "type": "boolean"
+              },
+              "force_alternate_channel": {
+                "type": "boolean",
+                "description": "If true, use configured fallback channel where available."
+              }
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "If true, report what would be retried without sending any data."
+          }
+        },
+        "required": [
+          "partner_id",
+          "delivery_channel_id",
+          "scope"
+        ]
+      },
+      "returns": "Summary of retry operations, including counts of retried items, skipped items, and any remaining failures."
+    },
+    {
+      "name": "list_partner_intercepts",
+      "description": "List intercept requests associated with a partner and optional filters, supporting pagination and status filtering.",
+      "stage": "reporting",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "partner_id": {
+            "$ref": "#/shared_entities/partner_id"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "PENDING_REVIEW",
+                    "APPROVED",
+                    "REJECTED",
+                    "ACTIVE",
+                    "PAUSED",
+                    "TERMINATED",
+                    "EXPIRED"
+                  ]
+                }
+              },
+              "case_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/case_id"
+                }
+              },
+              "intercept_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "call_content",
+                    "call_detail_records",
+                    "internet_metadata",
+                    "location",
+                    "sms_mms",
+                    "other"
+                  ]
+                }
+              },
+              "created_time_range": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "subject_identifier": {
+                "$ref": "#/shared_entities/subject_identifier"
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50,
+            "maximum": 500
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "status",
+              "case_id",
+              "priority"
+            ]
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          }
+        },
+        "required": [
+          "partner_id"
+        ]
+      },
+      "returns": "Paginated list of intercept requests with summary fields and pagination cursors/metadata."
+    },
+    {
+      "name": "get_partner_profile",
+      "description": "Retrieve full configuration and compliance profile for a partner agency, including delivery channels and entitlements.",
+      "stage": "partner_management",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "partner_id": {
+            "$ref": "#/shared_entities/partner_id"
+          },
+          "include": {
+            "type": "array",
+            "description": "Sections to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "contacts",
+                "technical_profile",
+                "delivery_channels",
+                "compliance_constraints",
+                "active_intercepts_summary"
+              ]
+            }
+          }
+        },
+        "required": [
+          "partner_id"
+        ]
+      },
+      "returns": "Complete partner profile and requested sub-sections, suitable for audits or configuration review."
+    },
+    {
+      "name": "update_partner_entitlements",
+      "description": "Modify the entitlements and compliance constraints of a partner agency (e.g., allowed intercept types, retention limits).",
+      "stage": "partner_management",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "partner_id": {
+            "$ref": "#/shared_entities/partner_id"
+          },
+          "updates": {
+            "type": "object",
+            "description": "Fields to update within the partner's entitlements and constraints.",
+            "properties": {
+              "allowed_intercept_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "call_content",
+                    "call_detail_records",
+                    "internet_metadata",
+                    "location",
+                    "sms_mms",
+                    "other"
+                  ]
+                }
+              },
+              "max_concurrent_intercepts": {
+                "type": "integer"
+              },
+              "max_retention_days": {
+                "type": "integer"
+              },
+              "requires_dual_approval": {
+                "type": "boolean"
+              },
+              "suspension": {
+                "type": "object",
+                "description": "Suspend or reinstate the partner's ability to request new intercepts.",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "active",
+                      "suspended"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "effective_from": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              }
+            }
+          },
+          "change_request": {
+            "type": "object",
+            "description": "Metadata about who requested the entitlement change and why.",
+            "properties": {
+              "requested_by": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              },
+              "ticket_id": {
+                "type": "string",
+                "description": "Reference to internal change management ticket."
+              },
+              "justification": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "requested_by",
+              "justification"
+            ]
+          }
+        },
+        "required": [
+          "partner_id",
+          "updates",
+          "change_request"
+        ]
+      },
+      "returns": "Updated partner entitlement profile and any impacts on existing intercepts (e.g., those exceeding new limits)."
+    },
+    {
+      "name": "audit_intercept_activity",
+      "description": "Query the immutable audit trail for intercept-related activities for compliance and forensic investigations.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "partner_id": {
+                "$ref": "#/shared_entities/partner_id"
+              },
+              "intercept_request_id": {
+                "$ref": "#/shared_entities/intercept_request_id"
+              },
+              "case_id": {
+                "$ref": "#/shared_entities/case_id"
+              },
+              "event_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "REQUEST_CREATED",
+                    "COMPLIANCE_CHECK",
+                    "APPROVAL_DECISION",
+                    "ACTIVATION",
+                    "PAUSE",
+                    "RESUME",
+                    "TERMINATION",
+                    "DELIVERY_FAILURE",
+                    "DELIVERY_RETRY",
+                    "ENTITLEMENT_CHANGE",
+                    "PARTNER_CONFIG_CHANGE",
+                    "ACCESS_LOG"
+                  ]
+                }
+              },
+              "time_range": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "initiator_user_id": {
+                "type": "string"
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 100,
+            "maximum": 1000
+          },
+          "include_details": {
+            "type": "boolean",
+            "description": "If true, include full event payloads (subject to access controls)."
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated list of audit events with metadata, including event type, timestamp, actor, and optionally detailed payloads."
+    },
+    {
+      "name": "bulk_import_intercepts",
+      "description": "Bulk-import multiple intercepts from an upstream source with validation and idempotency keys.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "import_source": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "json",
+                  "parquet",
+                  "kafka",
+                  "s3",
+                  "api"
+                ]
+              },
+              "location": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "format_options": {
+                "type": "object",
+                "properties": {
+                  "delimiter": {
+                    "type": "string"
+                  },
+                  "encoding": {
+                    "type": "string"
+                  },
+                  "header_row": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "required": [
+              "type",
+              "location"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "description": "Field mapping from source to canonical schema",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_id": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "batch_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "default": 500
+          },
+          "on_error": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "abort",
+              "quarantine"
+            ],
+            "default": "quarantine"
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "import_source",
+          "actor"
+        ]
+      },
+      "returns": "A bulk-import job descriptor with counts of accepted, rejected, and quarantined intercepts, plus a job_id for follow-up."
+    },
+    {
+      "name": "bulk_update_intercepts",
+      "description": "Apply a partial update to a batch of intercepts matched by filter or id list.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/intercept_request_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "patch": {
+            "type": "object",
+            "description": "Fields to patch on each matched item",
+            "properties": {
+              "set": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "unset": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "add_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "remove_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "preconditions": {
+            "type": "object",
+            "description": "Optional optimistic-concurrency preconditions",
+            "properties": {
+              "if_match_version": {
+                "type": "string"
+              },
+              "expected_status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "max_items": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1000
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "patch",
+          "actor"
+        ]
+      },
+      "returns": "Summary of matched, updated, and skipped intercepts with per-item error details."
+    },
+    {
+      "name": "bulk_archive_intercepts",
+      "description": "Archive (soft-delete) a batch of intercepts with retention metadata and audit reasons.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/intercept_request_id"
+            },
+            "minItems": 1
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retain_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "legal_hold": {
+            "type": "boolean",
+            "default": false
+          },
+          "tombstone_metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "ids",
+          "reason",
+          "actor"
+        ]
+      },
+      "returns": "Per-id archive results with new lifecycle state."
+    },
+    {
+      "name": "bulk_export_intercepts",
+      "description": "Export a filtered set of intercepts to a downstream destination (S3, GCS, blob, SFTP).",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Projection; empty means all fields"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "csv",
+              "parquet",
+              "ndjson"
+            ],
+            "default": "json"
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp",
+                  "http"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "compression": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "gzip",
+                  "zstd"
+                ],
+                "default": "none"
+              }
+            },
+            "required": [
+              "type",
+              "uri"
+            ]
+          },
+          "chunk_size_mb": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1024,
+            "default": 64
+          },
+          "include_audit_columns": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "sse-s3",
+                  "sse-kms",
+                  "client-side"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "destination",
+          "actor"
+        ]
+      },
+      "returns": "Export job handle including job_id, expected object URIs, row count, and signed download URLs when applicable."
+    },
+    {
+      "name": "search_intercepts_advanced",
+      "description": "Advanced faceted search across intercepts with full-text, structured filters, aggregations, and sort.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Full-text query string with Lucene-like syntax"
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "contains",
+                    "starts_with",
+                    "exists"
+                  ]
+                },
+                "value": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "array",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "aggregations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "terms",
+                    "histogram",
+                    "date_histogram",
+                    "stats",
+                    "cardinality"
+                  ]
+                },
+                "field": {
+                  "type": "string"
+                },
+                "interval": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "field"
+              ]
+            }
+          },
+          "highlight_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": []
+      },
+      "returns": "Search response with intercepts hits, total count, aggregation buckets, and a next-cursor."
+    },
+    {
+      "name": "create_intercept_subscription",
+      "description": "Create a subscription that fires webhooks or notifications on intercept lifecycle events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "created",
+                "updated",
+                "status_changed",
+                "deleted",
+                "escalated",
+                "resolved",
+                "custom"
+              ]
+            },
+            "minItems": 1
+          },
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "target": {
+            "type": "object",
+            "description": "Notification target descriptor",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "email",
+                  "sms",
+                  "webhook",
+                  "push",
+                  "slack",
+                  "teams",
+                  "pagerduty"
+                ]
+              },
+              "address": {
+                "type": "string"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "secret_ref": {
+                "type": "string",
+                "description": "Reference to a stored secret"
+              }
+            },
+            "required": [
+              "type",
+              "address"
+            ]
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "retry_policy": {
+                "type": "object",
+                "properties": {
+                  "max_attempts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  },
+                  "backoff": {
+                    "type": "string",
+                    "enum": [
+                      "linear",
+                      "exponential",
+                      "fixed"
+                    ],
+                    "default": "exponential"
+                  },
+                  "initial_delay_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  }
+                }
+              },
+              "rate_limit_per_minute": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "batch_size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            }
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "events",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "The created subscription including subscription_id, active state, and last_delivery info (initially null)."
+    },
+    {
+      "name": "list_intercept_subscriptions",
+      "description": "List existing intercept subscriptions with optional filters and pagination.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "target_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of subscription objects including delivery health stats."
+    },
+    {
+      "name": "deactivate_intercept_subscription",
+      "description": "Deactivate or delete a intercept subscription and optionally flush pending deliveries.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "delete"
+            ],
+            "default": "pause"
+          },
+          "flush_pending": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "subscription_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated subscription state and the number of pending deliveries flushed or kept."
+    },
+    {
+      "name": "get_intercept_audit_log",
+      "description": "Return the audit/change log for a single intercept with field-level diffs and actor info.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/intercept_request_id"
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "include_field_diff": {
+            "type": "boolean",
+            "default": true
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Chronological list of audit events with before/after diffs, actor, and source IP/system."
+    },
+    {
+      "name": "search_audit_events",
+      "description": "Search audit events across intercepts for compliance and forensic review.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "actor_user_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "object_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/intercept_request_id"
+                }
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              },
+              "source_systems": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated audit-event hits with cross-entity references."
+    },
+    {
+      "name": "schedule_intercept_job",
+      "description": "Create a recurring schedule that triggers a named operation on a target set of intercepts.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "description": "Named operation to invoke (e.g., refresh, recompute, export, reconcile)"
+          },
+          "target_selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/intercept_request_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Parameters passed to each invocation"
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Schedule definition",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "once",
+                  "cron",
+                  "interval",
+                  "calendar"
+                ]
+              },
+              "cron": {
+                "type": "string",
+                "description": "Cron expression (UTC by default)"
+              },
+              "interval_seconds": {
+                "type": "integer",
+                "minimum": 30
+              },
+              "start_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "max_runs": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "jitter_seconds": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "concurrency_policy": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "forbid",
+              "replace"
+            ],
+            "default": "forbid"
+          },
+          "notify_on": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure",
+                "skipped"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "operation",
+          "schedule",
+          "actor"
+        ]
+      },
+      "returns": "The created scheduled-job descriptor with job_id, next_run_at, and current status."
+    },
+    {
+      "name": "list_intercept_jobs",
+      "description": "List scheduled or in-flight jobs related to intercepts with status filtering and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "skipped"
+                  ]
+                }
+              },
+              "operation_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "include_runs": {
+            "type": "boolean",
+            "default": false
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of intercept jobs and their last run summaries."
+    },
+    {
+      "name": "cancel_intercept_job",
+      "description": "Cancel a scheduled or in-flight intercept job, optionally interrupting running steps.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "job_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated job status with cancellation timestamp and any side effects."
+    },
+    {
+      "name": "simulate_intercept_change",
+      "description": "Simulate a proposed change against a intercept (or batch) without committing; returns expected diffs and warnings.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/intercept_request_id"
+          },
+          "proposed_change": {
+            "type": "object",
+            "description": "Polymorphic change object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "patch",
+                  "replace",
+                  "transition",
+                  "policy_apply"
+                ]
+              },
+              "patch": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "replace": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "transition_to": {
+                "type": "string"
+              },
+              "policy_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "evaluation_options": {
+            "type": "object",
+            "properties": {
+              "evaluate_rules": {
+                "type": "boolean",
+                "default": true
+              },
+              "evaluate_dependencies": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_cost_impact": {
+                "type": "boolean",
+                "default": false
+              },
+              "include_sla_impact": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "proposed_change",
+          "actor"
+        ]
+      },
+      "returns": "Simulation result with predicted diffs, rule violations, cost/SLA impact, and a confidence score."
+    },
+    {
+      "name": "request_intercept_approval",
+      "description": "Open an approval request for a sensitive intercept change requiring reviewer sign-off.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/intercept_request_id"
+          },
+          "change_summary": {
+            "type": "string"
+          },
+          "change_payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "user_id": {
+                  "type": "string"
+                },
+                "role_required": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "user_id"
+              ]
+            },
+            "minItems": 1
+          },
+          "quorum": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "escalation_policy_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "approvers",
+          "actor"
+        ]
+      },
+      "returns": "Created approval request with approval_request_id, current state, and notification targets."
+    },
+    {
+      "name": "submit_intercept_approval_decision",
+      "description": "Submit an approve, reject, or request-changes decision against a intercept approval request.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_request_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "request_changes"
+            ]
+          },
+          "comment": {
+            "type": "string"
+          },
+          "signed_evidence": {
+            "type": "object",
+            "properties": {
+              "signature": {
+                "type": "string"
+              },
+              "signed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "totp",
+                  "webauthn",
+                  "sso",
+                  "manual"
+                ]
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "approval_request_id",
+          "decision",
+          "actor"
+        ]
+      },
+      "returns": "Updated approval request state including quorum progress and final decision (if reached)."
+    },
+    {
+      "name": "add_intercept_comment",
+      "description": "Append a comment or annotation to a intercept, optionally attaching files or mentioning users.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/intercept_request_id"
+          },
+          "body": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "internal",
+              "tenant",
+              "public"
+            ],
+            "default": "internal"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_name": {
+                  "type": "string"
+                },
+                "content_type": {
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "type": "integer"
+                },
+                "uri": {
+                  "type": "string"
+                },
+                "checksum_sha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_name",
+                "uri"
+              ]
+            }
+          },
+          "parent_comment_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "body",
+          "actor"
+        ]
+      },
+      "returns": "The created comment object with comment_id, timestamps, and visibility-resolved permissions."
+    },
+    {
+      "name": "list_intercept_comments",
+      "description": "List comments and annotations attached to a intercept, with optional thread expansion.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/intercept_request_id"
+          },
+          "include_threads": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_attachments": {
+            "type": "boolean",
+            "default": true
+          },
+          "visibility_in": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "internal",
+                "tenant",
+                "public"
+              ]
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Paginated comment list with thread tree and attachment metadata."
+    },
+    {
+      "name": "snapshot_intercept",
+      "description": "Create a point-in-time immutable snapshot of a intercept for forensic, rollback, or compliance use.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/intercept_request_id"
+          },
+          "label": {
+            "type": "string"
+          },
+          "include_related": {
+            "type": "array",
+            "description": "Optional related-entity inclusion list",
+            "items": {
+              "type": "string"
+            }
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "kms",
+                  "client"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "retention": {
+            "type": "object",
+            "properties": {
+              "policy": {
+                "type": "string",
+                "enum": [
+                  "short",
+                  "standard",
+                  "long",
+                  "indefinite"
+                ]
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "actor"
+        ]
+      },
+      "returns": "Snapshot descriptor with snapshot_id, checksum, byte size, and retention expiry."
+    },
+    {
+      "name": "restore_intercept_snapshot",
+      "description": "Restore a intercept from a previously created snapshot, optionally as a new copy.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "overwrite",
+                  "new_copy",
+                  "merge"
+                ]
+              },
+              "target_id": {
+                "$ref": "#/shared_entities/intercept_request_id"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "fail",
+              "skip_existing",
+              "overwrite"
+            ],
+            "default": "fail"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "Restore job descriptor including resulting id and any per-field conflicts that were resolved."
+    },
+    {
+      "name": "get_intercept_metrics",
+      "description": "Compute KPI metrics over intercepts (counts, MTTR, SLA compliance, error rates) for a time window.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "count",
+                "open_count",
+                "closed_count",
+                "mttr_seconds",
+                "mttd_seconds",
+                "sla_compliance_pct",
+                "error_rate",
+                "p50_latency_ms",
+                "p95_latency_ms",
+                "p99_latency_ms",
+                "throughput_per_minute",
+                "backlog_age_seconds"
+              ]
+            },
+            "minItems": 1
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "1m",
+              "5m",
+              "15m",
+              "1h",
+              "1d",
+              "1w"
+            ],
+            "default": "1h"
+          }
+        },
+        "required": [
+          "metrics"
+        ]
+      },
+      "returns": "Time-bucketed metric series and aggregate KPIs for the matched intercepts."
+    },
+    {
+      "name": "build_intercept_dashboard",
+      "description": "Persist a named dashboard composed of widgets (charts, tables, single-stat) over intercepts data.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "widgets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "line",
+                    "bar",
+                    "pie",
+                    "table",
+                    "single_stat",
+                    "heatmap"
+                  ]
+                },
+                "query": {
+                  "type": "object",
+                  "properties": {
+                    "metrics": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "filter": {
+                      "type": "object",
+                      "description": "Filter constraints",
+                      "properties": {
+                        "text": {
+                          "type": "string",
+                          "description": "Free-text search across indexed fields"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "labels": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "Key/value labels to match"
+                        },
+                        "created_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "updated_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "owner_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "group_by": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "time_range": {
+                      "type": "object",
+                      "description": "Time window for filtering or scoping the operation",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "end": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "timezone": {
+                          "type": "string",
+                          "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "metrics"
+                  ]
+                },
+                "position": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "integer"
+                    },
+                    "y": {
+                      "type": "integer"
+                    },
+                    "w": {
+                      "type": "integer"
+                    },
+                    "h": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "title",
+                "type",
+                "query"
+              ]
+            },
+            "minItems": 1
+          },
+          "refresh_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "default": 60
+          },
+          "shared_with": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "widgets",
+          "actor"
+        ]
+      },
+      "returns": "Created dashboard descriptor with dashboard_id, shareable URL, and computed first-render preview."
+    },
+    {
+      "name": "upsert_intercept_policy",
+      "description": "Create or update a policy/rule used to govern intercept behavior, validation, or routing.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "expression": {
+                  "type": "string",
+                  "description": "CEL or JEXL expression"
+                },
+                "action": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "allow",
+                        "deny",
+                        "route",
+                        "transform",
+                        "notify",
+                        "tag"
+                      ]
+                    },
+                    "params": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "expression",
+                "action"
+              ]
+            },
+            "minItems": 1
+          },
+          "version_strategy": {
+            "type": "string",
+            "enum": [
+              "bump_minor",
+              "bump_major",
+              "replace"
+            ],
+            "default": "bump_minor"
+          },
+          "effective_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "rules",
+          "actor"
+        ]
+      },
+      "returns": "Persisted policy with policy_id, version, rule count, and validation warnings (if any)."
+    },
+    {
+      "name": "list_intercept_policies",
+      "description": "List policies governing intercepts with version, scope, and lifecycle filters.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "scope_label": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          },
+          "include_rule_summary": {
+            "type": "boolean",
+            "default": true
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated policy entries with rule counts and last evaluation metrics."
+    },
+    {
+      "name": "link_intercept_dependencies",
+      "description": "Establish or update dependency links between a intercept and related artefacts.",
+      "stage": "depends",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/intercept_request_id"
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_type": {
+                  "type": "string"
+                },
+                "target_id": {
+                  "type": "string"
+                },
+                "relation": {
+                  "type": "string",
+                  "enum": [
+                    "depends_on",
+                    "blocks",
+                    "related_to",
+                    "parent_of",
+                    "child_of"
+                  ]
+                },
+                "weight": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "default": 1.0
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "target_type",
+                "target_id",
+                "relation"
+              ]
+            },
+            "minItems": 1
+          },
+          "replace_existing": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "dependencies",
+          "actor"
+        ]
+      },
+      "returns": "Updated dependency graph summary with added/removed/updated edges."
+    }
+  ]
+}

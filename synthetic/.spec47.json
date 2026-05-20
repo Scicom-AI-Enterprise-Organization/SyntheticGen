@@ -1,0 +1,1241 @@
+{
+  "workflow_name": "cloud_exchange_connectivity_ordering",
+  "description": "End-to-end workflow to design, order, activate, monitor, and bill Telecom-as-a-Service (TaaS) connectivity via a cloud exchange platform",
+  "domain": "taas_connectivity/cloud_exchange",
+  "shared_entities": {
+    "tenant_id": {
+      "type": "string",
+      "description": "Identifier for the customer tenant within the cloud exchange platform"
+    },
+    "project_id": {
+      "type": "string",
+      "description": "Logical grouping identifier for related connectivity resources"
+    },
+    "port_id": {
+      "type": "string",
+      "description": "Identifier for a physical or virtual port on the cloud exchange"
+    },
+    "provider_id": {
+      "type": "string",
+      "description": "Identifier for a network or cloud service provider available on the exchange"
+    },
+    "cloud_account_id": {
+      "type": "string",
+      "description": "Identifier for a customer's cloud provider account (e.g., AWS, Azure, GCP account ID)"
+    },
+    "connection_profile_id": {
+      "type": "string",
+      "description": "Template identifier describing standardized connectivity parameters"
+    },
+    "connection_id": {
+      "type": "string",
+      "description": "Identifier for a provisioned or requested connectivity circuit on the cloud exchange"
+    },
+    "quote_id": {
+      "type": "string",
+      "description": "Identifier for a commercial quote (pricing and terms) for requested connectivity"
+    },
+    "order_id": {
+      "type": "string",
+      "description": "Identifier for a commercial connectivity order derived from a quote"
+    },
+    "change_request_id": {
+      "type": "string",
+      "description": "Identifier for a requested modification to an existing connectivity service"
+    },
+    "billing_account_id": {
+      "type": "string",
+      "description": "Identifier for the billing account used for charges and invoices"
+    },
+    "currency": {
+      "type": "string",
+      "description": "ISO 4217 currency code",
+      "enum": [
+        "USD",
+        "EUR",
+        "GBP",
+        "JPY",
+        "AUD",
+        "SGD"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "list_available_onramps",
+      "description": "List available on-ramp locations, providers, and supported cloud regions for a tenant",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "geo_filter": {
+            "type": "object",
+            "description": "Filter on-ramp locations by geography",
+            "properties": {
+              "continent": {
+                "type": "string"
+              },
+              "country": {
+                "type": "string"
+              },
+              "metro": {
+                "type": "string",
+                "description": "Metro/City code or name"
+              }
+            }
+          },
+          "provider_filter": {
+            "type": "object",
+            "description": "Filter by network or cloud provider",
+            "properties": {
+              "provider_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "cloud",
+                    "carrier",
+                    "internet_exchange",
+                    "sdwan",
+                    "security"
+                  ]
+                }
+              },
+              "preferred_providers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Preferred provider IDs"
+              },
+              "exclude_providers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Provider IDs to exclude"
+              }
+            }
+          },
+          "capability_filter": {
+            "type": "object",
+            "description": "Filter by technical capabilities",
+            "properties": {
+              "min_bandwidth_mbps": {
+                "type": "integer",
+                "minimum": 10
+              },
+              "max_latency_ms": {
+                "type": "number"
+              },
+              "supported_clouds": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "aws",
+                    "azure",
+                    "gcp",
+                    "oracle",
+                    "alibaba"
+                  ]
+                }
+              },
+              "redundancy_required": {
+                "type": "boolean",
+                "description": "Require dual diverse paths"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "default": 1,
+                "minimum": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "default": 50,
+                "minimum": 1,
+                "maximum": 200
+              }
+            }
+          }
+        },
+        "required": [
+          "tenant_id"
+        ]
+      },
+      "returns": "List of on-ramp locations and providers with capabilities and supported cloud regions"
+    },
+    {
+      "name": "design_connectivity_profile",
+      "description": "Design and validate a multi-cloud connectivity profile for a project",
+      "stage": "design",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "base_profile": {
+            "type": "object",
+            "description": "Base connectivity requirements and design intent",
+            "properties": {
+              "topology": {
+                "type": "string",
+                "enum": [
+                  "hub_and_spoke",
+                  "full_mesh",
+                  "partial_mesh",
+                  "dual_hub",
+                  "single_cloud_onramp"
+                ]
+              },
+              "availability_target": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "high",
+                  "mission_critical"
+                ]
+              },
+              "traffic_classes": {
+                "type": "array",
+                "description": "Traffic classes and QoS requirements",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "class_name": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "type": "string",
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "critical"
+                      ]
+                    },
+                    "latency_sla_ms": {
+                      "type": "number"
+                    },
+                    "bandwidth_guaranteed_mbps": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "class_name",
+                    "priority"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "topology",
+              "availability_target"
+            ]
+          },
+          "endpoints": {
+            "type": "array",
+            "description": "Logical endpoints participating in the connectivity design",
+            "items": {
+              "type": "object",
+              "properties": {
+                "endpoint_type": {
+                  "type": "string",
+                  "enum": [
+                    "cloud_vpc",
+                    "data_center",
+                    "branch",
+                    "internet_exit"
+                  ]
+                },
+                "cloud_details": {
+                  "type": "object",
+                  "description": "Details for cloud endpoints; ignored for non-cloud types",
+                  "properties": {
+                    "cloud_provider": {
+                      "type": "string",
+                      "enum": [
+                        "aws",
+                        "azure",
+                        "gcp",
+                        "oracle",
+                        "alibaba"
+                      ]
+                    },
+                    "cloud_account_id": {
+                      "type": "string"
+                    },
+                    "region": {
+                      "type": "string"
+                    },
+                    "vpc_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "on_prem_details": {
+                  "type": "object",
+                  "description": "Details for on-prem or branch endpoints",
+                  "properties": {
+                    "site_code": {
+                      "type": "string"
+                    },
+                    "metro": {
+                      "type": "string"
+                    },
+                    "access_type": {
+                      "type": "string",
+                      "enum": [
+                        "internet_vpn",
+                        "mpls",
+                        "ethernet",
+                        "5g"
+                      ]
+                    }
+                  }
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "endpoint_type"
+              ]
+            }
+          },
+          "validation_options": {
+            "type": "object",
+            "properties": {
+              "check_capacity": {
+                "type": "boolean",
+                "default": true
+              },
+              "check_compliance": {
+                "type": "boolean",
+                "default": true
+              },
+              "target_markets": {
+                "type": "array",
+                "description": "Primary business markets to optimize for",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "project_id",
+          "base_profile",
+          "endpoints"
+        ]
+      },
+      "returns": "Validated connectivity design and a new or updated connection_profile_id with recommended provider and topology options"
+    },
+    {
+      "name": "check_connectivity_availability",
+      "description": "Check technical and commercial availability for a specific connectivity profile between endpoints",
+      "stage": "design",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "connection_profile_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "object",
+            "description": "Source endpoint details",
+            "properties": {
+              "port_id": {
+                "type": "string"
+              },
+              "provider_id": {
+                "type": "string"
+              },
+              "location": {
+                "type": "object",
+                "properties": {
+                  "metro": {
+                    "type": "string"
+                  },
+                  "facility_code": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "destination": {
+            "type": "object",
+            "description": "Destination endpoint details (typically cloud)",
+            "properties": {
+              "cloud_provider": {
+                "type": "string",
+                "enum": [
+                  "aws",
+                  "azure",
+                  "gcp",
+                  "oracle",
+                  "alibaba"
+                ]
+              },
+              "cloud_account_id": {
+                "type": "string"
+              },
+              "region": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "cloud_provider",
+              "region"
+            ]
+          },
+          "bandwidth_options_mbps": {
+            "type": "array",
+            "description": "Candidate bandwidth options to check",
+            "items": {
+              "type": "integer",
+              "minimum": 10
+            }
+          },
+          "redundancy": {
+            "type": "object",
+            "description": "Redundancy and diversity constraints",
+            "properties": {
+              "paths": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2
+                ]
+              },
+              "diversity_type": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "facility_diverse",
+                  "carrier_diverse",
+                  "geo_diverse"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "connection_profile_id",
+          "destination"
+        ]
+      },
+      "returns": "Availability matrix with feasible bandwidths, paths, and earliest ready-for-service dates"
+    },
+    {
+      "name": "generate_connectivity_quote",
+      "description": "Generate a commercial quote for requested connectivity, including one-time and recurring charges",
+      "stage": "quotation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "connection_profile_id": {
+            "type": "string"
+          },
+          "billing_account_id": {
+            "type": "string"
+          },
+          "quote_items": {
+            "type": "array",
+            "description": "Individual connectivity items to be quoted",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source_port_id": {
+                  "type": "string"
+                },
+                "destination_cloud": {
+                  "type": "object",
+                  "properties": {
+                    "cloud_provider": {
+                      "type": "string",
+                      "enum": [
+                        "aws",
+                        "azure",
+                        "gcp",
+                        "oracle",
+                        "alibaba"
+                      ]
+                    },
+                    "cloud_account_id": {
+                      "type": "string"
+                    },
+                    "region": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "cloud_provider",
+                    "region"
+                  ]
+                },
+                "bandwidth_mbps": {
+                  "type": "integer",
+                  "minimum": 10
+                },
+                "term_months": {
+                  "type": "integer",
+                  "enum": [
+                    1,
+                    12,
+                    24,
+                    36
+                  ]
+                },
+                "billing_model": {
+                  "type": "string",
+                  "enum": [
+                    "flat_rate",
+                    "95th_percentile",
+                    "usage_based"
+                  ]
+                },
+                "redundancy": {
+                  "type": "object",
+                  "properties": {
+                    "paths": {
+                      "type": "integer",
+                      "enum": [
+                        1,
+                        2
+                      ]
+                    },
+                    "geo_diverse": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "sla_tier": {
+                  "type": "string",
+                  "enum": [
+                    "standard",
+                    "premium"
+                  ]
+                }
+              },
+              "required": [
+                "source_port_id",
+                "destination_cloud",
+                "bandwidth_mbps",
+                "term_months",
+                "billing_model"
+              ]
+            }
+          },
+          "currency": {
+            "$ref": "#/shared_entities/currency"
+          },
+          "discounts": {
+            "type": "object",
+            "description": "Optional commercial adjustments",
+            "properties": {
+              "contract_level_discount_percent": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "promo_code": {
+                "type": "string"
+              }
+            }
+          },
+          "validity_days": {
+            "type": "integer",
+            "default": 30,
+            "minimum": 1,
+            "maximum": 90
+          }
+        },
+        "required": [
+          "tenant_id",
+          "connection_profile_id",
+          "billing_account_id",
+          "quote_items",
+          "currency"
+        ]
+      },
+      "returns": "Detailed quote including quote_id, line items, one-time and recurring charges, taxes, and validity period"
+    },
+    {
+      "name": "create_connectivity_order",
+      "description": "Create an order from an approved quote and submit for provisioning",
+      "stage": "ordering",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "quote_id": {
+            "type": "string"
+          },
+          "purchase_order": {
+            "type": "object",
+            "description": "Customer commercial approval details",
+            "properties": {
+              "po_number": {
+                "type": "string"
+              },
+              "authorized_contact": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "phone": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "email"
+                ]
+              },
+              "billing_reference": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "po_number",
+              "authorized_contact"
+            ]
+          },
+          "technical_contacts": {
+            "type": "array",
+            "description": "Technical contacts for implementation notifications",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "email": {
+                  "type": "string",
+                  "format": "email"
+                },
+                "phone": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "email"
+              ]
+            }
+          },
+          "requested_rfs_date": {
+            "type": "string",
+            "format": "date",
+            "description": "Requested ready-for-service date"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "auto_accept_changes": {
+            "type": "boolean",
+            "description": "Whether minor implementation changes can be auto-accepted",
+            "default": false
+          }
+        },
+        "required": [
+          "tenant_id",
+          "quote_id",
+          "purchase_order"
+        ]
+      },
+      "returns": "Created order with order_id, initial status, and mapping of quote items to planned connection_ids"
+    },
+    {
+      "name": "get_order_status",
+      "description": "Retrieve detailed status, milestones, and exceptions for an order",
+      "stage": "ordering",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional data to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "milestones",
+                "exceptions",
+                "audit_log",
+                "notifications"
+              ]
+            }
+          }
+        },
+        "required": [
+          "order_id"
+        ]
+      },
+      "returns": "Order status with per-connection progress, milestones, exceptions, and any required customer actions"
+    },
+    {
+      "name": "provision_connectivity",
+      "description": "Trigger or retry provisioning of one or more connections associated with an order",
+      "stage": "provisioning",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string"
+          },
+          "connection_ids": {
+            "type": "array",
+            "description": "Specific connections to provision; if omitted, all pending connections will be processed",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "initial",
+              "retry_failed",
+              "resume_partial"
+            ],
+            "default": "initial"
+          },
+          "rollback_on_failure": {
+            "type": "boolean",
+            "description": "Whether to roll back changes if any connection fails",
+            "default": true
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Validate provisioning steps without applying changes",
+            "default": false
+          }
+        },
+        "required": [
+          "order_id"
+        ]
+      },
+      "returns": "Provisioning job details including per-connection status, job_id, and rollback actions if applicable"
+    },
+    {
+      "name": "activate_connection",
+      "description": "Activate a provisioned connection and set operational parameters",
+      "stage": "activation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "activation_mode": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "scheduled"
+            ],
+            "default": "immediate"
+          },
+          "scheduled_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Required if activation_mode is scheduled"
+          },
+          "operational_params": {
+            "type": "object",
+            "description": "Operational settings applied at activation",
+            "properties": {
+              "admin_state": {
+                "type": "string",
+                "enum": [
+                  "up",
+                  "down"
+                ],
+                "default": "up"
+              },
+              "qos_policy": {
+                "type": "object",
+                "properties": {
+                  "policy_name": {
+                    "type": "string"
+                  },
+                  "class_mappings": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "traffic_class": {
+                          "type": "string"
+                        },
+                        "dscp_value": {
+                          "type": "integer",
+                          "minimum": 0,
+                          "maximum": 63
+                        },
+                        "bandwidth_percent": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 100
+                        }
+                      },
+                      "required": [
+                        "traffic_class",
+                        "bandwidth_percent"
+                      ]
+                    }
+                  }
+                }
+              },
+              "rate_limit_mbps": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "customer_acknowledgement": {
+            "type": "object",
+            "description": "Customer acceptance information",
+            "properties": {
+              "accepted_by": {
+                "type": "string"
+              },
+              "accepted_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "test_reference": {
+                "type": "string",
+                "description": "Reference to acceptance test results or ticket"
+              }
+            }
+          }
+        },
+        "required": [
+          "connection_id"
+        ]
+      },
+      "returns": "Connection activation result including operational status, timestamps, and any post-activation tasks"
+    },
+    {
+      "name": "modify_connection",
+      "description": "Modify an existing connection, such as bandwidth upgrade/downgrade or parameter changes",
+      "stage": "change_management",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "change_request": {
+            "type": "object",
+            "description": "Requested modifications to apply",
+            "properties": {
+              "change_type": {
+                "type": "string",
+                "enum": [
+                  "bandwidth_change",
+                  "cloud_endpoint_change",
+                  "qos_update",
+                  "admin_state_change"
+                ]
+              },
+              "bandwidth_change": {
+                "type": "object",
+                "properties": {
+                  "new_bandwidth_mbps": {
+                    "type": "integer",
+                    "minimum": 10
+                  },
+                  "effective_date": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              },
+              "cloud_endpoint_change": {
+                "type": "object",
+                "properties": {
+                  "new_region": {
+                    "type": "string"
+                  },
+                  "new_cloud_account_id": {
+                    "type": "string"
+                  },
+                  "maintenance_window": {
+                    "type": "object",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "qos_update": {
+                "type": "object",
+                "properties": {
+                  "new_policy_name": {
+                    "type": "string"
+                  },
+                  "class_changes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "traffic_class": {
+                          "type": "string"
+                        },
+                        "new_bandwidth_percent": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 100
+                        }
+                      },
+                      "required": [
+                        "traffic_class",
+                        "new_bandwidth_percent"
+                      ]
+                    }
+                  }
+                }
+              },
+              "admin_state_change": {
+                "type": "object",
+                "properties": {
+                  "target_state": {
+                    "type": "string",
+                    "enum": [
+                      "up",
+                      "down"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              },
+              "customer_impact_notes": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "change_type"
+            ]
+          },
+          "approval": {
+            "type": "object",
+            "description": "Change approval and authorization",
+            "properties": {
+              "approved_by": {
+                "type": "string"
+              },
+              "approval_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "ticket_reference": {
+                "type": "string"
+              }
+            }
+          },
+          "simulate_only": {
+            "type": "boolean",
+            "description": "If true, simulate impact and pricing without applying the change",
+            "default": false
+          }
+        },
+        "required": [
+          "connection_id",
+          "change_request"
+        ]
+      },
+      "returns": "Change request details with change_request_id, impact analysis, potential pricing deltas, and execution status or schedule"
+    },
+    {
+      "name": "collect_usage_metrics",
+      "description": "Collect and aggregate usage metrics for connections for a given period",
+      "stage": "usage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "billing_account_id": {
+            "type": "string"
+          },
+          "connection_filter": {
+            "type": "object",
+            "description": "Filter criteria for selecting connections",
+            "properties": {
+              "connection_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "project_id": {
+                "type": "string"
+              },
+              "provider_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Time window for usage data",
+            "properties": {
+              "start_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "granularity": {
+                "type": "string",
+                "enum": [
+                  "5_min",
+                  "hour",
+                  "day"
+                ],
+                "default": "hour"
+              }
+            },
+            "required": [
+              "start_time",
+              "end_time"
+            ]
+          },
+          "metrics": {
+            "type": "array",
+            "description": "Types of metrics to collect",
+            "items": {
+              "type": "string",
+              "enum": [
+                "ingress_bytes",
+                "egress_bytes",
+                "pps",
+                "95th_percentile_mbps",
+                "peak_mbps"
+              ]
+            }
+          },
+          "include_anomalies": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "tenant_id",
+          "billing_account_id",
+          "time_window"
+        ]
+      },
+      "returns": "Aggregated usage metrics per connection and project, with optional anomaly flags and raw timeseries references"
+    },
+    {
+      "name": "generate_billing_statement",
+      "description": "Generate a billing statement and rating details from usage and contracted charges",
+      "stage": "billing",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "billing_account_id": {
+            "type": "string"
+          },
+          "statement_period": {
+            "type": "object",
+            "properties": {
+              "period_start": {
+                "type": "string",
+                "format": "date"
+              },
+              "period_end": {
+                "type": "string",
+                "format": "date"
+              }
+            },
+            "required": [
+              "period_start",
+              "period_end"
+            ]
+          },
+          "rating_options": {
+            "type": "object",
+            "description": "Options controlling how usage is rated and grouped",
+            "properties": {
+              "group_by": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "project",
+                    "connection",
+                    "provider",
+                    "cloud_account"
+                  ]
+                }
+              },
+              "include_zero_usage_items": {
+                "type": "boolean",
+                "default": false
+              },
+              "prorate_partial_month": {
+                "type": "boolean",
+                "default": true
+              },
+              "currency": {
+                "$ref": "#/shared_entities/currency"
+              }
+            }
+          },
+          "include_breakdown": {
+            "type": "array",
+            "description": "Additional breakdown sections to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "taxes",
+                "discounts",
+                "surcharges",
+                "usage_details"
+              ]
+            }
+          }
+        },
+        "required": [
+          "billing_account_id",
+          "statement_period"
+        ]
+      },
+      "returns": "Billing statement including statement_id, total charges, line-item breakdowns, taxes, and links to rated usage"
+    },
+    {
+      "name": "handle_order_exception",
+      "description": "Handle provisioning or activation exceptions with options to retry, roll back, or cancel impacted items",
+      "stage": "error_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string"
+          },
+          "exception_id": {
+            "type": "string",
+            "description": "Identifier of the specific exception or alarm within the order context"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "retry",
+              "rollback",
+              "cancel_item",
+              "acknowledge_only"
+            ]
+          },
+          "scope": {
+            "type": "object",
+            "description": "Scope of the recovery action",
+            "properties": {
+              "connection_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "include_dependent_items": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "customer_decision": {
+            "type": "object",
+            "description": "Customer-provided decision, justification, and acceptance of impact",
+            "properties": {
+              "decided_by": {
+                "type": "string"
+              },
+              "decision_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "justification": {
+                "type": "string"
+              },
+              "accept_service_impact": {
+                "type": "boolean"
+              }
+            }
+          },
+          "notify_contacts": {
+            "type": "array",
+            "description": "Additional emails to notify about the recovery action",
+            "items": {
+              "type": "string",
+              "format": "email"
+            }
+          }
+        },
+        "required": [
+          "order_id",
+          "exception_id",
+          "action"
+        ]
+      },
+      "returns": "Updated exception status, any triggered recovery jobs, and resulting order/connection state changes"
+    }
+  ]
+}

@@ -1,0 +1,1118 @@
+{
+  "workflow_name": "sd_wan_dependency_management",
+  "description": "End-to-end SD-WAN service design, dependency resolution, compatibility validation, and lifecycle management for B2B customers.",
+  "domain": "telco_b2b/sd_wan_service",
+  "shared_entities": {
+    "customer_id": {
+      "type": "string",
+      "description": "Unique enterprise customer identifier"
+    },
+    "site_id": {
+      "type": "string",
+      "description": "Unique identifier for a customer site/location"
+    },
+    "service_id": {
+      "type": "string",
+      "description": "Unique SD-WAN service identifier"
+    },
+    "design_id": {
+      "type": "string",
+      "description": "Identifier for an SD-WAN service design or topology blueprint"
+    },
+    "order_id": {
+      "type": "string",
+      "description": "Provisioning or change order identifier for SD-WAN service"
+    },
+    "dependency_ticket_id": {
+      "type": "string",
+      "description": "Identifier for a dependency resolution or compatibility exception ticket"
+    },
+    "policy_id": {
+      "type": "string",
+      "description": "Identifier for a security or routing policy object"
+    },
+    "edge_device_profile": {
+      "type": "object",
+      "description": "Common definition of an SD-WAN edge device profile",
+      "properties": {
+        "vendor": {
+          "type": "string",
+          "description": "Device vendor name"
+        },
+        "model": {
+          "type": "string",
+          "description": "Device hardware model"
+        },
+        "software_version": {
+          "type": "string",
+          "description": "Software/firmware version installed or planned"
+        },
+        "capabilities": {
+          "type": "array",
+          "description": "Supported feature capabilities",
+          "items": {
+            "type": "string",
+            "enum": [
+              "ipsec_vpn",
+              "app_aware_routing",
+              "wan_optimization",
+              "zscaler_integration",
+              "cloud_onramp_aws",
+              "cloud_onramp_azure",
+              "cloud_onramp_gcp",
+              "inline_ngfw",
+              "sd_lan_integration",
+              "dual_sim_lte",
+              "ipv6_dual_stack"
+            ]
+          }
+        }
+      },
+      "required": [
+        "vendor",
+        "model",
+        "software_version"
+      ]
+    },
+    "transport_requirements": {
+      "type": "object",
+      "description": "Common transport requirements across functions",
+      "properties": {
+        "min_bandwidth_mbps": {
+          "type": "integer",
+          "description": "Minimum committed bandwidth in Mbps"
+        },
+        "max_latency_ms": {
+          "type": "integer",
+          "description": "Maximum one-way latency tolerance in milliseconds"
+        },
+        "max_jitter_ms": {
+          "type": "integer",
+          "description": "Maximum jitter tolerance in milliseconds"
+        },
+        "max_packet_loss_percent": {
+          "type": "number",
+          "description": "Maximum packet loss tolerance in percentage",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "redundancy": {
+          "type": "string",
+          "enum": [
+            "single_homed",
+            "dual_homed_same_pop",
+            "dual_homed_dual_pop"
+          ],
+          "description": "Redundancy topology for underlay connectivity"
+        },
+        "preferred_access_types": {
+          "type": "array",
+          "description": "Preferred access technologies for underlay",
+          "items": {
+            "type": "string",
+            "enum": [
+              "mpls",
+              "broadband_internet",
+              "lte",
+              "5g",
+              "satellite"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "name": "discover_customer_topology",
+      "description": "Discover and inventory current customer sites, connectivity, and SD-WAN capabilities as a basis for dependency analysis.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "discovery_scope": {
+            "type": "object",
+            "description": "Scope of discovery and inventory",
+            "properties": {
+              "include_existing_sdwan": {
+                "type": "boolean",
+                "default": true,
+                "description": "Include already deployed SD-WAN services"
+              },
+              "include_legacy_wan": {
+                "type": "boolean",
+                "default": true,
+                "description": "Include MPLS, IP-VPN, and legacy WAN circuits"
+              },
+              "include_cloud_connectivity": {
+                "type": "boolean",
+                "default": true,
+                "description": "Include direct cloud connections (e.g., Direct Connect, ExpressRoute)"
+              },
+              "site_filters": {
+                "type": "object",
+                "description": "Filter which sites to include",
+                "properties": {
+                  "countries": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "regions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "amer",
+                        "emea",
+                        "apac",
+                        "latam"
+                      ]
+                    }
+                  },
+                  "min_users": {
+                    "type": "integer",
+                    "description": "Minimum number of users per site"
+                  }
+                }
+              }
+            }
+          },
+          "include_device_inventory": {
+            "type": "boolean",
+            "default": true,
+            "description": "Include per-site edge device inventory and capabilities"
+          }
+        },
+        "required": [
+          "customer_id"
+        ]
+      },
+      "returns": "Discovered topology including list of sites, existing WAN links, and current SD-WAN/edge device capabilities."
+    },
+    {
+      "name": "design_sd_wan_topology",
+      "description": "Create a draft SD-WAN service design with topology, sites, and transport requirements.",
+      "stage": "design",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "base_on_discovery_id": {
+            "type": "string",
+            "description": "Optional reference to a prior discovery session result ID"
+          },
+          "topology_template": {
+            "type": "string",
+            "enum": [
+              "hub_and_spoke",
+              "full_mesh",
+              "regional_hubs",
+              "cloud_first",
+              "hybrid"
+            ],
+            "description": "High-level SD-WAN topology template"
+          },
+          "sites": {
+            "type": "array",
+            "description": "Sites to be included in the SD-WAN service design",
+            "items": {
+              "type": "object",
+              "properties": {
+                "site_id": {
+                  "$ref": "#/shared_entities/site_id"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "branch",
+                    "datacenter",
+                    "headquarters",
+                    "cloud_gateway",
+                    "remote_worker_hub"
+                  ]
+                },
+                "traffic_profile": {
+                  "type": "object",
+                  "properties": {
+                    "avg_bandwidth_mbps": {
+                      "type": "integer"
+                    },
+                    "peak_bandwidth_mbps": {
+                      "type": "integer"
+                    },
+                    "business_critical_apps": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "internet_breakout_policy": {
+                      "type": "string",
+                      "enum": [
+                        "local_internet_breakout",
+                        "backhaul_to_dc",
+                        "split_tunnel"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "avg_bandwidth_mbps",
+                    "peak_bandwidth_mbps"
+                  ]
+                },
+                "transport_requirements": {
+                  "$ref": "#/shared_entities/transport_requirements"
+                }
+              },
+              "required": [
+                "site_id",
+                "role",
+                "traffic_profile"
+              ]
+            }
+          },
+          "global_policies": {
+            "type": "object",
+            "description": "High-level policy intents for the entire SD-WAN design",
+            "properties": {
+              "security_model": {
+                "type": "string",
+                "enum": [
+                  "cloud_security",
+                  "on_prem_ngfw",
+                  "mixed"
+                ]
+              },
+              "qos_model": {
+                "type": "string",
+                "enum": [
+                  "three_class",
+                  "five_class",
+                  "custom"
+                ]
+              },
+              "cloud_onramp_targets": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "aws",
+                    "azure",
+                    "gcp",
+                    "salesforce",
+                    "office365"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "customer_id",
+          "topology_template",
+          "sites"
+        ]
+      },
+      "returns": "New SD-WAN design blueprint with a generated design_id and summarized topology."
+    },
+    {
+      "name": "resolve_design_dependencies",
+      "description": "Analyze an SD-WAN design to identify and resolve dependencies such as underlay access, device capabilities, licenses, and cloud integration.",
+      "stage": "dependency_analysis",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "design_id": {
+            "$ref": "#/shared_entities/design_id"
+          },
+          "dependency_scope": {
+            "type": "array",
+            "description": "Which dependency domains to analyze",
+            "items": {
+              "type": "string",
+              "enum": [
+                "underlay_transport",
+                "edge_devices",
+                "licenses",
+                "cloud_integration",
+                "security_stack",
+                "qos_model"
+              ]
+            }
+          },
+          "auto_resolve": {
+            "type": "boolean",
+            "default": true,
+            "description": "Automatically propose resolutions where possible"
+          },
+          "constraints": {
+            "type": "object",
+            "description": "Business and technical constraints for dependency resolution",
+            "properties": {
+              "max_monthly_cost_usd": {
+                "type": "number"
+              },
+              "preferred_vendors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "disallowed_regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "change_freeze_windows": {
+                "type": "array",
+                "description": "Time windows where network changes are not allowed",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "start": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "end": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "start",
+                    "end"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "design_id"
+        ]
+      },
+      "returns": "Dependency analysis report including missing prerequisites, proposed resolutions, and residual risks."
+    },
+    {
+      "name": "check_compatibility_matrix",
+      "description": "Check compatibility between edge devices, software versions, policies, and cloud/security integrations for an SD-WAN design.",
+      "stage": "compatibility_check",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "design_id": {
+            "$ref": "#/shared_entities/design_id"
+          },
+          "edge_devices": {
+            "type": "array",
+            "description": "Override or complement design devices with specific profiles",
+            "items": {
+              "$ref": "#/shared_entities/edge_device_profile"
+            }
+          },
+          "policies": {
+            "type": "array",
+            "description": "Policy objects to validate against compatibility matrix",
+            "items": {
+              "type": "object",
+              "properties": {
+                "policy_id": {
+                  "$ref": "#/shared_entities/policy_id"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "security",
+                    "routing",
+                    "qos",
+                    "app_policy"
+                  ]
+                },
+                "version": {
+                  "type": "string"
+                },
+                "targets": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "policy_id",
+                "type"
+              ]
+            }
+          },
+          "cloud_security_providers": {
+            "type": "array",
+            "description": "Cloud or SASE security providers to be integrated",
+            "items": {
+              "type": "string",
+              "enum": [
+                "zscaler",
+                "palo_alto_prisma",
+                "checkpoint",
+                "netskope",
+                "cisco_umrella"
+              ]
+            }
+          },
+          "compatibility_profile": {
+            "type": "string",
+            "enum": [
+              "strict",
+              "balanced",
+              "permissive"
+            ],
+            "default": "balanced",
+            "description": "How strict compatibility rules should be applied"
+          }
+        },
+        "required": [
+          "design_id"
+        ]
+      },
+      "returns": "Compatibility matrix evaluation with per-component pass/fail, conflicts, and upgrade/downgrade recommendations."
+    },
+    {
+      "name": "create_dependency_exception_ticket",
+      "description": "Create an exception or waiver ticket for unresolved dependencies or incompatibilities in the SD-WAN design.",
+      "stage": "dependency_exception",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "design_id": {
+            "$ref": "#/shared_entities/design_id"
+          },
+          "raised_by": {
+            "type": "object",
+            "description": "User raising the exception",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "sales_engineer",
+                  "network_architect",
+                  "customer_admin",
+                  "operations"
+                ]
+              },
+              "email": {
+                "type": "string",
+                "format": "email"
+              }
+            },
+            "required": [
+              "user_id",
+              "role"
+            ]
+          },
+          "exception_items": {
+            "type": "array",
+            "description": "List of dependency or compatibility issues being raised for exception",
+            "items": {
+              "type": "object",
+              "properties": {
+                "issue_type": {
+                  "type": "string",
+                  "enum": [
+                    "incompatible_software",
+                    "unsupported_topology",
+                    "missing_license",
+                    "unsupported_cloud_region",
+                    "security_policy_gap",
+                    "sla_not_met"
+                  ]
+                },
+                "affected_sites": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/shared_entities/site_id"
+                  }
+                },
+                "description": {
+                  "type": "string"
+                },
+                "proposed_mitigation": {
+                  "type": "string"
+                },
+                "risk_level": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                }
+              },
+              "required": [
+                "issue_type",
+                "description",
+                "risk_level"
+              ]
+            }
+          },
+          "approval_routing": {
+            "type": "object",
+            "description": "How this exception should be routed for approval",
+            "properties": {
+              "business_owner_group": {
+                "type": "string"
+              },
+              "technical_approver_group": {
+                "type": "string"
+              },
+              "sla_hours": {
+                "type": "integer",
+                "description": "Target SLA for approval in hours"
+              }
+            }
+          }
+        },
+        "required": [
+          "design_id",
+          "raised_by",
+          "exception_items"
+        ]
+      },
+      "returns": "Created dependency_ticket_id with status, approvers, and next steps."
+    },
+    {
+      "name": "update_dependency_exception_ticket",
+      "description": "Update, approve, reject, or add comments to an existing dependency exception ticket.",
+      "stage": "dependency_exception",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dependency_ticket_id": {
+            "$ref": "#/shared_entities/dependency_ticket_id"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "add_comment",
+              "attach_mitigation",
+              "approve",
+              "reject",
+              "request_more_info"
+            ]
+          },
+          "actor": {
+            "type": "object",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "business_owner",
+                  "network_architect",
+                  "security_officer",
+                  "customer_admin",
+                  "operations"
+                ]
+              }
+            },
+            "required": [
+              "user_id",
+              "role"
+            ]
+          },
+          "comment": {
+            "type": "string",
+            "description": "Optional comment describing the update"
+          },
+          "mitigation_plan": {
+            "type": "object",
+            "description": "Mitigation details when action is attach_mitigation",
+            "properties": {
+              "summary": {
+                "type": "string"
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "step_order": {
+                      "type": "integer"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "owner_group": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "step_order",
+                    "description"
+                  ]
+                }
+              },
+              "target_completion_date": {
+                "type": "string",
+                "format": "date"
+              }
+            }
+          }
+        },
+        "required": [
+          "dependency_ticket_id",
+          "action",
+          "actor"
+        ]
+      },
+      "returns": "Updated exception ticket details including current status and approval trail."
+    },
+    {
+      "name": "generate_sd_wan_change_plan",
+      "description": "Generate an executable change plan for rolling out or modifying the SD-WAN service, considering dependencies and change windows.",
+      "stage": "planning",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "design_id": {
+            "$ref": "#/shared_entities/design_id"
+          },
+          "change_type": {
+            "type": "string",
+            "enum": [
+              "new_deployment",
+              "migration",
+              "expansion",
+              "policy_change"
+            ]
+          },
+          "schedule_preferences": {
+            "type": "object",
+            "properties": {
+              "preferred_maintenance_windows": {
+                "type": "array",
+                "description": "Preferred time windows for changes",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "weekday": {
+                      "type": "string",
+                      "enum": [
+                        "mon",
+                        "tue",
+                        "wed",
+                        "thu",
+                        "fri",
+                        "sat",
+                        "sun"
+                      ]
+                    },
+                    "start_time_local": {
+                      "type": "string",
+                      "format": "time"
+                    },
+                    "end_time_local": {
+                      "type": "string",
+                      "format": "time"
+                    }
+                  },
+                  "required": [
+                    "weekday",
+                    "start_time_local",
+                    "end_time_local"
+                  ]
+                }
+              },
+              "max_parallel_sites": {
+                "type": "integer",
+                "description": "Maximum number of sites to change in parallel"
+              },
+              "exclude_dates": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "date"
+                }
+              }
+            }
+          },
+          "risk_tolerance": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high"
+            ],
+            "default": "medium"
+          }
+        },
+        "required": [
+          "design_id",
+          "change_type"
+        ]
+      },
+      "returns": "Change plan with ordered tasks, site waves, and target execution schedule."
+    },
+    {
+      "name": "create_sd_wan_order",
+      "description": "Create a provisioning or change order for the SD-WAN service based on the approved design and change plan.",
+      "stage": "ordering",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "design_id": {
+            "$ref": "#/shared_entities/design_id"
+          },
+          "change_plan_id": {
+            "type": "string",
+            "description": "Identifier of the generated change plan"
+          },
+          "order_type": {
+            "type": "string",
+            "enum": [
+              "initial_deploy",
+              "add_site",
+              "remove_site",
+              "policy_update",
+              "bandwidth_upgrade"
+            ]
+          },
+          "billing_options": {
+            "type": "object",
+            "properties": {
+              "contract_term_months": {
+                "type": "integer",
+                "enum": [
+                  12,
+                  24,
+                  36,
+                  48,
+                  60
+                ]
+              },
+              "billing_model": {
+                "type": "string",
+                "enum": [
+                  "flat_rate",
+                  "bandwidth_tiered",
+                  "consumption_based"
+                ]
+              },
+              "currency": {
+                "type": "string"
+              }
+            }
+          },
+          "site_inclusions": {
+            "type": "array",
+            "description": "Subset of sites from the design to include in this order, if not all",
+            "items": {
+              "type": "object",
+              "properties": {
+                "site_id": {
+                  "$ref": "#/shared_entities/site_id"
+                },
+                "wave": {
+                  "type": "integer",
+                  "description": "Deployment wave index for this site"
+                }
+              },
+              "required": [
+                "site_id"
+              ]
+            }
+          }
+        },
+        "required": [
+          "customer_id",
+          "design_id",
+          "order_type"
+        ]
+      },
+      "returns": "Created order_id with initial status, commercial summary, and list of impacted sites."
+    },
+    {
+      "name": "get_sd_wan_order_status",
+      "description": "Retrieve current status, task breakdown, and dependency state for an SD-WAN order.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "include_task_details": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_dependency_state": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "order_id"
+        ]
+      },
+      "returns": "Order status including per-site and per-task progress, outstanding dependencies, and expected completion timelines."
+    },
+    {
+      "name": "retry_failed_dependency_resolution",
+      "description": "Retry automatic resolution for failed dependencies in an SD-WAN order or design after corrections have been made.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scope_type": {
+            "type": "string",
+            "enum": [
+              "design",
+              "order"
+            ],
+            "description": "Whether to retry at design level or at specific order level"
+          },
+          "design_id": {
+            "$ref": "#/shared_entities/design_id"
+          },
+          "order_id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "target_items": {
+            "type": "array",
+            "description": "Optional list of specific dependency items or sites to retry",
+            "items": {
+              "type": "object",
+              "properties": {
+                "site_id": {
+                  "$ref": "#/shared_entities/site_id"
+                },
+                "dependency_type": {
+                  "type": "string",
+                  "enum": [
+                    "underlay_transport",
+                    "edge_device",
+                    "license",
+                    "cloud_integration",
+                    "security_policy"
+                  ]
+                }
+              }
+            }
+          },
+          "override_parameters": {
+            "type": "object",
+            "description": "Overrides for retry, such as changed constraints or vendors",
+            "properties": {
+              "preferred_vendors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "max_monthly_cost_usd": {
+                "type": "number"
+              },
+              "allow_temp_workarounds": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          }
+        },
+        "required": [
+          "scope_type"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "scope_type": {
+                  "const": "design"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "design_id"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "scope_type": {
+                  "const": "order"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "order_id"
+              ]
+            }
+          }
+        ]
+      },
+      "returns": "Updated dependency resolution outcome with newly resolved items and any remaining failures."
+    },
+    {
+      "name": "rollback_sd_wan_change",
+      "description": "Plan and execute a rollback for all or part of an SD-WAN change in case of critical issues.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "rollback_scope": {
+            "type": "string",
+            "enum": [
+              "entire_order",
+              "specific_sites",
+              "policy_only"
+            ]
+          },
+          "sites": {
+            "type": "array",
+            "description": "Sites to rollback when scope is specific_sites",
+            "items": {
+              "$ref": "#/shared_entities/site_id"
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "fallback_design_id": {
+            "$ref": "#/shared_entities/design_id",
+            "description": "Optional reference to a previous stable design to rollback to"
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Optional explicit schedule for rollback",
+            "properties": {
+              "start_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "execute_immediately": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "required": [
+          "order_id",
+          "rollback_scope",
+          "reason"
+        ]
+      },
+      "returns": "Rollback plan and status, including affected sites and expected impact."
+    },
+    {
+      "name": "cancel_sd_wan_order",
+      "description": "Cancel an SD-WAN order if it is still in a cancellable state, handling dependencies and partial provisioning.",
+      "stage": "cancellation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "cancellation_reason": {
+            "type": "string",
+            "enum": [
+              "customer_request",
+              "technical_infeasibility",
+              "pricing_dispute",
+              "replaced_by_new_order",
+              "other"
+            ]
+          },
+          "reason_details": {
+            "type": "string"
+          },
+          "handle_partial_provisioning": {
+            "type": "string",
+            "enum": [
+              "full_rollback",
+              "retain_working_sites",
+              "retain_underlay_only"
+            ],
+            "default": "full_rollback"
+          }
+        },
+        "required": [
+          "order_id",
+          "cancellation_reason"
+        ]
+      },
+      "returns": "Cancellation result including any rollback actions triggered and financial implications."
+    },
+    {
+      "name": "get_sd_wan_service_state",
+      "description": "Retrieve the current operational state of the SD-WAN service, including design version, active dependencies, and policy compatibility.",
+      "stage": "operational_state",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "service_id": {
+            "$ref": "#/shared_entities/service_id"
+          },
+          "include_design_lineage": {
+            "type": "boolean",
+            "default": false
+          },
+          "include_open_dependency_tickets": {
+            "type": "boolean",
+            "default": true
+          },
+          "site_filter": {
+            "type": "object",
+            "properties": {
+              "site_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/site_id"
+                }
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "branch",
+                  "datacenter",
+                  "headquarters",
+                  "cloud_gateway",
+                  "remote_worker_hub"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "service_id"
+        ]
+      },
+      "returns": "Current SD-WAN service state including design version, health per site, open dependencies, and compatibility status."
+    }
+  ]
+}

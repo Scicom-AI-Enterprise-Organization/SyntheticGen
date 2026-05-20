@@ -1,0 +1,4348 @@
+{
+  "workflow_name": "api_monetization_plan_lifecycle",
+  "description": "End-to-end lifecycle for creating, configuring, publishing, managing, and retiring monetized API products and subscription plans",
+  "domain": "taas_deep/api_monetization",
+  "shared_entities": {
+    "api_product_id": {
+      "type": "string",
+      "description": "Identifier for a logical API product composed of one or more underlying APIs or endpoints"
+    },
+    "plan_id": {
+      "type": "string",
+      "description": "Identifier for a specific monetization plan associated with an API product"
+    },
+    "subscription_id": {
+      "type": "string",
+      "description": "Identifier for an active or historical subscription to a monetization plan"
+    },
+    "customer_id": {
+      "type": "string",
+      "description": "Identifier for a tenant, organization, or developer who subscribes to an API plan"
+    },
+    "pricing_profile_id": {
+      "type": "string",
+      "description": "Identifier for a reusable pricing profile that can be attached to one or more plans"
+    },
+    "billing_account_id": {
+      "type": "string",
+      "description": "Identifier of the billing account or payment profile associated with a customer"
+    },
+    "usage_report_id": {
+      "type": "string",
+      "description": "Identifier for a generated usage or revenue report"
+    },
+    "currency_code": {
+      "type": "string",
+      "description": "Three-letter ISO 4217 currency code, e.g. USD, EUR"
+    }
+  },
+  "functions": [
+    {
+      "name": "create_api_product",
+      "description": "Create a new monetizable API product and define its base configuration",
+      "stage": "create",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human-readable name of the API product"
+          },
+          "description": {
+            "type": "string",
+            "description": "Detailed description of the API product and its use cases"
+          },
+          "owner": {
+            "type": "object",
+            "description": "Information about the team or individual owning this product",
+            "properties": {
+              "owner_id": {
+                "type": "string",
+                "description": "Internal identifier for the owner"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "team",
+                  "individual",
+                  "vendor"
+                ],
+                "description": "Type of owner entity"
+              },
+              "contact": {
+                "type": "object",
+                "description": "Primary contact for this product",
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  },
+                  "slack_channel": {
+                    "type": "string"
+                  },
+                  "ticket_queue": {
+                    "type": "string",
+                    "description": "Support ticket queue name or ID"
+                  }
+                }
+              }
+            },
+            "required": [
+              "owner_id",
+              "type"
+            ]
+          },
+          "endpoints": {
+            "type": "array",
+            "description": "List of API endpoints that make up this product",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "HTTP path, e.g. /v1/payments"
+                },
+                "method": {
+                  "type": "string",
+                  "enum": [
+                    "GET",
+                    "POST",
+                    "PUT",
+                    "DELETE",
+                    "PATCH"
+                  ]
+                },
+                "tag": {
+                  "type": "string",
+                  "description": "Optional grouping tag for the endpoint"
+                },
+                "rate_limit_group": {
+                  "type": "string",
+                  "description": "Logical group for applying shared rate limits"
+                }
+              },
+              "required": [
+                "path",
+                "method"
+              ]
+            }
+          },
+          "visibility": {
+            "type": "object",
+            "description": "Visibility and access control for the product",
+            "properties": {
+              "access_type": {
+                "type": "string",
+                "enum": [
+                  "public",
+                  "private",
+                  "internal",
+                  "partner"
+                ]
+              },
+              "allowed_tenants": {
+                "type": "array",
+                "description": "Tenant IDs allowed to see or subscribe to this product when access_type is restricted",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "require_approval": {
+                "type": "boolean",
+                "description": "Whether subscriptions need manual approval",
+                "default": false
+              }
+            },
+            "required": [
+              "access_type"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Arbitrary key-value metadata for the product"
+          },
+          "tags": {
+            "type": "array",
+            "description": "Searchable tags to categorize the product",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "owner"
+        ]
+      },
+      "returns": "Created API product details including api_product_id and initial status"
+    },
+    {
+      "name": "create_pricing_profile",
+      "description": "Define a reusable pricing profile that can be attached to multiple plans",
+      "stage": "create",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "display_name": {
+            "type": "string",
+            "description": "Human-readable name of the pricing profile"
+          },
+          "currency": {
+            "$ref": "#/shared_entities/currency_code"
+          },
+          "billing_interval": {
+            "type": "string",
+            "enum": [
+              "monthly",
+              "quarterly",
+              "yearly",
+              "usage_only"
+            ],
+            "description": "Primary billing interval for recurring charges"
+          },
+          "fixed_fees": {
+            "type": "array",
+            "description": "List of fixed recurring or one-time fees",
+            "items": {
+              "type": "object",
+              "properties": {
+                "fee_type": {
+                  "type": "string",
+                  "enum": [
+                    "recurring",
+                    "one_time",
+                    "setup"
+                  ]
+                },
+                "amount": {
+                  "type": "number",
+                  "description": "Monetary amount in the specified currency"
+                },
+                "interval": {
+                  "type": "string",
+                  "enum": [
+                    "monthly",
+                    "yearly",
+                    "once"
+                  ],
+                  "description": "How often the fee is charged; relevant for recurring fees"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "fee_type",
+                "amount"
+              ]
+            }
+          },
+          "usage_tiers": {
+            "type": "array",
+            "description": "Tiered pricing by usage volume",
+            "items": {
+              "type": "object",
+              "properties": {
+                "metric": {
+                  "type": "string",
+                  "enum": [
+                    "requests",
+                    "tokens",
+                    "bandwidth_gb",
+                    "compute_seconds"
+                  ],
+                  "description": "Usage metric that the tier applies to"
+                },
+                "unit_price": {
+                  "type": "number",
+                  "description": "Price per unit within this tier in specified currency"
+                },
+                "up_to": {
+                  "type": "integer",
+                  "description": "Inclusive upper bound of units for this tier; null or omitted = unlimited"
+                },
+                "start_after": {
+                  "type": "integer",
+                  "description": "Exclusive lower bound, typically previous tier's upper bound"
+                },
+                "aggregation_window": {
+                  "type": "string",
+                  "enum": [
+                    "per_day",
+                    "per_month",
+                    "per_billing_cycle"
+                  ],
+                  "description": "Window over which usage is aggregated for tiering"
+                }
+              },
+              "required": [
+                "metric",
+                "unit_price"
+              ]
+            }
+          },
+          "overage_policy": {
+            "type": "object",
+            "description": "Policy that applies when usage exceeds included limits",
+            "properties": {
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "throttle",
+                  "pay_as_you_go",
+                  "grace_then_block"
+                ]
+              },
+              "overage_unit_price": {
+                "type": "number",
+                "description": "Per-unit price for overage when strategy is pay_as_you_go"
+              },
+              "throttle_config": {
+                "type": "object",
+                "description": "Throttling configuration when strategy involves throttling",
+                "properties": {
+                  "max_rps": {
+                    "type": "number",
+                    "description": "Maximum allowed requests per second after throttling"
+                  },
+                  "burst_limit": {
+                    "type": "integer",
+                    "description": "Maximum allowed burst of requests"
+                  }
+                }
+              },
+              "grace_units": {
+                "type": "integer",
+                "description": "Additional units allowed before blocking when using grace_then_block"
+              }
+            },
+            "required": [
+              "strategy"
+            ]
+          },
+          "trial_config": {
+            "type": "object",
+            "description": "Optional free trial configuration",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "duration_days": {
+                "type": "integer",
+                "description": "Length of the free trial in days"
+              },
+              "trial_limits": {
+                "type": "object",
+                "description": "Usage limits during trial period",
+                "properties": {
+                  "max_requests": {
+                    "type": "integer"
+                  },
+                  "max_tokens": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Arbitrary metadata for this pricing profile"
+          }
+        },
+        "required": [
+          "display_name",
+          "currency",
+          "billing_interval"
+        ]
+      },
+      "returns": "Created pricing profile details including pricing_profile_id"
+    },
+    {
+      "name": "create_monetization_plan",
+      "description": "Create a monetization plan for an existing API product using a pricing profile or inline pricing config",
+      "stage": "create",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "api_product_id": {
+            "$ref": "#/shared_entities/api_product_id"
+          },
+          "name": {
+            "type": "string",
+            "description": "Plan name visible to customers"
+          },
+          "plan_code": {
+            "type": "string",
+            "description": "Unique internal code for this plan"
+          },
+          "plan_type": {
+            "type": "string",
+            "enum": [
+              "free",
+              "payg",
+              "subscription",
+              "hybrid"
+            ],
+            "description": "High-level monetization type for this plan"
+          },
+          "currency": {
+            "$ref": "#/shared_entities/currency_code"
+          },
+          "pricing_profile_id": {
+            "$ref": "#/shared_entities/pricing_profile_id"
+          },
+          "inline_pricing": {
+            "type": "object",
+            "description": "Inline pricing configuration if no pricing_profile_id is supplied",
+            "properties": {
+              "base_fee": {
+                "type": "number",
+                "description": "Base recurring fee per billing interval"
+              },
+              "request_unit_price": {
+                "type": "number",
+                "description": "Per-request price when applicable"
+              },
+              "included_requests": {
+                "type": "integer",
+                "description": "Number of requests included per interval"
+              }
+            }
+          },
+          "quota": {
+            "type": "object",
+            "description": "Usage quota and throttling policies",
+            "properties": {
+              "interval": {
+                "type": "string",
+                "enum": [
+                  "daily",
+                  "monthly",
+                  "per_api_key"
+                ]
+              },
+              "limits": {
+                "type": "object",
+                "description": "Various quota limits",
+                "properties": {
+                  "max_requests": {
+                    "type": "integer"
+                  },
+                  "max_tokens": {
+                    "type": "integer"
+                  },
+                  "max_bandwidth_gb": {
+                    "type": "number"
+                  }
+                }
+              },
+              "burst_limits": {
+                "type": "object",
+                "description": "Short-term burst rate limits",
+                "properties": {
+                  "max_rps": {
+                    "type": "number"
+                  },
+                  "max_rpm": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          },
+          "eligibility": {
+            "type": "object",
+            "description": "Eligibility rules for who can subscribe",
+            "properties": {
+              "allowed_customer_tiers": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "sandbox",
+                    "startup",
+                    "business",
+                    "enterprise"
+                  ]
+                }
+              },
+              "geo_restrictions": {
+                "type": "array",
+                "description": "List of ISO country codes allowed or blocked",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "mode": {
+                      "type": "string",
+                      "enum": [
+                        "allow",
+                        "deny"
+                      ]
+                    },
+                    "country_code": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "mode",
+                    "country_code"
+                  ]
+                }
+              },
+              "requires_contract": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "active",
+              "archived"
+            ],
+            "description": "Initial lifecycle status for the plan",
+            "default": "draft"
+          },
+          "metadata": {
+            "type": "object"
+          }
+        },
+        "required": [
+          "api_product_id",
+          "name",
+          "plan_type",
+          "currency"
+        ]
+      },
+      "returns": "Created plan details including plan_id and status"
+    },
+    {
+      "name": "publish_monetization_plan",
+      "description": "Transition a draft monetization plan to a published state and optionally notify eligible customers",
+      "stage": "publish",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "plan_id": {
+            "$ref": "#/shared_entities/plan_id"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the plan should become available for new subscriptions"
+          },
+          "publish_scope": {
+            "type": "string",
+            "enum": [
+              "sandbox_only",
+              "production",
+              "all"
+            ],
+            "description": "Environments in which this plan will be available"
+          },
+          "migration_policy": {
+            "type": "object",
+            "description": "How existing subscribers on related plans should be handled",
+            "properties": {
+              "auto_migrate_from_plans": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/plan_id"
+                }
+              },
+              "proration_strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "pro_rate_to_cycle",
+                  "credit_remaining"
+                ],
+                "description": "How to handle partial billing cycles during migration"
+              }
+            }
+          },
+          "notification": {
+            "type": "object",
+            "description": "Customer notification configuration",
+            "properties": {
+              "send_email": {
+                "type": "boolean",
+                "default": true
+              },
+              "email_template_id": {
+                "type": "string"
+              },
+              "notify_customer_segments": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "all",
+                    "existing_subscribers",
+                    "trial_users",
+                    "enterprise_only"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "plan_id"
+        ]
+      },
+      "returns": "Updated plan status, effective dates, and migration operations summary"
+    },
+    {
+      "name": "list_monetization_plans",
+      "description": "List and filter monetization plans across API products",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "description": "Optional filters to narrow down plans",
+            "properties": {
+              "api_product_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/api_product_id"
+                }
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "draft",
+                    "active",
+                    "deprecated",
+                    "archived"
+                  ]
+                }
+              },
+              "plan_type": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "free",
+                    "payg",
+                    "subscription",
+                    "hybrid"
+                  ]
+                }
+              },
+              "currency": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/currency_code"
+                }
+              },
+              "created_after": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_before": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional related data to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "api_product",
+                "pricing_profile",
+                "active_subscriptions_count",
+                "owner"
+              ]
+            }
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 25
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "name",
+              "active_subscriptions_count"
+            ]
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          }
+        }
+      },
+      "returns": "Paginated list of monetization plans with optional related entities"
+    },
+    {
+      "name": "get_plan_details",
+      "description": "Retrieve full details of a specific monetization plan, including pricing and quota",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "plan_id": {
+            "$ref": "#/shared_entities/plan_id"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "pricing_profile",
+                "api_product",
+                "active_subscriptions",
+                "change_history"
+              ]
+            }
+          }
+        },
+        "required": [
+          "plan_id"
+        ]
+      },
+      "returns": "Full monetization plan resource with pricing, quota, eligibility, and requested related data"
+    },
+    {
+      "name": "preview_plan_pricing",
+      "description": "Simulate charges and quotas for a hypothetical usage pattern under a given monetization plan",
+      "stage": "evaluate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "plan_id": {
+            "$ref": "#/shared_entities/plan_id"
+          },
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "billing_account_id": {
+            "$ref": "#/shared_entities/billing_account_id"
+          },
+          "usage_scenario": {
+            "type": "object",
+            "description": "Expected usage details for the preview window",
+            "properties": {
+              "window": {
+                "type": "string",
+                "enum": [
+                  "day",
+                  "month",
+                  "billing_cycle"
+                ],
+                "description": "Time window represented by the provided usage numbers"
+              },
+              "metrics": {
+                "type": "array",
+                "description": "List of anticipated usage metrics",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "metric": {
+                      "type": "string",
+                      "enum": [
+                        "requests",
+                        "tokens",
+                        "bandwidth_gb",
+                        "compute_seconds"
+                      ]
+                    },
+                    "amount": {
+                      "type": "number",
+                      "description": "Projected amount for this metric"
+                    },
+                    "distribution": {
+                      "type": "object",
+                      "description": "Optional distribution across endpoints or time",
+                      "properties": {
+                        "by_endpoint": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "path": {
+                                "type": "string"
+                              },
+                              "method": {
+                                "type": "string"
+                              },
+                              "percentage": {
+                                "type": "number"
+                              }
+                            },
+                            "required": [
+                              "path",
+                              "percentage"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "metric",
+                    "amount"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "window",
+              "metrics"
+            ]
+          },
+          "effective_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Date for which pricing rules should be evaluated; defaults to now"
+          }
+        },
+        "required": [
+          "plan_id",
+          "usage_scenario"
+        ]
+      },
+      "returns": "Pricing preview including estimated recurring charges, variable charges, taxes (if configured), and quota utilization"
+    },
+    {
+      "name": "create_subscription",
+      "description": "Subscribe a customer to a monetization plan and bind it to a billing account",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "plan_id": {
+            "$ref": "#/shared_entities/plan_id"
+          },
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "billing_account_id": {
+            "$ref": "#/shared_entities/billing_account_id"
+          },
+          "start_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Start of subscription; defaults to now"
+          },
+          "trial_override": {
+            "type": "object",
+            "description": "Override or disable plan-level trial configuration",
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "duration_days": {
+                "type": "integer"
+              }
+            }
+          },
+          "custom_limits": {
+            "type": "object",
+            "description": "Per-subscription limit overrides for quota",
+            "properties": {
+              "max_requests": {
+                "type": "integer"
+              },
+              "max_tokens": {
+                "type": "integer"
+              },
+              "max_bandwidth_gb": {
+                "type": "number"
+              }
+            }
+          },
+          "api_key_configuration": {
+            "type": "object",
+            "description": "Preferences for generated API keys or tokens",
+            "properties": {
+              "generate_api_keys": {
+                "type": "boolean",
+                "default": true
+              },
+              "number_of_keys": {
+                "type": "integer",
+                "default": 1
+              },
+              "key_prefix": {
+                "type": "string"
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Custom metadata for subscription"
+          }
+        },
+        "required": [
+          "plan_id",
+          "customer_id",
+          "billing_account_id"
+        ]
+      },
+      "returns": "Created subscription details including subscription_id, status, and generated API keys if applicable"
+    },
+    {
+      "name": "get_subscription_status",
+      "description": "Retrieve current status, usage, and billing state of a subscription",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "$ref": "#/shared_entities/subscription_id"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "usage_summary",
+                "billing_summary",
+                "api_keys",
+                "plan_details"
+              ]
+            }
+          },
+          "usage_window": {
+            "type": "object",
+            "description": "Optional time window for usage summary",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Subscription resource with lifecycle status, recent usage, billing state, and optional related data"
+    },
+    {
+      "name": "update_monetization_plan",
+      "description": "Update metadata, pricing, or quota of a monetization plan with versioning and backward compatibility controls",
+      "stage": "update",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "plan_id": {
+            "$ref": "#/shared_entities/plan_id"
+          },
+          "updates": {
+            "type": "object",
+            "description": "Fields to update on the plan",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "active",
+                  "deprecated",
+                  "archived"
+                ]
+              },
+              "pricing_profile_id": {
+                "$ref": "#/shared_entities/pricing_profile_id"
+              },
+              "inline_pricing": {
+                "type": "object",
+                "properties": {
+                  "base_fee": {
+                    "type": "number"
+                  },
+                  "request_unit_price": {
+                    "type": "number"
+                  },
+                  "included_requests": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "quota": {
+                "type": "object",
+                "properties": {
+                  "interval": {
+                    "type": "string",
+                    "enum": [
+                      "daily",
+                      "monthly",
+                      "per_api_key"
+                    ]
+                  },
+                  "limits": {
+                    "type": "object",
+                    "properties": {
+                      "max_requests": {
+                        "type": "integer"
+                      },
+                      "max_tokens": {
+                        "type": "integer"
+                      },
+                      "max_bandwidth_gb": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                }
+              },
+              "eligibility": {
+                "type": "object",
+                "properties": {
+                  "allowed_customer_tiers": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "requires_contract": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "metadata": {
+                "type": "object"
+              }
+            }
+          },
+          "compatibility_policy": {
+            "type": "object",
+            "description": "How to apply changes to existing subscriptions",
+            "properties": {
+              "apply_to_existing_subscriptions": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "on_renewal",
+                  "immediately"
+                ],
+                "default": "on_renewal"
+              },
+              "require_customer_consent": {
+                "type": "boolean",
+                "default": false
+              },
+              "rollback_on_failure": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "change_reason": {
+            "type": "string",
+            "description": "Human-readable reason for the update for audit logs"
+          }
+        },
+        "required": [
+          "plan_id",
+          "updates"
+        ]
+      },
+      "returns": "Updated plan details, including new version and compatibility actions applied"
+    },
+    {
+      "name": "cancel_subscription",
+      "description": "Cancel or schedule cancellation of a subscription, with optional proration handling",
+      "stage": "cancel",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "$ref": "#/shared_entities/subscription_id"
+          },
+          "cancellation_type": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "end_of_cycle",
+              "scheduled"
+            ],
+            "description": "When cancellation should take effect"
+          },
+          "effective_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Required if cancellation_type is scheduled"
+          },
+          "proration_strategy": {
+            "type": "string",
+            "enum": [
+              "none",
+              "credit_remaining",
+              "refund_remaining"
+            ],
+            "description": "How to handle fees for unused time"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Optional free-form reason for cancellation"
+          },
+          "retain_api_keys_until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "If set, API keys remain valid until this time despite cancellation"
+          }
+        },
+        "required": [
+          "subscription_id",
+          "cancellation_type"
+        ]
+      },
+      "returns": "Cancellation confirmation including final billing summary and subscription end date"
+    },
+    {
+      "name": "retry_billing_operation",
+      "description": "Retry a failed billing or payment operation associated with a subscription and update its monetization state",
+      "stage": "recover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "$ref": "#/shared_entities/subscription_id"
+          },
+          "operation_id": {
+            "type": "string",
+            "description": "Identifier of the failed billing operation if known"
+          },
+          "failure_context": {
+            "type": "object",
+            "description": "Context about the failure if no operation_id is provided",
+            "properties": {
+              "failure_code": {
+                "type": "string",
+                "enum": [
+                  "card_declined",
+                  "insufficient_funds",
+                  "network_error",
+                  "fraud_suspected",
+                  "unknown"
+                ]
+              },
+              "last_attempted_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "retry_strategy": {
+            "type": "object",
+            "description": "Override default retry behavior",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "scheduled",
+                  "force"
+                ]
+              },
+              "scheduled_for": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "max_attempts": {
+                "type": "integer"
+              }
+            }
+          },
+          "update_subscription_state_on_success": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to automatically re-activate a subscription if payment succeeds"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Result of retry attempt, including updated billing operation status and subscription monetization state"
+    },
+    {
+      "name": "rollback_plan_change",
+      "description": "Rollback a recent plan update or migration in case of misconfiguration or customer impact",
+      "stage": "rollback",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "plan_id": {
+            "$ref": "#/shared_entities/plan_id"
+          },
+          "target_version": {
+            "type": "string",
+            "description": "Plan version identifier to rollback to; if omitted, roll back one version"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "plan_config_only",
+              "include_subscriptions"
+            ],
+            "description": "Whether to only revert plan configuration or also remap subscriptions"
+          },
+          "subscription_filter": {
+            "type": "object",
+            "description": "Optional filter to restrict which subscriptions are affected when rolling back subscriptions",
+            "properties": {
+              "customer_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/customer_id"
+                }
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "active",
+                    "trialing",
+                    "past_due"
+                  ]
+                }
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable reason for rollback for audit"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, only report what would be changed without applying"
+          }
+        },
+        "required": [
+          "plan_id",
+          "scope"
+        ]
+      },
+      "returns": "Rollback summary including affected versions, subscriptions, and any conflicts or skipped items"
+    },
+    {
+      "name": "generate_usage_report",
+      "description": "Generate a detailed usage and revenue report for monetized APIs over a given period",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "object",
+            "description": "Scope of the report",
+            "properties": {
+              "level": {
+                "type": "string",
+                "enum": [
+                  "global",
+                  "api_product",
+                  "plan",
+                  "customer",
+                  "subscription"
+                ]
+              },
+              "api_product_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/api_product_id"
+                }
+              },
+              "plan_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/plan_id"
+                }
+              },
+              "customer_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/customer_id"
+                }
+              },
+              "subscription_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/subscription_id"
+                }
+              }
+            },
+            "required": [
+              "level"
+            ]
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Reporting time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "granularity": {
+                "type": "string",
+                "enum": [
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ],
+                "default": "day"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "metrics": {
+            "type": "array",
+            "description": "List of metrics to include in the report",
+            "items": {
+              "type": "string",
+              "enum": [
+                "requests",
+                "tokens",
+                "bandwidth_gb",
+                "compute_seconds",
+                "revenue",
+                "discounts",
+                "taxes",
+                "net_revenue"
+              ]
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "description": "Dimensions for grouping the report data",
+            "items": {
+              "type": "string",
+              "enum": [
+                "api_product",
+                "plan",
+                "customer",
+                "subscription",
+                "country",
+                "currency"
+              ]
+            }
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "csv",
+              "parquet"
+            ],
+            "default": "json"
+          },
+          "delivery": {
+            "type": "object",
+            "description": "Optional configuration for delivering the generated report",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "inline",
+                  "email",
+                  "storage"
+                ],
+                "default": "inline"
+              },
+              "email_recipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "storage_target": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "s3",
+                      "gcs",
+                      "azure_blob"
+                    ]
+                  },
+                  "path": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "scope",
+          "time_range"
+        ]
+      },
+      "returns": "Usage report metadata including usage_report_id, generation status, and access location or inline data if small"
+    },
+    {
+      "name": "bulk_import_monetization_plans",
+      "description": "Bulk-import multiple monetization_plans from an upstream source with validation and idempotency keys.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "import_source": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "json",
+                  "parquet",
+                  "kafka",
+                  "s3",
+                  "api"
+                ]
+              },
+              "location": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "format_options": {
+                "type": "object",
+                "properties": {
+                  "delimiter": {
+                    "type": "string"
+                  },
+                  "encoding": {
+                    "type": "string"
+                  },
+                  "header_row": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "required": [
+              "type",
+              "location"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "description": "Field mapping from source to canonical schema",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_id": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "batch_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "default": 500
+          },
+          "on_error": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "abort",
+              "quarantine"
+            ],
+            "default": "quarantine"
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "import_source",
+          "actor"
+        ]
+      },
+      "returns": "A bulk-import job descriptor with counts of accepted, rejected, and quarantined monetization_plans, plus a job_id for follow-up."
+    },
+    {
+      "name": "bulk_update_monetization_plans",
+      "description": "Apply a partial update to a batch of monetization_plans matched by filter or id list.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/plan_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "patch": {
+            "type": "object",
+            "description": "Fields to patch on each matched item",
+            "properties": {
+              "set": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "unset": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "add_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "remove_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "preconditions": {
+            "type": "object",
+            "description": "Optional optimistic-concurrency preconditions",
+            "properties": {
+              "if_match_version": {
+                "type": "string"
+              },
+              "expected_status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "max_items": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1000
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "patch",
+          "actor"
+        ]
+      },
+      "returns": "Summary of matched, updated, and skipped monetization_plans with per-item error details."
+    },
+    {
+      "name": "bulk_archive_monetization_plans",
+      "description": "Archive (soft-delete) a batch of monetization_plans with retention metadata and audit reasons.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/plan_id"
+            },
+            "minItems": 1
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retain_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "legal_hold": {
+            "type": "boolean",
+            "default": false
+          },
+          "tombstone_metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "ids",
+          "reason",
+          "actor"
+        ]
+      },
+      "returns": "Per-id archive results with new lifecycle state."
+    },
+    {
+      "name": "bulk_export_monetization_plans",
+      "description": "Export a filtered set of monetization_plans to a downstream destination (S3, GCS, blob, SFTP).",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Projection; empty means all fields"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "csv",
+              "parquet",
+              "ndjson"
+            ],
+            "default": "json"
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp",
+                  "http"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "compression": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "gzip",
+                  "zstd"
+                ],
+                "default": "none"
+              }
+            },
+            "required": [
+              "type",
+              "uri"
+            ]
+          },
+          "chunk_size_mb": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1024,
+            "default": 64
+          },
+          "include_audit_columns": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "sse-s3",
+                  "sse-kms",
+                  "client-side"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "destination",
+          "actor"
+        ]
+      },
+      "returns": "Export job handle including job_id, expected object URIs, row count, and signed download URLs when applicable."
+    },
+    {
+      "name": "search_monetization_plans_advanced",
+      "description": "Advanced faceted search across monetization_plans with full-text, structured filters, aggregations, and sort.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Full-text query string with Lucene-like syntax"
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "contains",
+                    "starts_with",
+                    "exists"
+                  ]
+                },
+                "value": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "array",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "aggregations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "terms",
+                    "histogram",
+                    "date_histogram",
+                    "stats",
+                    "cardinality"
+                  ]
+                },
+                "field": {
+                  "type": "string"
+                },
+                "interval": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "field"
+              ]
+            }
+          },
+          "highlight_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": []
+      },
+      "returns": "Search response with monetization_plans hits, total count, aggregation buckets, and a next-cursor."
+    },
+    {
+      "name": "create_plan_subscription",
+      "description": "Create a subscription that fires webhooks or notifications on plan lifecycle events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "created",
+                "updated",
+                "status_changed",
+                "deleted",
+                "escalated",
+                "resolved",
+                "custom"
+              ]
+            },
+            "minItems": 1
+          },
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "target": {
+            "type": "object",
+            "description": "Notification target descriptor",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "email",
+                  "sms",
+                  "webhook",
+                  "push",
+                  "slack",
+                  "teams",
+                  "pagerduty"
+                ]
+              },
+              "address": {
+                "type": "string"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "secret_ref": {
+                "type": "string",
+                "description": "Reference to a stored secret"
+              }
+            },
+            "required": [
+              "type",
+              "address"
+            ]
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "retry_policy": {
+                "type": "object",
+                "properties": {
+                  "max_attempts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  },
+                  "backoff": {
+                    "type": "string",
+                    "enum": [
+                      "linear",
+                      "exponential",
+                      "fixed"
+                    ],
+                    "default": "exponential"
+                  },
+                  "initial_delay_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  }
+                }
+              },
+              "rate_limit_per_minute": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "batch_size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            }
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "events",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "The created subscription including subscription_id, active state, and last_delivery info (initially null)."
+    },
+    {
+      "name": "list_plan_subscriptions",
+      "description": "List existing plan subscriptions with optional filters and pagination.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "target_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of subscription objects including delivery health stats."
+    },
+    {
+      "name": "deactivate_plan_subscription",
+      "description": "Deactivate or delete a plan subscription and optionally flush pending deliveries.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "delete"
+            ],
+            "default": "pause"
+          },
+          "flush_pending": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "subscription_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated subscription state and the number of pending deliveries flushed or kept."
+    },
+    {
+      "name": "get_plan_audit_log",
+      "description": "Return the audit/change log for a single plan with field-level diffs and actor info.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/plan_id"
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "include_field_diff": {
+            "type": "boolean",
+            "default": true
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Chronological list of audit events with before/after diffs, actor, and source IP/system."
+    },
+    {
+      "name": "search_audit_events",
+      "description": "Search audit events across monetization_plans for compliance and forensic review.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "actor_user_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "object_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/plan_id"
+                }
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              },
+              "source_systems": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated audit-event hits with cross-entity references."
+    },
+    {
+      "name": "schedule_plan_job",
+      "description": "Create a recurring schedule that triggers a named operation on a target set of monetization_plans.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "description": "Named operation to invoke (e.g., refresh, recompute, export, reconcile)"
+          },
+          "target_selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/plan_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Parameters passed to each invocation"
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Schedule definition",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "once",
+                  "cron",
+                  "interval",
+                  "calendar"
+                ]
+              },
+              "cron": {
+                "type": "string",
+                "description": "Cron expression (UTC by default)"
+              },
+              "interval_seconds": {
+                "type": "integer",
+                "minimum": 30
+              },
+              "start_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "max_runs": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "jitter_seconds": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "concurrency_policy": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "forbid",
+              "replace"
+            ],
+            "default": "forbid"
+          },
+          "notify_on": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure",
+                "skipped"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "operation",
+          "schedule",
+          "actor"
+        ]
+      },
+      "returns": "The created scheduled-job descriptor with job_id, next_run_at, and current status."
+    },
+    {
+      "name": "list_plan_jobs",
+      "description": "List scheduled or in-flight jobs related to monetization_plans with status filtering and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "skipped"
+                  ]
+                }
+              },
+              "operation_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "include_runs": {
+            "type": "boolean",
+            "default": false
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of plan jobs and their last run summaries."
+    },
+    {
+      "name": "cancel_plan_job",
+      "description": "Cancel a scheduled or in-flight plan job, optionally interrupting running steps.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "job_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated job status with cancellation timestamp and any side effects."
+    },
+    {
+      "name": "simulate_plan_change",
+      "description": "Simulate a proposed change against a plan (or batch) without committing; returns expected diffs and warnings.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/plan_id"
+          },
+          "proposed_change": {
+            "type": "object",
+            "description": "Polymorphic change object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "patch",
+                  "replace",
+                  "transition",
+                  "policy_apply"
+                ]
+              },
+              "patch": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "replace": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "transition_to": {
+                "type": "string"
+              },
+              "policy_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "evaluation_options": {
+            "type": "object",
+            "properties": {
+              "evaluate_rules": {
+                "type": "boolean",
+                "default": true
+              },
+              "evaluate_dependencies": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_cost_impact": {
+                "type": "boolean",
+                "default": false
+              },
+              "include_sla_impact": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "proposed_change",
+          "actor"
+        ]
+      },
+      "returns": "Simulation result with predicted diffs, rule violations, cost/SLA impact, and a confidence score."
+    },
+    {
+      "name": "request_plan_approval",
+      "description": "Open an approval request for a sensitive plan change requiring reviewer sign-off.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/plan_id"
+          },
+          "change_summary": {
+            "type": "string"
+          },
+          "change_payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "user_id": {
+                  "type": "string"
+                },
+                "role_required": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "user_id"
+              ]
+            },
+            "minItems": 1
+          },
+          "quorum": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "escalation_policy_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "approvers",
+          "actor"
+        ]
+      },
+      "returns": "Created approval request with approval_request_id, current state, and notification targets."
+    },
+    {
+      "name": "submit_plan_approval_decision",
+      "description": "Submit an approve, reject, or request-changes decision against a plan approval request.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_request_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "request_changes"
+            ]
+          },
+          "comment": {
+            "type": "string"
+          },
+          "signed_evidence": {
+            "type": "object",
+            "properties": {
+              "signature": {
+                "type": "string"
+              },
+              "signed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "totp",
+                  "webauthn",
+                  "sso",
+                  "manual"
+                ]
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "approval_request_id",
+          "decision",
+          "actor"
+        ]
+      },
+      "returns": "Updated approval request state including quorum progress and final decision (if reached)."
+    },
+    {
+      "name": "add_plan_comment",
+      "description": "Append a comment or annotation to a plan, optionally attaching files or mentioning users.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/plan_id"
+          },
+          "body": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "internal",
+              "tenant",
+              "public"
+            ],
+            "default": "internal"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_name": {
+                  "type": "string"
+                },
+                "content_type": {
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "type": "integer"
+                },
+                "uri": {
+                  "type": "string"
+                },
+                "checksum_sha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_name",
+                "uri"
+              ]
+            }
+          },
+          "parent_comment_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "body",
+          "actor"
+        ]
+      },
+      "returns": "The created comment object with comment_id, timestamps, and visibility-resolved permissions."
+    },
+    {
+      "name": "list_plan_comments",
+      "description": "List comments and annotations attached to a plan, with optional thread expansion.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/plan_id"
+          },
+          "include_threads": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_attachments": {
+            "type": "boolean",
+            "default": true
+          },
+          "visibility_in": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "internal",
+                "tenant",
+                "public"
+              ]
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Paginated comment list with thread tree and attachment metadata."
+    },
+    {
+      "name": "snapshot_plan",
+      "description": "Create a point-in-time immutable snapshot of a plan for forensic, rollback, or compliance use.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/plan_id"
+          },
+          "label": {
+            "type": "string"
+          },
+          "include_related": {
+            "type": "array",
+            "description": "Optional related-entity inclusion list",
+            "items": {
+              "type": "string"
+            }
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "kms",
+                  "client"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "retention": {
+            "type": "object",
+            "properties": {
+              "policy": {
+                "type": "string",
+                "enum": [
+                  "short",
+                  "standard",
+                  "long",
+                  "indefinite"
+                ]
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "actor"
+        ]
+      },
+      "returns": "Snapshot descriptor with snapshot_id, checksum, byte size, and retention expiry."
+    },
+    {
+      "name": "restore_plan_snapshot",
+      "description": "Restore a plan from a previously created snapshot, optionally as a new copy.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "overwrite",
+                  "new_copy",
+                  "merge"
+                ]
+              },
+              "target_id": {
+                "$ref": "#/shared_entities/plan_id"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "fail",
+              "skip_existing",
+              "overwrite"
+            ],
+            "default": "fail"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "Restore job descriptor including resulting id and any per-field conflicts that were resolved."
+    },
+    {
+      "name": "get_plan_metrics",
+      "description": "Compute KPI metrics over monetization_plans (counts, MTTR, SLA compliance, error rates) for a time window.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "count",
+                "open_count",
+                "closed_count",
+                "mttr_seconds",
+                "mttd_seconds",
+                "sla_compliance_pct",
+                "error_rate",
+                "p50_latency_ms",
+                "p95_latency_ms",
+                "p99_latency_ms",
+                "throughput_per_minute",
+                "backlog_age_seconds"
+              ]
+            },
+            "minItems": 1
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "1m",
+              "5m",
+              "15m",
+              "1h",
+              "1d",
+              "1w"
+            ],
+            "default": "1h"
+          }
+        },
+        "required": [
+          "metrics"
+        ]
+      },
+      "returns": "Time-bucketed metric series and aggregate KPIs for the matched monetization_plans."
+    },
+    {
+      "name": "build_plan_dashboard",
+      "description": "Persist a named dashboard composed of widgets (charts, tables, single-stat) over monetization_plans data.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "widgets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "line",
+                    "bar",
+                    "pie",
+                    "table",
+                    "single_stat",
+                    "heatmap"
+                  ]
+                },
+                "query": {
+                  "type": "object",
+                  "properties": {
+                    "metrics": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "filter": {
+                      "type": "object",
+                      "description": "Filter constraints",
+                      "properties": {
+                        "text": {
+                          "type": "string",
+                          "description": "Free-text search across indexed fields"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "labels": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "Key/value labels to match"
+                        },
+                        "created_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "updated_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "owner_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "group_by": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "time_range": {
+                      "type": "object",
+                      "description": "Time window for filtering or scoping the operation",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "end": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "timezone": {
+                          "type": "string",
+                          "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "metrics"
+                  ]
+                },
+                "position": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "integer"
+                    },
+                    "y": {
+                      "type": "integer"
+                    },
+                    "w": {
+                      "type": "integer"
+                    },
+                    "h": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "title",
+                "type",
+                "query"
+              ]
+            },
+            "minItems": 1
+          },
+          "refresh_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "default": 60
+          },
+          "shared_with": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "widgets",
+          "actor"
+        ]
+      },
+      "returns": "Created dashboard descriptor with dashboard_id, shareable URL, and computed first-render preview."
+    },
+    {
+      "name": "upsert_plan_policy",
+      "description": "Create or update a policy/rule used to govern plan behavior, validation, or routing.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "expression": {
+                  "type": "string",
+                  "description": "CEL or JEXL expression"
+                },
+                "action": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "allow",
+                        "deny",
+                        "route",
+                        "transform",
+                        "notify",
+                        "tag"
+                      ]
+                    },
+                    "params": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "expression",
+                "action"
+              ]
+            },
+            "minItems": 1
+          },
+          "version_strategy": {
+            "type": "string",
+            "enum": [
+              "bump_minor",
+              "bump_major",
+              "replace"
+            ],
+            "default": "bump_minor"
+          },
+          "effective_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "rules",
+          "actor"
+        ]
+      },
+      "returns": "Persisted policy with policy_id, version, rule count, and validation warnings (if any)."
+    },
+    {
+      "name": "list_plan_policies",
+      "description": "List policies governing monetization_plans with version, scope, and lifecycle filters.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "scope_label": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          },
+          "include_rule_summary": {
+            "type": "boolean",
+            "default": true
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated policy entries with rule counts and last evaluation metrics."
+    }
+  ]
+}

@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { ArrowRight, Languages, Users2, FileCode, Play, MessagesSquare, BookOpen } from "lucide-react";
+import { ArrowRight, Languages, Users2, FileCode, Play, MessagesSquare, BookOpen, Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission } from "@/lib/project-rbac";
 import {
@@ -55,14 +56,49 @@ export default async function ProjectOverviewPage({
     { label: "Conversations", value: convos, href: `/projects/${projectId}/conversations`, icon: MessagesSquare },
   ];
 
+  const isEmpty =
+    personas + languages + templates + runs + knowledge === 0;
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
-        {project.description && (
-          <p className="mt-1 text-sm text-muted-foreground">{project.description}</p>
-        )}
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
+          {project.description && (
+            <p className="mt-1 text-sm text-muted-foreground">{project.description}</p>
+          )}
+        </div>
+        <Button asChild size="sm">
+          <Link href={`/projects/${projectId}/bootstrap`}>
+            <Sparkles className="mr-1 h-4 w-4" />
+            Bootstrap
+          </Link>
+        </Button>
       </div>
+
+      {isEmpty && (
+        <Card className="border-primary/30 bg-primary/[0.03]">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4 text-primary" />
+              Start from a single prompt
+            </CardTitle>
+            <CardDescription>
+              Describe the project once and the orchestrator generates taxonomy
+              nodes, language profiles, personas, templates, tools, a flow, a
+              rubric, and a default benchmark for you — all wired together.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild>
+              <Link href={`/projects/${projectId}/bootstrap`}>
+                <Sparkles className="mr-2 h-4 w-4" />
+                Generate everything
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
         {cards.map((c) => (

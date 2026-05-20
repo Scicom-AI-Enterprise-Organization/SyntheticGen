@@ -1,0 +1,2933 @@
+{
+  "workflow_name": "billing_revenue_assurance",
+  "description": "End-to-end telecom billing and revenue assurance workflow from configuration discovery to leakage detection, correction, and recovery.",
+  "domain": "telco_netops/core_optimization",
+  "shared_entities": {
+    "network_element_id": {
+      "type": "string",
+      "description": "Unique identifier of a network element (e.g., MSC, PGW, GGSN, OCS, PCRF)."
+    },
+    "billing_profile_id": {
+      "type": "string",
+      "description": "Identifier for a billing configuration profile or tariff plan."
+    },
+    "usage_sample_batch_id": {
+      "type": "string",
+      "description": "Identifier for a collected batch of usage samples or CDRs."
+    },
+    "discrepancy_case_id": {
+      "type": "string",
+      "description": "Identifier for a detected revenue discrepancy case."
+    },
+    "remediation_plan_id": {
+      "type": "string",
+      "description": "Identifier for a generated remediation plan to fix discrepancies."
+    },
+    "rollback_plan_id": {
+      "type": "string",
+      "description": "Identifier for a generated rollback plan for configuration changes."
+    },
+    "job_id": {
+      "type": "string",
+      "description": "Identifier for asynchronous jobs (collection, analysis, simulation, remediation)."
+    },
+    "time_window": {
+      "type": "object",
+      "description": "Reusable time window definition.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Start of the time window (inclusive, UTC)."
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time",
+          "description": "End of the time window (exclusive, UTC)."
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone for reporting (e.g., 'UTC', 'Europe/Berlin')."
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "discover_billing_topology",
+      "description": "Discover and retrieve current billing-related network topology, including network elements, charging domains, and linked billing profiles.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "all",
+              "core",
+              "access",
+              "roaming",
+              "data",
+              "voice",
+              "messaging"
+            ],
+            "description": "Logical scope of discovery."
+          },
+          "filters": {
+            "type": "object",
+            "description": "Optional discovery filters.",
+            "properties": {
+              "regions": {
+                "type": "array",
+                "description": "List of region or market identifiers to limit discovery.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "vendor": {
+                "type": "array",
+                "description": "Vendor names to include (e.g., 'Huawei', 'Ericsson').",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "element_types": {
+                "type": "array",
+                "description": "Types of network elements to include.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "OCS",
+                    "OFCS",
+                    "SDP",
+                    "PGW",
+                    "GGSN",
+                    "SGSN",
+                    "MSC",
+                    "SMSC",
+                    "MMSC",
+                    "CHARGING_GATEWAY"
+                  ]
+                }
+              },
+              "include_inactive": {
+                "type": "boolean",
+                "description": "Whether to include inactive or decommissioned elements.",
+                "default": false
+              }
+            }
+          },
+          "include_details": {
+            "type": "array",
+            "description": "Additional details to include in discovery output.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "connectivity",
+                "rating_groups",
+                "service_classes",
+                "linked_billing_profiles"
+              ]
+            }
+          }
+        },
+        "required": [
+          "scope"
+        ]
+      },
+      "returns": "Discovered topology including list of network elements, their roles, connectivity, and associated billing profiles."
+    },
+    {
+      "name": "get_billing_profile",
+      "description": "Retrieve details of a specific billing profile, including rating rules, thresholds, and mapping to network elements.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "billing_profile_id": {
+            "type": "string",
+            "description": "Target billing profile identifier."
+          },
+          "include": {
+            "type": "array",
+            "description": "Optional extended sections to include.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "rating_rules",
+                "discount_rules",
+                "thresholds",
+                "sharing_groups",
+                "associated_elements",
+                "audit_history"
+              ]
+            }
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp for configuration version (for historical or scheduled changes)."
+          }
+        },
+        "required": [
+          "billing_profile_id"
+        ]
+      },
+      "returns": "Full billing profile definition including rating rules, mapping to services and network elements, and optional historical/audit information."
+    },
+    {
+      "name": "collect_usage_samples",
+      "description": "Initiate collection of usage samples (CDRs/UDRs) from selected network elements for a given time window and subscriber segment.",
+      "stage": "collection",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "time_window": {
+            "$ref": "#/shared_entities/time_window"
+          },
+          "network_elements": {
+            "type": "array",
+            "description": "List of network element IDs to collect from. If omitted, inferred from billing profiles or scope.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "billing_profiles": {
+            "type": "array",
+            "description": "Optional billing profiles to constrain collection to specific tariffs or offers.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "subscriber_filter": {
+            "type": "object",
+            "description": "Filter which subscribers or traffic to collect.",
+            "properties": {
+              "msisdn_range": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "description": "Inclusive start MSISDN."
+                  },
+                  "to": {
+                    "type": "string",
+                    "description": "Inclusive end MSISDN."
+                  }
+                }
+              },
+              "imsi_prefixes": {
+                "type": "array",
+                "description": "Limit to subscribers whose IMSI starts with one of these prefixes.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "segments": {
+                "type": "array",
+                "description": "Commercial segments or groups.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "consumer_prepaid",
+                    "consumer_postpaid",
+                    "enterprise",
+                    "m2m_iot",
+                    "roaming_in",
+                    "roaming_out"
+                  ]
+                }
+              }
+            }
+          },
+          "sample_strategy": {
+            "type": "object",
+            "description": "Sampling parameters to limit data volume.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "full",
+                  "random",
+                  "stratified"
+                ],
+                "default": "random"
+              },
+              "target_records": {
+                "type": "integer",
+                "minimum": 1000,
+                "description": "Approximate number of records to collect."
+              },
+              "seed": {
+                "type": "integer",
+                "description": "Random seed for reproducible sampling."
+              }
+            }
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "raw_cdr",
+              "normalized_json",
+              "parquet"
+            ],
+            "default": "normalized_json"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high"
+            ],
+            "default": "normal"
+          }
+        },
+        "required": [
+          "time_window"
+        ]
+      },
+      "returns": "Job descriptor including job_id, estimated completion time, and resulting usage_sample_batch_id (once available)."
+    },
+    {
+      "name": "get_job_status",
+      "description": "Retrieve status and progress information for a long-running job such as collection, analysis, simulation, or remediation.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "description": "Identifier of the job to query."
+          },
+          "include_history": {
+            "type": "boolean",
+            "description": "Whether to include historical state transitions for the job.",
+            "default": false
+          },
+          "include_logs": {
+            "type": "object",
+            "description": "Log retrieval options.",
+            "properties": {
+              "levels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "INFO",
+                    "WARN",
+                    "ERROR",
+                    "DEBUG"
+                  ]
+                }
+              },
+              "max_entries": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 1000,
+                "default": 100
+              }
+            }
+          }
+        },
+        "required": [
+          "job_id"
+        ]
+      },
+      "returns": "Job status including state, progress percentage, timestamps, recent log messages, and any produced entity IDs (e.g., usage_sample_batch_id, remediation_plan_id)."
+    },
+    {
+      "name": "run_leakage_analysis",
+      "description": "Run a revenue leakage analysis on collected usage samples and billing profiles to detect discrepancies between expected and actual charging.",
+      "stage": "analysis",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "usage_sample_batch_id": {
+            "type": "string",
+            "description": "Identifier of the usage sample batch to analyze."
+          },
+          "reference_billing_profiles": {
+            "type": "array",
+            "description": "Billing profiles to use as reference for expected rating. If omitted, auto-detected.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "analysis_scope": {
+            "type": "object",
+            "description": "Define which discrepancy types to search for.",
+            "properties": {
+              "dimensions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "rating_mismatch",
+                    "missing_cdrs",
+                    "duplicate_cdrs",
+                    "discount_inconsistency",
+                    "roaming_charges",
+                    "tax_application",
+                    "rounding_behavior"
+                  ]
+                }
+              },
+              "thresholds": {
+                "type": "object",
+                "description": "Monetary and count thresholds for flagging discrepancies.",
+                "properties": {
+                  "min_amount_per_case": {
+                    "type": "number",
+                    "description": "Minimum absolute revenue impact to open a discrepancy case."
+                  },
+                  "min_total_batch_impact": {
+                    "type": "number",
+                    "description": "Minimum total impact across batch to treat as significant."
+                  },
+                  "min_cdr_count": {
+                    "type": "integer",
+                    "description": "Minimum number of affected CDRs per case."
+                  }
+                }
+              }
+            }
+          },
+          "simulation_mode": {
+            "type": "string",
+            "enum": [
+              "offline",
+              "shadow",
+              "production_compare"
+            ],
+            "default": "offline",
+            "description": "How expected charges are computed versus live systems."
+          },
+          "context_tags": {
+            "type": "array",
+            "description": "Arbitrary tags for later correlation (e.g., 'promo_XYZ', 'roaming_migration').",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "usage_sample_batch_id"
+        ]
+      },
+      "returns": "Job descriptor including job_id and, upon completion, a summary of detected discrepancies and created discrepancy_case_ids."
+    },
+    {
+      "name": "list_discrepancy_cases",
+      "description": "List discrepancy cases created by leakage analysis, filterable by severity, status, and timeframe.",
+      "stage": "analysis",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "time_window": {
+            "$ref": "#/shared_entities/time_window"
+          },
+          "status": {
+            "type": "array",
+            "description": "Filter by case status.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "open",
+                "triaged",
+                "under_investigation",
+                "resolved",
+                "closed",
+                "dismissed"
+              ]
+            }
+          },
+          "severity": {
+            "type": "array",
+            "description": "Filter by severity levels.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ]
+            }
+          },
+          "dimensions": {
+            "type": "array",
+            "description": "Filter by discrepancy dimension/type.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "rating_mismatch",
+                "missing_cdrs",
+                "duplicate_cdrs",
+                "discount_inconsistency",
+                "roaming_charges",
+                "tax_application",
+                "rounding_behavior"
+              ]
+            }
+          },
+          "paging": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 200,
+                "default": 50
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "severity",
+              "potential_revenue_impact"
+            ],
+            "default": "potential_revenue_impact"
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          }
+        }
+      },
+      "returns": "Paged list of discrepancy cases with basic attributes and potential revenue impact per case."
+    },
+    {
+      "name": "get_discrepancy_case_details",
+      "description": "Retrieve detailed information for a specific discrepancy case, including sample CDRs, computed vs billed charges, and suspected root cause.",
+      "stage": "analysis",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "discrepancy_case_id": {
+            "type": "string",
+            "description": "Identifier of the discrepancy case."
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional sections to include.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "sample_cdrs",
+                "full_cdr_set_metadata",
+                "expected_vs_actual_breakdown",
+                "suspected_rules",
+                "impacted_segments",
+                "audit_trail",
+                "linked_remediation_plans"
+              ]
+            }
+          },
+          "cdr_sample_limit": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 1000,
+            "default": 100,
+            "description": "Maximum number of CDR samples to return if requested."
+          }
+        },
+        "required": [
+          "discrepancy_case_id"
+        ]
+      },
+      "returns": "Detailed view of the discrepancy case, including monetary impact, root cause hypotheses, and references to usage records."
+    },
+    {
+      "name": "simulate_billing_adjustment",
+      "description": "Simulate configuration changes or billing profile adjustments to estimate impact on revenue and subscriber charges before applying changes.",
+      "stage": "simulation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_scope": {
+            "type": "object",
+            "description": "Scope of the simulation.",
+            "properties": {
+              "billing_profile_id": {
+                "type": "string",
+                "description": "Primary billing profile to simulate changes for."
+              },
+              "discrepancy_case_id": {
+                "type": "string",
+                "description": "Optional discrepancy case as focus for simulation."
+              },
+              "usage_sample_batch_id": {
+                "type": "string",
+                "description": "Optional batch of usage samples for what-if simulation."
+              }
+            }
+          },
+          "proposed_changes": {
+            "type": "array",
+            "description": "List of proposed configuration changes to simulate.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "change_id": {
+                  "type": "string",
+                  "description": "Client-supplied local identifier for this change."
+                },
+                "entity_type": {
+                  "type": "string",
+                  "enum": [
+                    "rating_rule",
+                    "discount_rule",
+                    "threshold",
+                    "rounding_policy",
+                    "tax_rule"
+                  ]
+                },
+                "entity_key": {
+                  "type": "string",
+                  "description": "Identifier or natural key of the rule/policy being changed."
+                },
+                "operation": {
+                  "type": "string",
+                  "enum": [
+                    "create",
+                    "update",
+                    "delete"
+                  ]
+                },
+                "current_value_snapshot": {
+                  "type": "object",
+                  "description": "Snapshot of current configuration (for audit and rollback).",
+                  "additionalProperties": true
+                },
+                "proposed_value": {
+                  "type": "object",
+                  "description": "Proposed new configuration object. Shape depends on entity_type.",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "change_id",
+                "entity_type",
+                "entity_key",
+                "operation"
+              ]
+            }
+          },
+          "assumptions": {
+            "type": "object",
+            "description": "Simulation assumptions and toggles.",
+            "properties": {
+              "include_taxes": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_discounts": {
+                "type": "boolean",
+                "default": true
+              },
+              "apply_future_promotions": {
+                "type": "boolean",
+                "default": false
+              },
+              "traffic_growth_factor": {
+                "type": "number",
+                "description": "Multiplier to scale usage volumes (e.g., 1.1 for +10%).",
+                "default": 1.0
+              },
+              "time_horizon_days": {
+                "type": "integer",
+                "description": "Number of days to extrapolate revenue impact.",
+                "default": 30
+              }
+            }
+          },
+          "output_detail_level": {
+            "type": "string",
+            "enum": [
+              "summary_only",
+              "profile_level",
+              "segment_level",
+              "cdr_level"
+            ],
+            "default": "profile_level"
+          }
+        },
+        "required": [
+          "target_scope",
+          "proposed_changes"
+        ]
+      },
+      "returns": "Job descriptor including job_id; once completed, provides estimated revenue impact, distribution across segments, and risk indicators."
+    },
+    {
+      "name": "generate_remediation_plan",
+      "description": "Generate a remediation plan for a discrepancy case, including configuration changes and optional customer-level adjustments.",
+      "stage": "remediation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "discrepancy_case_id": {
+            "type": "string",
+            "description": "Discrepancy case to remediate."
+          },
+          "strategy": {
+            "type": "string",
+            "enum": [
+              "config_fix_only",
+              "config_plus_backbilling",
+              "config_plus_goodwill_credit"
+            ],
+            "default": "config_fix_only",
+            "description": "Overall remediation strategy."
+          },
+          "backbilling_policy": {
+            "type": "object",
+            "description": "Applicable if backbilling or credits are part of strategy.",
+            "properties": {
+              "lookback_days": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 365
+              },
+              "max_amount_per_subscriber": {
+                "type": "number"
+              },
+              "apply_interest": {
+                "type": "boolean",
+                "default": false
+              },
+              "rounding_mode": {
+                "type": "string",
+                "enum": [
+                  "floor",
+                  "ceil",
+                  "nearest"
+                ],
+                "default": "nearest"
+              }
+            }
+          },
+          "execution_constraints": {
+            "type": "object",
+            "description": "Operational constraints for plan execution.",
+            "properties": {
+              "no_downtime_windows": {
+                "type": "array",
+                "description": "Time windows when changes must not be activated.",
+                "items": {
+                  "$ref": "#/shared_entities/time_window"
+                }
+              },
+              "max_subscribers_per_batch": {
+                "type": "integer",
+                "default": 50000
+              },
+              "dry_run_only": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          }
+        },
+        "required": [
+          "discrepancy_case_id",
+          "strategy"
+        ]
+      },
+      "returns": "Generated remediation_plan_id and plan summary including list of proposed steps, their dependencies, and estimated recovered or refunded amounts."
+    },
+    {
+      "name": "apply_remediation_plan",
+      "description": "Execute a remediation plan, optionally in phased batches, and track execution status and errors.",
+      "stage": "remediation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "remediation_plan_id": {
+            "type": "string",
+            "description": "Identifier of the remediation plan to apply."
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "dry_run",
+              "phased",
+              "full"
+            ],
+            "default": "phased"
+          },
+          "phasing_config": {
+            "type": "object",
+            "description": "Applicable when execution_mode is 'phased'.",
+            "properties": {
+              "phase_size": {
+                "type": "integer",
+                "description": "Number of subscribers or impacted accounts per phase."
+              },
+              "phase_interval_minutes": {
+                "type": "integer",
+                "description": "Interval between phases in minutes."
+              },
+              "start_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Optional start time for first phase."
+              },
+              "stop_on_error_rate": {
+                "type": "number",
+                "description": "Abort if error rate exceeds this fraction (e.g., 0.05 for 5%)."
+              }
+            }
+          },
+          "approval": {
+            "type": "object",
+            "description": "Approval metadata for audit purposes.",
+            "properties": {
+              "approved_by": {
+                "type": "string"
+              },
+              "ticket_reference": {
+                "type": "string",
+                "description": "External change request or incident ticket ID."
+              },
+              "notes": {
+                "type": "string",
+                "maxLength": 1000
+              }
+            }
+          }
+        },
+        "required": [
+          "remediation_plan_id"
+        ]
+      },
+      "returns": "Job descriptor including job_id and initial execution status, with references to impacted network elements and subscribers."
+    },
+    {
+      "name": "create_rollback_plan",
+      "description": "Create a rollback plan for configuration changes introduced by a remediation plan, enabling safe reversal if issues occur.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "remediation_plan_id": {
+            "type": "string",
+            "description": "Remediation plan whose config changes should be reversible."
+          },
+          "rollback_scope": {
+            "type": "object",
+            "description": "Scope of rollback.",
+            "properties": {
+              "include_subscriber_adjustments": {
+                "type": "boolean",
+                "default": false,
+                "description": "Whether to attempt to reverse monetary adjustments as well."
+              },
+              "limit_to_failed_steps": {
+                "type": "boolean",
+                "default": true,
+                "description": "If true, only generate rollback for failed or partially applied steps."
+              },
+              "time_window": {
+                "$ref": "#/shared_entities/time_window"
+              }
+            }
+          },
+          "risk_tolerance": {
+            "type": "string",
+            "enum": [
+              "conservative",
+              "balanced",
+              "aggressive"
+            ],
+            "default": "balanced",
+            "description": "Controls how much automation vs manual confirmation is required."
+          }
+        },
+        "required": [
+          "remediation_plan_id"
+        ]
+      },
+      "returns": "rollback_plan_id and summary of rollbackable entities, dependencies, and any manual steps required."
+    },
+    {
+      "name": "execute_rollback_plan",
+      "description": "Execute a rollback plan to revert billing configuration changes or monetary adjustments made by a remediation plan.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "rollback_plan_id": {
+            "type": "string",
+            "description": "Identifier of the rollback plan to execute."
+          },
+          "execution_options": {
+            "type": "object",
+            "description": "Execution-time options for rollback.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "validate_only",
+                  "partial",
+                  "full"
+                ],
+                "default": "validate_only"
+              },
+              "target_entities": {
+                "type": "array",
+                "description": "Optional list of specific entities (rules, subscribers) to rollback.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "entity_type": {
+                      "type": "string",
+                      "enum": [
+                        "rating_rule",
+                        "discount_rule",
+                        "threshold",
+                        "rounding_policy",
+                        "tax_rule",
+                        "subscriber_adjustment"
+                      ]
+                    },
+                    "entity_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "entity_type",
+                    "entity_id"
+                  ]
+                }
+              },
+              "stop_on_first_error": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for rollback invocation (e.g., 'unexpected_overcharge', 'system_instability')."
+          }
+        },
+        "required": [
+          "rollback_plan_id"
+        ]
+      },
+      "returns": "Job descriptor including job_id; once completed, provides rollback execution report with success/failure per entity and residual risk."
+    },
+    {
+      "name": "retry_failed_operation",
+      "description": "Retry failed steps in a previous remediation or rollback job with adjusted parameters or narrowed scope.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "description": "Identifier of the original remediation or rollback job."
+          },
+          "retry_scope": {
+            "type": "object",
+            "description": "Scope for retrying failed operations.",
+            "properties": {
+              "include_error_types": {
+                "type": "array",
+                "description": "Error types to include in retry.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "transient_network",
+                    "validation",
+                    "timeout",
+                    "dependency_failure",
+                    "unknown"
+                  ]
+                }
+              },
+              "max_retry_count_per_entity": {
+                "type": "integer",
+                "default": 1,
+                "minimum": 1,
+                "maximum": 5
+              },
+              "limit_entities": {
+                "type": "integer",
+                "description": "Optional cap on number of entities to retry."
+              }
+            }
+          },
+          "override_parameters": {
+            "type": "object",
+            "description": "Optional overrides for execution behavior on retry.",
+            "properties": {
+              "new_phase_size": {
+                "type": "integer"
+              },
+              "new_timeout_seconds": {
+                "type": "integer"
+              },
+              "allow_partial_success": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "initiated_by": {
+            "type": "string",
+            "description": "User or system initiating the retry."
+          }
+        },
+        "required": [
+          "job_id"
+        ]
+      },
+      "returns": "New job_id for the retry operation and a summary of which entities or steps are scheduled for retry."
+    },
+    {
+      "name": "search_revenue_assurance_entities",
+      "description": "Faceted search across revenue_assurance entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching revenue_assurance entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_revenue_assurance_records",
+      "description": "Bulk-create up to N revenue_assurance records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_revenue_assurance_records",
+      "description": "Apply a partial update patch to many revenue_assurance records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_revenue_assurance_records",
+      "description": "Delete or soft-delete many revenue_assurance records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_revenue_assurance_dataset",
+      "description": "Schedule or stream an export of revenue_assurance data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_revenue_assurance_dataset",
+      "description": "Validate and import a revenue_assurance dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_revenue_assurance_state",
+      "description": "Create a point-in-time snapshot of one or more revenue_assurance entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_revenue_assurance_snapshot",
+      "description": "Restore revenue_assurance state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_revenue_assurance_metrics",
+      "description": "Query aggregated metrics/KPIs for the revenue_assurance workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_revenue_assurance_dashboard",
+      "description": "Compose a dashboard view across revenue_assurance metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_revenue_assurance_audit_events",
+      "description": "Search the revenue_assurance audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_revenue_assurance_events",
+      "description": "Create a webhook subscription that delivers revenue_assurance workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_revenue_assurance_subscriptions",
+      "description": "List webhook subscriptions for revenue_assurance events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_revenue_assurance_subscription",
+      "description": "Remove a webhook subscription for revenue_assurance events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_revenue_assurance_job",
+      "description": "Schedule a recurring or one-off revenue_assurance job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_revenue_assurance_schedules",
+      "description": "List scheduled revenue_assurance jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_revenue_assurance_schedule",
+      "description": "Cancel or pause a scheduled revenue_assurance job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_revenue_assurance_operation",
+      "description": "Run a what-if simulation of a revenue_assurance operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_revenue_assurance_approval",
+      "description": "Open an approval request for a revenue_assurance action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_revenue_assurance_approval",
+      "description": "Record an approve/reject/abstain decision on a revenue_assurance approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_revenue_assurance_comment",
+      "description": "Add a threaded comment or annotation to any revenue_assurance entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_revenue_assurance_comments",
+      "description": "List comments/annotations attached to a revenue_assurance entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_revenue_assurance_policy",
+      "description": "Create or update a policy/rule controlling revenue_assurance behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_revenue_assurance_policies",
+      "description": "List revenue_assurance policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_revenue_assurance_entities",
+      "description": "Create a typed relationship between two revenue_assurance-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_revenue_assurance_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a revenue_assurance entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_revenue_assurance_entities",
+      "description": "Add, remove, or replace tags on one or many revenue_assurance entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}

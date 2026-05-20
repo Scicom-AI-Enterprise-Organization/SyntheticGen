@@ -1,0 +1,4478 @@
+{
+  "workflow_name": "email_data_governance_flow",
+  "description": "Data governance and stewardship workflow for a CPaaS email API, covering classification, policy definition, consent management, compliance checks, retention, and audit.",
+  "domain": "taas_cpaas/email_api",
+  "shared_entities": {
+    "email_template_id": {
+      "type": "string",
+      "description": "Unique identifier for an email template definition."
+    },
+    "policy_id": {
+      "type": "string",
+      "description": "Unique identifier for a data governance policy."
+    },
+    "consent_profile_id": {
+      "type": "string",
+      "description": "Unique identifier for a recipient's consent profile."
+    },
+    "governance_rule_set_id": {
+      "type": "string",
+      "description": "Identifier for a combined set of policies and rules applied to a sending context."
+    },
+    "compliance_check_id": {
+      "type": "string",
+      "description": "Identifier for a specific pre-send compliance check execution."
+    },
+    "retention_job_id": {
+      "type": "string",
+      "description": "Identifier for a data retention or deletion job."
+    },
+    "email_campaign_id": {
+      "type": "string",
+      "description": "Identifier for a logical email sending campaign or program."
+    },
+    "governance_violation_id": {
+      "type": "string",
+      "description": "Identifier for a logged governance violation event."
+    },
+    "data_export_request_id": {
+      "type": "string",
+      "description": "Identifier for a subject data export request."
+    }
+  },
+  "functions": [
+    {
+      "name": "classify_email_template",
+      "description": "Classify an email template for sensitivity, data categories, and regulatory requirements.",
+      "stage": "discover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "email_template_id": {
+            "type": "string",
+            "description": "Template identifier to classify."
+          },
+          "content_snapshot": {
+            "type": "object",
+            "description": "Optional snapshot of the template content, used if the classifier cannot fetch it.",
+            "properties": {
+              "subject": {
+                "type": "string",
+                "description": "Subject line text."
+              },
+              "html_body": {
+                "type": "string",
+                "description": "HTML content of the email body."
+              },
+              "text_body": {
+                "type": "string",
+                "description": "Plain text content of the email body."
+              },
+              "placeholders": {
+                "type": "array",
+                "description": "Dynamic placeholders used in the template and the semantic data they represent.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "description": "Placeholder name, e.g., {{first_name}}."
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "Human-readable description of data contained."
+                    },
+                    "data_category": {
+                      "type": "string",
+                      "description": "Primary data category for this placeholder.",
+                      "enum": [
+                        "personal",
+                        "sensitive_personal",
+                        "financial",
+                        "health",
+                        "behavioral",
+                        "contact",
+                        "device",
+                        "other"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "data_category"
+                  ]
+                }
+              }
+            }
+          },
+          "classification_hints": {
+            "type": "object",
+            "description": "Optional hints to guide classification.",
+            "properties": {
+              "business_unit": {
+                "type": "string",
+                "description": "Business unit or product line that owns this template."
+              },
+              "intended_regions": {
+                "type": "array",
+                "description": "Primary geographic regions of recipients.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "processing_purposes": {
+                "type": "array",
+                "description": "Purposes for which data is processed in this email.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "marketing",
+                    "transactional",
+                    "security",
+                    "account_management",
+                    "research",
+                    "other"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "email_template_id"
+        ]
+      },
+      "returns": "Classification record including sensitivity level, detected data categories, applicable regulations, and recommended governance_rule_set_id."
+    },
+    {
+      "name": "define_governance_policy",
+      "description": "Define or update a data governance policy for email processing, including scope, rules, and enforcement actions.",
+      "stage": "design",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string",
+            "description": "Existing policy to update. Omit to create a new policy."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "High-level policy metadata.",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Human-readable name for the policy."
+              },
+              "description": {
+                "type": "string",
+                "description": "Detailed description of the policy intent."
+              },
+              "status": {
+                "type": "string",
+                "description": "Lifecycle status of the policy.",
+                "enum": [
+                  "draft",
+                  "active",
+                  "deprecated"
+                ]
+              },
+              "owner": {
+                "type": "string",
+                "description": "Business or technical owner of this policy."
+              },
+              "tags": {
+                "type": "object",
+                "description": "Arbitrary key-value tags for grouping and search.",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "name",
+              "status"
+            ]
+          },
+          "scope": {
+            "type": "object",
+            "description": "Scope defining where this policy applies.",
+            "properties": {
+              "regions": {
+                "type": "array",
+                "description": "Regions or jurisdictions this policy applies to.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "regulations": {
+                "type": "array",
+                "description": "Regulatory frameworks covered by this policy.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "GDPR",
+                    "CCPA",
+                    "LGPD",
+                    "HIPAA",
+                    "PECR",
+                    "CAN_SPAM",
+                    "OTHER"
+                  ]
+                }
+              },
+              "data_categories": {
+                "type": "array",
+                "description": "Data categories governed by this policy.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "template_filters": {
+                "type": "object",
+                "description": "Filters to apply policy to specific templates or campaigns.",
+                "properties": {
+                  "email_template_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "email_campaign_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "classification_levels": {
+                    "type": "array",
+                    "description": "Sensitivity levels to which this policy applies.",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "public",
+                        "internal",
+                        "confidential",
+                        "restricted"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "description": "Set of rules that make up the policy.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rule_id": {
+                  "type": "string",
+                  "description": "Optional stable identifier for this rule within the policy."
+                },
+                "type": {
+                  "type": "string",
+                  "description": "Type of policy rule.",
+                  "enum": [
+                    "consent_requirement",
+                    "data_minimization",
+                    "retention",
+                    "regional_routing",
+                    "sensitive_data_block",
+                    "encryption_requirement",
+                    "custom"
+                  ]
+                },
+                "conditions": {
+                  "type": "object",
+                  "description": "Conditions under which the rule triggers.",
+                  "properties": {
+                    "recipient_region_in": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "data_categories_present": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "template_classification": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "public",
+                          "internal",
+                          "confidential",
+                          "restricted"
+                        ]
+                      }
+                    },
+                    "email_type": {
+                      "type": "string",
+                      "enum": [
+                        "marketing",
+                        "transactional",
+                        "operational",
+                        "security"
+                      ]
+                    }
+                  }
+                },
+                "actions": {
+                  "type": "array",
+                  "description": "Actions to apply when rule conditions are met.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "action_type": {
+                        "type": "string",
+                        "enum": [
+                          "block_send",
+                          "require_consent",
+                          "mask_fields",
+                          "drop_attachments",
+                          "route_to_region",
+                          "encrypt_payload",
+                          "flag_for_review",
+                          "log_violation_only"
+                        ]
+                      },
+                      "parameters": {
+                        "type": "object",
+                        "description": "Action-specific parameters.",
+                        "properties": {
+                          "required_consent_types": {
+                            "type": "array",
+                            "items": {
+                              "type": "string"
+                            }
+                          },
+                          "masking_strategy": {
+                            "type": "string",
+                            "enum": [
+                              "full_redact",
+                              "partial",
+                              "hash"
+                            ]
+                          },
+                          "target_region": {
+                            "type": "string"
+                          },
+                          "retention_days_override": {
+                            "type": "integer"
+                          }
+                        }
+                      },
+                      "severity": {
+                        "type": "string",
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high",
+                          "critical"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "action_type"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "type",
+                "actions"
+              ]
+            }
+          },
+          "effective_from": {
+            "type": "string",
+            "description": "ISO timestamp when this policy becomes effective.",
+            "format": "date-time"
+          },
+          "effective_until": {
+            "type": "string",
+            "description": "Optional ISO timestamp when this policy expires.",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "metadata",
+          "rules"
+        ]
+      },
+      "returns": "Policy record with policy_id, version, and computed governance_rule_set_id references."
+    },
+    {
+      "name": "create_governance_rule_set",
+      "description": "Create a governance rule set that aggregates multiple policies and template classifications for application at send time.",
+      "stage": "design",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human-readable name of this rule set."
+          },
+          "description": {
+            "type": "string",
+            "description": "Description of how and where this rule set should be applied."
+          },
+          "policy_ids": {
+            "type": "array",
+            "description": "List of policies that are part of this governance rule set.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "default_applicability": {
+            "type": "object",
+            "description": "Defines default apply logic when conditions overlap.",
+            "properties": {
+              "conflict_resolution_strategy": {
+                "type": "string",
+                "enum": [
+                  "most_restrictive",
+                  "last_updated_wins",
+                  "priority_based"
+                ]
+              },
+              "priorities": {
+                "type": "array",
+                "description": "Ordered list of policy_ids by descending priority, used when strategy is priority_based.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "bindings": {
+            "type": "array",
+            "description": "Bindings connecting this rule set to templates, campaigns, or tenants.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "binding_type": {
+                  "type": "string",
+                  "enum": [
+                    "email_template",
+                    "email_campaign",
+                    "tenant_default"
+                  ]
+                },
+                "target_id": {
+                  "type": "string",
+                  "description": "ID of the bound entity, or tenant identifier when binding_type is tenant_default."
+                },
+                "overrides": {
+                  "type": "object",
+                  "description": "Optional binding-specific overrides.",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "Whether the rule set is enabled for this binding."
+                    },
+                    "additional_policy_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "binding_type",
+                "target_id"
+              ]
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "active",
+              "disabled"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "policy_ids",
+          "status"
+        ]
+      },
+      "returns": "Governance rule set descriptor including governance_rule_set_id and resolved active policies."
+    },
+    {
+      "name": "upsert_consent_profile",
+      "description": "Create or update a recipient's consent profile for various email purposes and channels.",
+      "stage": "collect",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "consent_profile_id": {
+            "type": "string",
+            "description": "Existing consent profile to update. Omit to create a new profile."
+          },
+          "recipient": {
+            "type": "object",
+            "description": "Identity attributes of the data subject.",
+            "properties": {
+              "email": {
+                "type": "string",
+                "description": "Primary email address of the recipient."
+              },
+              "external_id": {
+                "type": "string",
+                "description": "External or customer ID used by caller."
+              },
+              "identifiers": {
+                "type": "array",
+                "description": "Additional identifiers for this subject.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "phone",
+                        "cookie_id",
+                        "device_id",
+                        "account_id",
+                        "other"
+                      ]
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "value"
+                  ]
+                }
+              },
+              "region": {
+                "type": "string",
+                "description": "Region or country code of the data subject."
+              }
+            },
+            "required": [
+              "email"
+            ]
+          },
+          "consents": {
+            "type": "array",
+            "description": "List of consent statements and their current status.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "purpose": {
+                  "type": "string",
+                  "description": "Purpose for which consent is captured.",
+                  "enum": [
+                    "marketing",
+                    "transactional",
+                    "personalization",
+                    "analytics",
+                    "third_party_sharing",
+                    "other"
+                  ]
+                },
+                "channel": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "push",
+                    "in_app"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "granted",
+                    "denied",
+                    "withdrawn",
+                    "pending"
+                  ]
+                },
+                "legal_basis": {
+                  "type": "string",
+                  "enum": [
+                    "consent",
+                    "legitimate_interest",
+                    "contractual_necessity",
+                    "legal_obligation",
+                    "vital_interest",
+                    "public_task"
+                  ]
+                },
+                "source": {
+                  "type": "object",
+                  "description": "Details of how consent was collected.",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "web_form",
+                        "api",
+                        "import",
+                        "call_center",
+                        "other"
+                      ]
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "ip_address": {
+                      "type": "string"
+                    },
+                    "user_agent": {
+                      "type": "string"
+                    },
+                    "evidence_url": {
+                      "type": "string",
+                      "description": "URL to a record of consent capture (e.g., signed form, recording)."
+                    }
+                  }
+                }
+              },
+              "required": [
+                "purpose",
+                "channel",
+                "status",
+                "legal_basis"
+              ]
+            }
+          },
+          "preferences": {
+            "type": "object",
+            "description": "Non-legal preferences such as frequency or topics.",
+            "properties": {
+              "frequency": {
+                "type": "string",
+                "enum": [
+                  "real_time",
+                  "daily",
+                  "weekly",
+                  "monthly",
+                  "never"
+                ]
+              },
+              "topics": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "audit_context": {
+            "type": "object",
+            "description": "Context of the upsert operation for audit logging.",
+            "properties": {
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "system",
+                  "admin",
+                  "self_service",
+                  "support_agent"
+                ]
+              },
+              "actor_id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "recipient",
+          "consents"
+        ]
+      },
+      "returns": "Updated consent profile with consent_profile_id and normalized consent states."
+    },
+    {
+      "name": "check_email_compliance",
+      "description": "Perform a pre-send governance and compliance check for an email send, using governance_rule_set, policies, and consent.",
+      "stage": "pre_send_check",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "email_campaign_id": {
+            "type": "string",
+            "description": "Campaign identifier for associating compliance results."
+          },
+          "email_template_id": {
+            "type": "string",
+            "description": "Template used for the send."
+          },
+          "governance_rule_set_id": {
+            "type": "string",
+            "description": "Specific rule set to apply. If omitted, system resolves one based on bindings and defaults."
+          },
+          "recipients": {
+            "type": "array",
+            "description": "List of intended recipients for this send batch.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "consent_profile_id": {
+                  "type": "string",
+                  "description": "Existing consent profile id. Either this or email is required."
+                },
+                "email": {
+                  "type": "string",
+                  "description": "Email address of the recipient if consent_profile_id not provided."
+                },
+                "region": {
+                  "type": "string",
+                  "description": "Region used for regulatory scoping."
+                },
+                "target_purposes": {
+                  "type": "array",
+                  "description": "Purposes invoked for this send for this recipient.",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "marketing",
+                      "transactional",
+                      "personalization",
+                      "analytics",
+                      "security"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "content_features": {
+            "type": "object",
+            "description": "Structural features of the email content relevant to compliance.",
+            "properties": {
+              "includes_tracking_pixel": {
+                "type": "boolean"
+              },
+              "includes_third_party_links": {
+                "type": "boolean"
+              },
+              "attachment_metadata": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "filename": {
+                      "type": "string"
+                    },
+                    "content_type": {
+                      "type": "string"
+                    },
+                    "size_bytes": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "data_categories_in_payload": {
+                "type": "array",
+                "description": "Data categories expected to be present in dynamic content.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "If true, do not persist compliance_check_id; evaluate only."
+          }
+        },
+        "required": [
+          "email_template_id",
+          "recipients"
+        ]
+      },
+      "returns": "Compliance decision including compliance_check_id, per-recipient allow/deny with reasons, and policy actions to enforce (e.g., block, mask, route)."
+    },
+    {
+      "name": "resolve_compliance_violations",
+      "description": "Resolve or override compliance violations detected during a check by applying mitigations or documented exceptions.",
+      "stage": "pre_send_resolution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "compliance_check_id": {
+            "type": "string",
+            "description": "Compliance check whose violations are being resolved."
+          },
+          "resolution_scope": {
+            "type": "string",
+            "description": "Scope of the resolution.",
+            "enum": [
+              "single_recipient",
+              "batch",
+              "campaign",
+              "policy_override"
+            ]
+          },
+          "targets": {
+            "type": "object",
+            "description": "Entities targeted for resolution based on scope.",
+            "properties": {
+              "recipient_emails": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "email_campaign_id": {
+                "type": "string"
+              },
+              "policy_id": {
+                "type": "string"
+              }
+            }
+          },
+          "mitigations": {
+            "type": "array",
+            "description": "Mitigation steps applied to address or accept violations.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "mask_data",
+                    "exclude_recipient",
+                    "change_template",
+                    "apply_additional_consent",
+                    "document_exception"
+                  ]
+                },
+                "parameters": {
+                  "type": "object",
+                  "properties": {
+                    "data_fields_to_mask": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "new_email_template_id": {
+                      "type": "string"
+                    },
+                    "exception_ticket_id": {
+                      "type": "string",
+                      "description": "External reference to approval or exception tracking system."
+                    }
+                  }
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          },
+          "approver": {
+            "type": "object",
+            "description": "Person or system authorizing the resolution.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              },
+              "approval_timestamp": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "id",
+              "approval_timestamp"
+            ]
+          }
+        },
+        "required": [
+          "compliance_check_id",
+          "resolution_scope",
+          "mitigations",
+          "approver"
+        ]
+      },
+      "returns": "Updated compliance check status, list of resolved and unresolved violations, and any generated governance_violation_id records for exceptions."
+    },
+    {
+      "name": "enforce_policy_on_send_request",
+      "description": "Apply governance decisions to an email send request, possibly modifying or rejecting the request.",
+      "stage": "enforce",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "governance_rule_set_id": {
+            "type": "string",
+            "description": "Rule set to enforce. If absent, resolve from template and tenant defaults."
+          },
+          "email_template_id": {
+            "type": "string",
+            "description": "Template that will be used for the send."
+          },
+          "send_request": {
+            "type": "object",
+            "description": "Original send request payload.",
+            "properties": {
+              "email_campaign_id": {
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cc": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bcc": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "dynamic_data": {
+                "type": "array",
+                "description": "Per-recipient dynamic data (polymorphic map).",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "recipient": {
+                      "type": "string",
+                      "description": "Recipient email address."
+                    },
+                    "data": {
+                      "type": "object",
+                      "description": "Arbitrary JSON object of personalization data.",
+                      "additionalProperties": {}
+                    }
+                  },
+                  "required": [
+                    "recipient",
+                    "data"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "compliance_check_id": {
+            "type": "string",
+            "description": "Optional precomputed compliance check to reuse; if not provided, a fresh check may be run internally."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "If true, returns what would be enforced without mutating actual send state."
+          }
+        },
+        "required": [
+          "email_template_id",
+          "send_request"
+        ]
+      },
+      "returns": "Enforcement result including modified send_request, filtered recipients, applied actions, and final allow/block decision."
+    },
+    {
+      "name": "schedule_retention_job",
+      "description": "Schedule a data retention or deletion job for email logs, content, or consent records in accordance with policy.",
+      "stage": "lifecycle",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_type": {
+            "type": "string",
+            "enum": [
+              "delete_logs",
+              "delete_content",
+              "anonymize_personal_data",
+              "truncate_metadata"
+            ]
+          },
+          "scope": {
+            "type": "object",
+            "description": "Defines which records are in scope for the job.",
+            "properties": {
+              "email_campaign_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "email_template_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "consent_profile_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "older_than_days": {
+                "type": "integer",
+                "description": "Include data older than this number of days."
+              },
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "policy_id": {
+            "type": "string",
+            "description": "Policy driving this retention job, if applicable."
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Execution schedule for the job.",
+            "properties": {
+              "run_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Exact time for a one-time job."
+              },
+              "cron_expression": {
+                "type": "string",
+                "description": "Cron expression for recurring jobs."
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Timezone used for interpreting schedule."
+              }
+            }
+          },
+          "safety_guardrails": {
+            "type": "object",
+            "description": "Guardrails to prevent accidental large deletions.",
+            "properties": {
+              "max_records_per_run": {
+                "type": "integer"
+              },
+              "dry_run_first": {
+                "type": "boolean"
+              },
+              "require_approval": {
+                "type": "boolean"
+              }
+            }
+          },
+          "requested_by": {
+            "type": "string",
+            "description": "Identifier of the user or system scheduling the job."
+          }
+        },
+        "required": [
+          "job_type",
+          "scope",
+          "requested_by"
+        ]
+      },
+      "returns": "Retention job descriptor with retention_job_id, initial status, and estimated affected records."
+    },
+    {
+      "name": "get_retention_job_status",
+      "description": "Retrieve status and results of a retention or deletion job.",
+      "stage": "lifecycle",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "retention_job_id": {
+            "type": "string",
+            "description": "Identifier of the retention job."
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional information to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "summary",
+                "per_run_stats",
+                "errors",
+                "logs"
+              ]
+            }
+          }
+        },
+        "required": [
+          "retention_job_id"
+        ]
+      },
+      "returns": "Retention job status including completion state, counts of processed and deleted records, and any errors."
+    },
+    {
+      "name": "log_governance_violation",
+      "description": "Log a governance violation event such as unauthorized send, policy breach, or failed retention.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "violation_type": {
+            "type": "string",
+            "enum": [
+              "unauthorized_send",
+              "missing_consent",
+              "policy_misconfiguration",
+              "retention_failure",
+              "data_breach_suspected",
+              "other"
+            ]
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ]
+          },
+          "context": {
+            "type": "object",
+            "description": "Contextual information about the violation.",
+            "properties": {
+              "email_campaign_id": {
+                "type": "string"
+              },
+              "email_template_id": {
+                "type": "string"
+              },
+              "policy_id": {
+                "type": "string"
+              },
+              "governance_rule_set_id": {
+                "type": "string"
+              },
+              "consent_profile_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "affected_regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "details": {
+            "type": "object",
+            "description": "Detailed description of the violation.",
+            "properties": {
+              "description": {
+                "type": "string"
+              },
+              "detected_by": {
+                "type": "string",
+                "description": "System or user that detected the violation."
+              },
+              "related_compliance_check_id": {
+                "type": "string"
+              },
+              "related_retention_job_id": {
+                "type": "string"
+              },
+              "evidence": {
+                "type": "array",
+                "description": "List of evidence artifacts.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "log_excerpt",
+                        "screenshot",
+                        "ticket_reference",
+                        "other"
+                      ]
+                    },
+                    "reference": {
+                      "type": "string",
+                      "description": "URI or identifier of the evidence."
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "reference"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "description"
+            ]
+          }
+        },
+        "required": [
+          "violation_type",
+          "severity",
+          "details"
+        ]
+      },
+      "returns": "Logged violation record including governance_violation_id and initial remediation status."
+    },
+    {
+      "name": "review_governance_violation",
+      "description": "Review and update the state of a logged governance violation, including remediation steps and closure.",
+      "stage": "remediate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "governance_violation_id": {
+            "type": "string",
+            "description": "Identifier of the violation to review."
+          },
+          "status_update": {
+            "type": "object",
+            "description": "New status and outcome details.",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "under_investigation",
+                  "mitigated",
+                  "false_positive",
+                  "closed"
+                ]
+              },
+              "remediation_actions": {
+                "type": "array",
+                "description": "Remediation actions taken or planned.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "notify_dpo",
+                        "notify_regulator",
+                        "notify_data_subjects",
+                        "patch_policy",
+                        "update_consent",
+                        "run_additional_retention",
+                        "other"
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "planned",
+                        "in_progress",
+                        "completed",
+                        "blocked"
+                      ]
+                    },
+                    "notes": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "action",
+                    "status"
+                  ]
+                }
+              },
+              "root_cause": {
+                "type": "string"
+              },
+              "closed_by": {
+                "type": "string"
+              },
+              "closed_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "governance_violation_id",
+          "status_update"
+        ]
+      },
+      "returns": "Updated governance violation record with new status and remediation timeline."
+    },
+    {
+      "name": "export_subject_data",
+      "description": "Create a data export request for a data subject, covering email events, consent, and profile data.",
+      "stage": "subject_rights",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "description": "Data subject identification.",
+            "properties": {
+              "email": {
+                "type": "string",
+                "description": "Primary email identifier of the subject."
+              },
+              "consent_profile_id": {
+                "type": "string"
+              },
+              "external_id": {
+                "type": "string"
+              }
+            }
+          },
+          "data_categories": {
+            "type": "array",
+            "description": "Categories of data to include in the export.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "consent_records",
+                "email_send_logs",
+                "engagement_events",
+                "profile_attributes",
+                "governance_violations"
+              ]
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Optional time range filter.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "csv",
+              "zip"
+            ]
+          },
+          "delivery": {
+            "type": "object",
+            "description": "Delivery options for the exported data.",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "download_link",
+                  "email_attachment",
+                  "sftp"
+                ]
+              },
+              "target": {
+                "type": "string",
+                "description": "Email address, SFTP path, or similar target."
+              }
+            },
+            "required": [
+              "method"
+            ]
+          },
+          "requested_by": {
+            "type": "string",
+            "description": "Identifier of the requestor (data subject, admin, etc.)."
+          }
+        },
+        "required": [
+          "subject",
+          "data_categories",
+          "format",
+          "delivery",
+          "requested_by"
+        ]
+      },
+      "returns": "Data export request record including data_export_request_id, initial processing state, and expected completion time."
+    },
+    {
+      "name": "get_subject_data_export_status",
+      "description": "Get the status and result location of a subject data export request.",
+      "stage": "subject_rights",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "data_export_request_id": {
+            "type": "string",
+            "description": "Identifier of the data export request."
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional details to include.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "summary",
+                "errors",
+                "audit_log"
+              ]
+            }
+          }
+        },
+        "required": [
+          "data_export_request_id"
+        ]
+      },
+      "returns": "Export status including completion state, download URL or delivery confirmation, and any failure reasons."
+    },
+    {
+      "name": "rollback_governance_decision",
+      "description": "Rollback or retry governance-related decisions, such as misapplied retention or policy enforcement errors.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "rollback_type": {
+            "type": "string",
+            "enum": [
+              "retention_job",
+              "policy_change",
+              "consent_update",
+              "compliance_check"
+            ]
+          },
+          "target_id": {
+            "type": "string",
+            "description": "Identifier of the entity to rollback, such as retention_job_id, policy_id, consent_profile_id, or compliance_check_id."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable reason for rollback."
+          },
+          "strategy": {
+            "type": "string",
+            "description": "How to perform the rollback.",
+            "enum": [
+              "full_restore",
+              "partial_restore",
+              "retry_with_fix"
+            ]
+          },
+          "options": {
+            "type": "object",
+            "description": "Additional options depending on rollback_type.",
+            "properties": {
+              "restore_from_snapshot_id": {
+                "type": "string"
+              },
+              "fields_to_restore": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "retry_parameters": {
+                "type": "object",
+                "description": "Override parameters when strategy is retry_with_fix.",
+                "additionalProperties": {}
+              }
+            }
+          },
+          "requested_by": {
+            "type": "string",
+            "description": "Identifier of the user or system requesting rollback."
+          },
+          "approval": {
+            "type": "object",
+            "description": "Optional approval metadata required for some rollback operations.",
+            "properties": {
+              "approved": {
+                "type": "boolean"
+              },
+              "approver_id": {
+                "type": "string"
+              },
+              "approval_timestamp": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        },
+        "required": [
+          "rollback_type",
+          "target_id",
+          "reason",
+          "strategy",
+          "requested_by"
+        ]
+      },
+      "returns": "Rollback operation result including whether rollback or retry was scheduled or completed, and any new retention_job_id or compliance_check_id created."
+    },
+    {
+      "name": "bulk_import_governance_rule_sets",
+      "description": "Bulk-import multiple governance_rule_sets from an upstream source with validation and idempotency keys.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "import_source": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "json",
+                  "parquet",
+                  "kafka",
+                  "s3",
+                  "api"
+                ]
+              },
+              "location": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "format_options": {
+                "type": "object",
+                "properties": {
+                  "delimiter": {
+                    "type": "string"
+                  },
+                  "encoding": {
+                    "type": "string"
+                  },
+                  "header_row": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "required": [
+              "type",
+              "location"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "description": "Field mapping from source to canonical schema",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_id": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "batch_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "default": 500
+          },
+          "on_error": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "abort",
+              "quarantine"
+            ],
+            "default": "quarantine"
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "import_source",
+          "actor"
+        ]
+      },
+      "returns": "A bulk-import job descriptor with counts of accepted, rejected, and quarantined governance_rule_sets, plus a job_id for follow-up."
+    },
+    {
+      "name": "bulk_update_governance_rule_sets",
+      "description": "Apply a partial update to a batch of governance_rule_sets matched by filter or id list.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/governance_rule_set_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "patch": {
+            "type": "object",
+            "description": "Fields to patch on each matched item",
+            "properties": {
+              "set": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "unset": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "add_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "remove_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "preconditions": {
+            "type": "object",
+            "description": "Optional optimistic-concurrency preconditions",
+            "properties": {
+              "if_match_version": {
+                "type": "string"
+              },
+              "expected_status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "max_items": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1000
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "patch",
+          "actor"
+        ]
+      },
+      "returns": "Summary of matched, updated, and skipped governance_rule_sets with per-item error details."
+    },
+    {
+      "name": "bulk_archive_governance_rule_sets",
+      "description": "Archive (soft-delete) a batch of governance_rule_sets with retention metadata and audit reasons.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/governance_rule_set_id"
+            },
+            "minItems": 1
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retain_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "legal_hold": {
+            "type": "boolean",
+            "default": false
+          },
+          "tombstone_metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "ids",
+          "reason",
+          "actor"
+        ]
+      },
+      "returns": "Per-id archive results with new lifecycle state."
+    },
+    {
+      "name": "bulk_export_governance_rule_sets",
+      "description": "Export a filtered set of governance_rule_sets to a downstream destination (S3, GCS, blob, SFTP).",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Projection; empty means all fields"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "csv",
+              "parquet",
+              "ndjson"
+            ],
+            "default": "json"
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp",
+                  "http"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "compression": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "gzip",
+                  "zstd"
+                ],
+                "default": "none"
+              }
+            },
+            "required": [
+              "type",
+              "uri"
+            ]
+          },
+          "chunk_size_mb": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1024,
+            "default": 64
+          },
+          "include_audit_columns": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "sse-s3",
+                  "sse-kms",
+                  "client-side"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "destination",
+          "actor"
+        ]
+      },
+      "returns": "Export job handle including job_id, expected object URIs, row count, and signed download URLs when applicable."
+    },
+    {
+      "name": "search_governance_rule_sets_advanced",
+      "description": "Advanced faceted search across governance_rule_sets with full-text, structured filters, aggregations, and sort.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Full-text query string with Lucene-like syntax"
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "contains",
+                    "starts_with",
+                    "exists"
+                  ]
+                },
+                "value": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "array",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "aggregations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "terms",
+                    "histogram",
+                    "date_histogram",
+                    "stats",
+                    "cardinality"
+                  ]
+                },
+                "field": {
+                  "type": "string"
+                },
+                "interval": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "field"
+              ]
+            }
+          },
+          "highlight_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": []
+      },
+      "returns": "Search response with governance_rule_sets hits, total count, aggregation buckets, and a next-cursor."
+    },
+    {
+      "name": "create_governance_rule_set_subscription",
+      "description": "Create a subscription that fires webhooks or notifications on governance_rule_set lifecycle events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "created",
+                "updated",
+                "status_changed",
+                "deleted",
+                "escalated",
+                "resolved",
+                "custom"
+              ]
+            },
+            "minItems": 1
+          },
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "target": {
+            "type": "object",
+            "description": "Notification target descriptor",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "email",
+                  "sms",
+                  "webhook",
+                  "push",
+                  "slack",
+                  "teams",
+                  "pagerduty"
+                ]
+              },
+              "address": {
+                "type": "string"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "secret_ref": {
+                "type": "string",
+                "description": "Reference to a stored secret"
+              }
+            },
+            "required": [
+              "type",
+              "address"
+            ]
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "retry_policy": {
+                "type": "object",
+                "properties": {
+                  "max_attempts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  },
+                  "backoff": {
+                    "type": "string",
+                    "enum": [
+                      "linear",
+                      "exponential",
+                      "fixed"
+                    ],
+                    "default": "exponential"
+                  },
+                  "initial_delay_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  }
+                }
+              },
+              "rate_limit_per_minute": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "batch_size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            }
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "events",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "The created subscription including subscription_id, active state, and last_delivery info (initially null)."
+    },
+    {
+      "name": "list_governance_rule_set_subscriptions",
+      "description": "List existing governance_rule_set subscriptions with optional filters and pagination.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "target_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of subscription objects including delivery health stats."
+    },
+    {
+      "name": "deactivate_governance_rule_set_subscription",
+      "description": "Deactivate or delete a governance_rule_set subscription and optionally flush pending deliveries.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "delete"
+            ],
+            "default": "pause"
+          },
+          "flush_pending": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "subscription_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated subscription state and the number of pending deliveries flushed or kept."
+    },
+    {
+      "name": "get_governance_rule_set_audit_log",
+      "description": "Return the audit/change log for a single governance_rule_set with field-level diffs and actor info.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/governance_rule_set_id"
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "include_field_diff": {
+            "type": "boolean",
+            "default": true
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Chronological list of audit events with before/after diffs, actor, and source IP/system."
+    },
+    {
+      "name": "search_audit_events",
+      "description": "Search audit events across governance_rule_sets for compliance and forensic review.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "actor_user_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "object_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/governance_rule_set_id"
+                }
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              },
+              "source_systems": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated audit-event hits with cross-entity references."
+    },
+    {
+      "name": "schedule_governance_rule_set_job",
+      "description": "Create a recurring schedule that triggers a named operation on a target set of governance_rule_sets.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "description": "Named operation to invoke (e.g., refresh, recompute, export, reconcile)"
+          },
+          "target_selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/governance_rule_set_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Parameters passed to each invocation"
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Schedule definition",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "once",
+                  "cron",
+                  "interval",
+                  "calendar"
+                ]
+              },
+              "cron": {
+                "type": "string",
+                "description": "Cron expression (UTC by default)"
+              },
+              "interval_seconds": {
+                "type": "integer",
+                "minimum": 30
+              },
+              "start_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "max_runs": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "jitter_seconds": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "concurrency_policy": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "forbid",
+              "replace"
+            ],
+            "default": "forbid"
+          },
+          "notify_on": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure",
+                "skipped"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "operation",
+          "schedule",
+          "actor"
+        ]
+      },
+      "returns": "The created scheduled-job descriptor with job_id, next_run_at, and current status."
+    },
+    {
+      "name": "list_governance_rule_set_jobs",
+      "description": "List scheduled or in-flight jobs related to governance_rule_sets with status filtering and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "skipped"
+                  ]
+                }
+              },
+              "operation_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "include_runs": {
+            "type": "boolean",
+            "default": false
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of governance_rule_set jobs and their last run summaries."
+    },
+    {
+      "name": "cancel_governance_rule_set_job",
+      "description": "Cancel a scheduled or in-flight governance_rule_set job, optionally interrupting running steps.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "job_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated job status with cancellation timestamp and any side effects."
+    },
+    {
+      "name": "simulate_governance_rule_set_change",
+      "description": "Simulate a proposed change against a governance_rule_set (or batch) without committing; returns expected diffs and warnings.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/governance_rule_set_id"
+          },
+          "proposed_change": {
+            "type": "object",
+            "description": "Polymorphic change object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "patch",
+                  "replace",
+                  "transition",
+                  "policy_apply"
+                ]
+              },
+              "patch": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "replace": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "transition_to": {
+                "type": "string"
+              },
+              "policy_id": {
+                "$ref": "#/shared_entities/policy_id"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "evaluation_options": {
+            "type": "object",
+            "properties": {
+              "evaluate_rules": {
+                "type": "boolean",
+                "default": true
+              },
+              "evaluate_dependencies": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_cost_impact": {
+                "type": "boolean",
+                "default": false
+              },
+              "include_sla_impact": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "proposed_change",
+          "actor"
+        ]
+      },
+      "returns": "Simulation result with predicted diffs, rule violations, cost/SLA impact, and a confidence score."
+    },
+    {
+      "name": "request_governance_rule_set_approval",
+      "description": "Open an approval request for a sensitive governance_rule_set change requiring reviewer sign-off.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/governance_rule_set_id"
+          },
+          "change_summary": {
+            "type": "string"
+          },
+          "change_payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "user_id": {
+                  "type": "string"
+                },
+                "role_required": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "user_id"
+              ]
+            },
+            "minItems": 1
+          },
+          "quorum": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "escalation_policy_id": {
+            "$ref": "#/shared_entities/policy_id"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "approvers",
+          "actor"
+        ]
+      },
+      "returns": "Created approval request with approval_request_id, current state, and notification targets."
+    },
+    {
+      "name": "submit_governance_rule_set_approval_decision",
+      "description": "Submit an approve, reject, or request-changes decision against a governance_rule_set approval request.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_request_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "request_changes"
+            ]
+          },
+          "comment": {
+            "type": "string"
+          },
+          "signed_evidence": {
+            "type": "object",
+            "properties": {
+              "signature": {
+                "type": "string"
+              },
+              "signed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "totp",
+                  "webauthn",
+                  "sso",
+                  "manual"
+                ]
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "approval_request_id",
+          "decision",
+          "actor"
+        ]
+      },
+      "returns": "Updated approval request state including quorum progress and final decision (if reached)."
+    },
+    {
+      "name": "add_governance_rule_set_comment",
+      "description": "Append a comment or annotation to a governance_rule_set, optionally attaching files or mentioning users.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/governance_rule_set_id"
+          },
+          "body": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "internal",
+              "tenant",
+              "public"
+            ],
+            "default": "internal"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_name": {
+                  "type": "string"
+                },
+                "content_type": {
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "type": "integer"
+                },
+                "uri": {
+                  "type": "string"
+                },
+                "checksum_sha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_name",
+                "uri"
+              ]
+            }
+          },
+          "parent_comment_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "body",
+          "actor"
+        ]
+      },
+      "returns": "The created comment object with comment_id, timestamps, and visibility-resolved permissions."
+    },
+    {
+      "name": "list_governance_rule_set_comments",
+      "description": "List comments and annotations attached to a governance_rule_set, with optional thread expansion.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/governance_rule_set_id"
+          },
+          "include_threads": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_attachments": {
+            "type": "boolean",
+            "default": true
+          },
+          "visibility_in": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "internal",
+                "tenant",
+                "public"
+              ]
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Paginated comment list with thread tree and attachment metadata."
+    },
+    {
+      "name": "snapshot_governance_rule_set",
+      "description": "Create a point-in-time immutable snapshot of a governance_rule_set for forensic, rollback, or compliance use.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/governance_rule_set_id"
+          },
+          "label": {
+            "type": "string"
+          },
+          "include_related": {
+            "type": "array",
+            "description": "Optional related-entity inclusion list",
+            "items": {
+              "type": "string"
+            }
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "kms",
+                  "client"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "retention": {
+            "type": "object",
+            "properties": {
+              "policy": {
+                "type": "string",
+                "enum": [
+                  "short",
+                  "standard",
+                  "long",
+                  "indefinite"
+                ]
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "actor"
+        ]
+      },
+      "returns": "Snapshot descriptor with snapshot_id, checksum, byte size, and retention expiry."
+    },
+    {
+      "name": "restore_governance_rule_set_snapshot",
+      "description": "Restore a governance_rule_set from a previously created snapshot, optionally as a new copy.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "overwrite",
+                  "new_copy",
+                  "merge"
+                ]
+              },
+              "target_id": {
+                "$ref": "#/shared_entities/governance_rule_set_id"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "fail",
+              "skip_existing",
+              "overwrite"
+            ],
+            "default": "fail"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "Restore job descriptor including resulting id and any per-field conflicts that were resolved."
+    },
+    {
+      "name": "get_governance_rule_set_metrics",
+      "description": "Compute KPI metrics over governance_rule_sets (counts, MTTR, SLA compliance, error rates) for a time window.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "count",
+                "open_count",
+                "closed_count",
+                "mttr_seconds",
+                "mttd_seconds",
+                "sla_compliance_pct",
+                "error_rate",
+                "p50_latency_ms",
+                "p95_latency_ms",
+                "p99_latency_ms",
+                "throughput_per_minute",
+                "backlog_age_seconds"
+              ]
+            },
+            "minItems": 1
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "1m",
+              "5m",
+              "15m",
+              "1h",
+              "1d",
+              "1w"
+            ],
+            "default": "1h"
+          }
+        },
+        "required": [
+          "metrics"
+        ]
+      },
+      "returns": "Time-bucketed metric series and aggregate KPIs for the matched governance_rule_sets."
+    },
+    {
+      "name": "build_governance_rule_set_dashboard",
+      "description": "Persist a named dashboard composed of widgets (charts, tables, single-stat) over governance_rule_sets data.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "widgets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "line",
+                    "bar",
+                    "pie",
+                    "table",
+                    "single_stat",
+                    "heatmap"
+                  ]
+                },
+                "query": {
+                  "type": "object",
+                  "properties": {
+                    "metrics": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "filter": {
+                      "type": "object",
+                      "description": "Filter constraints",
+                      "properties": {
+                        "text": {
+                          "type": "string",
+                          "description": "Free-text search across indexed fields"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "labels": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "Key/value labels to match"
+                        },
+                        "created_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "updated_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "owner_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "group_by": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "time_range": {
+                      "type": "object",
+                      "description": "Time window for filtering or scoping the operation",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "end": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "timezone": {
+                          "type": "string",
+                          "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "metrics"
+                  ]
+                },
+                "position": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "integer"
+                    },
+                    "y": {
+                      "type": "integer"
+                    },
+                    "w": {
+                      "type": "integer"
+                    },
+                    "h": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "title",
+                "type",
+                "query"
+              ]
+            },
+            "minItems": 1
+          },
+          "refresh_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "default": 60
+          },
+          "shared_with": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "widgets",
+          "actor"
+        ]
+      },
+      "returns": "Created dashboard descriptor with dashboard_id, shareable URL, and computed first-render preview."
+    },
+    {
+      "name": "upsert_governance_rule_set_policy",
+      "description": "Create or update a policy/rule used to govern governance_rule_set behavior, validation, or routing.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "$ref": "#/shared_entities/policy_id"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "expression": {
+                  "type": "string",
+                  "description": "CEL or JEXL expression"
+                },
+                "action": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "allow",
+                        "deny",
+                        "route",
+                        "transform",
+                        "notify",
+                        "tag"
+                      ]
+                    },
+                    "params": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "expression",
+                "action"
+              ]
+            },
+            "minItems": 1
+          },
+          "version_strategy": {
+            "type": "string",
+            "enum": [
+              "bump_minor",
+              "bump_major",
+              "replace"
+            ],
+            "default": "bump_minor"
+          },
+          "effective_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "rules",
+          "actor"
+        ]
+      },
+      "returns": "Persisted policy with policy_id, version, rule count, and validation warnings (if any)."
+    },
+    {
+      "name": "list_governance_rule_set_policies",
+      "description": "List policies governing governance_rule_sets with version, scope, and lifecycle filters.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "scope_label": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          },
+          "include_rule_summary": {
+            "type": "boolean",
+            "default": true
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated policy entries with rule counts and last evaluation metrics."
+    }
+  ]
+}

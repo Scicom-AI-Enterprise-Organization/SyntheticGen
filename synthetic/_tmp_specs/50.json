@@ -1,0 +1,1027 @@
+{
+  "workflow_name": "network_migration_flow",
+  "description": "Plan, validate, execute, monitor, and, if needed, roll back a network-as-a-service (NaaS) tenant migration across environments or providers.",
+  "domain": "taas/network_as_a_service",
+  "shared_entities": {
+    "tenant_id": {
+      "type": "string",
+      "description": "Unique identifier of the NaaS tenant to be migrated"
+    },
+    "migration_id": {
+      "type": "string",
+      "description": "Unique identifier for a migration workflow instance"
+    },
+    "topology_id": {
+      "type": "string",
+      "description": "Identifier for a saved network topology snapshot or design"
+    },
+    "environment_id": {
+      "type": "string",
+      "description": "Identifier for a logical environment (e.g., prod, staging, region)"
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Identifier for an asynchronous task within a migration"
+    },
+    "change_window": {
+      "type": "object",
+      "description": "Represents a scheduled change window for the migration",
+      "properties": {
+        "start_time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "end_time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone identifier, e.g., 'UTC', 'America/New_York'"
+        }
+      },
+      "required": [
+        "start_time",
+        "end_time"
+      ]
+    },
+    "endpoint_reference": {
+      "type": "object",
+      "description": "Reference to an endpoint (branch, DC, VPC, user segment, etc.)",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "branch",
+            "datacenter",
+            "cloud_vpc",
+            "user_segment",
+            "partner_site"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "description": "Provider-specific identifier of the endpoint"
+        },
+        "provider": {
+          "type": "string",
+          "description": "Cloud or network provider key, e.g., 'aws', 'azure', 'on_prem', 'carrier_x'"
+        },
+        "region": {
+          "type": "string",
+          "description": "Region or location of the endpoint if applicable"
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "discover_current_topology",
+      "description": "Discover and snapshot the current network topology of a tenant in a given environment.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant to discover topology for"
+          },
+          "environment_id": {
+            "type": "string",
+            "description": "Environment where discovery will run"
+          },
+          "scope": {
+            "type": "object",
+            "description": "Optional scoping for discovery to limit what is captured",
+            "properties": {
+              "include_endpoints": {
+                "type": "array",
+                "description": "List of endpoint references to explicitly include",
+                "items": {
+                  "$ref": "#/shared_entities/endpoint_reference"
+                }
+              },
+              "exclude_endpoints": {
+                "type": "array",
+                "description": "List of endpoint IDs to exclude from discovery",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "include_policies": {
+                "type": "boolean",
+                "default": true,
+                "description": "Whether to include security and routing policies"
+              },
+              "include_qos": {
+                "type": "boolean",
+                "default": false,
+                "description": "Whether to include QoS and traffic shaping rules"
+              }
+            }
+          },
+          "options": {
+            "type": "object",
+            "description": "Discovery behavior options",
+            "properties": {
+              "consistency_level": {
+                "type": "string",
+                "enum": [
+                  "eventual",
+                  "strong"
+                ],
+                "default": "strong",
+                "description": "Consistency trade-off during discovery"
+              },
+              "snapshot_label": {
+                "type": "string",
+                "description": "Human-friendly label for the captured topology snapshot"
+              },
+              "include_live_metrics": {
+                "type": "boolean",
+                "default": false,
+                "description": "If true, attach current traffic and health metrics to the snapshot"
+              }
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "environment_id"
+        ]
+      },
+      "returns": "A topology_id representing the captured topology snapshot, along with summary statistics and discovery task details."
+    },
+    {
+      "name": "plan_migration",
+      "description": "Create a migration plan between source and target environments based on a topology snapshot.",
+      "stage": "planning",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "source_environment_id": {
+            "type": "string",
+            "description": "Environment where the current topology resides"
+          },
+          "target_environment_id": {
+            "type": "string",
+            "description": "Environment where the topology will be migrated"
+          },
+          "topology_id": {
+            "type": "string",
+            "description": "Identifier of the discovered topology snapshot"
+          },
+          "change_window": {
+            "$ref": "#/shared_entities/change_window"
+          },
+          "strategy": {
+            "type": "object",
+            "description": "High-level migration strategy configuration",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "big_bang",
+                  "phased",
+                  "canary"
+                ],
+                "description": "Overall migration strategy"
+              },
+              "traffic_cutover_mode": {
+                "type": "string",
+                "enum": [
+                  "instant",
+                  "gradual",
+                  "parallel_run"
+                ],
+                "description": "How traffic should be shifted to the target environment"
+              },
+              "rollback_strategy": {
+                "type": "string",
+                "enum": [
+                  "automatic",
+                  "manual",
+                  "none"
+                ],
+                "default": "automatic",
+                "description": "Default rollback strategy if issues are detected"
+              },
+              "phase_definitions": {
+                "type": "array",
+                "description": "Optional detailed phase definitions for phased or canary strategies",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "phase_id": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "included_endpoints": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/shared_entities/endpoint_reference"
+                      }
+                    },
+                    "traffic_percentage": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100,
+                      "description": "Target traffic share for this phase"
+                    }
+                  },
+                  "required": [
+                    "phase_id"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "type",
+              "traffic_cutover_mode"
+            ]
+          },
+          "constraints": {
+            "type": "object",
+            "description": "Business or technical constraints affecting the migration",
+            "properties": {
+              "max_concurrent_endpoint_migrations": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "allowed_change_windows": {
+                "type": "array",
+                "description": "Permitted windows if more granular than global change_window",
+                "items": {
+                  "$ref": "#/shared_entities/change_window"
+                }
+              },
+              "maintenance_blackouts": {
+                "type": "array",
+                "description": "List of blackout periods where changes are forbidden",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "start_time": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "end_time": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "start_time",
+                    "end_time"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "source_environment_id",
+          "target_environment_id",
+          "topology_id",
+          "strategy"
+        ]
+      },
+      "returns": "A migration_id for the planned migration, plus a summarized migration plan including phases, estimated duration, and risk indicators."
+    },
+    {
+      "name": "validate_migration_plan",
+      "description": "Perform pre-flight checks on a migration plan to detect policy conflicts, capacity issues, and unsupported features.",
+      "stage": "validation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "validation_profile": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "strict",
+              "custom"
+            ],
+            "default": "standard"
+          },
+          "custom_rules": {
+            "type": "array",
+            "description": "Custom validation rules applied when validation_profile is 'custom'",
+            "items": {
+              "type": "object",
+              "properties": {
+                "rule_id": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warning",
+                    "error"
+                  ]
+                },
+                "expression": {
+                  "type": "string",
+                  "description": "Provider-specific rule expression or policy language"
+                }
+              },
+              "required": [
+                "rule_id",
+                "severity",
+                "expression"
+              ]
+            }
+          },
+          "scope": {
+            "type": "object",
+            "description": "Limit validation to certain resources or phases",
+            "properties": {
+              "phases": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "description": "Phase identifiers to validate"
+                }
+              },
+              "endpoints": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/endpoint_reference"
+                }
+              },
+              "validate_traffic_simulation": {
+                "type": "boolean",
+                "default": true,
+                "description": "Run traffic simulation to detect routing anomalies"
+              }
+            }
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Validation report including pass/fail status, list of issues by severity, and recommended remediations for the migration plan."
+    },
+    {
+      "name": "simulate_traffic_impact",
+      "description": "Simulate traffic flows and policy effects for a planned migration to estimate impact and detect regressions.",
+      "stage": "simulation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "traffic_profiles": {
+            "type": "array",
+            "description": "Synthetic or captured traffic profiles to simulate",
+            "items": {
+              "type": "object",
+              "properties": {
+                "profile_id": {
+                  "type": "string"
+                },
+                "source_segment": {
+                  "type": "string",
+                  "description": "Logical source segment name or ID"
+                },
+                "destination_segment": {
+                  "type": "string"
+                },
+                "applications": {
+                  "type": "array",
+                  "description": "Applications or port/protocol definitions in this profile",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string"
+                      },
+                      "protocol": {
+                        "type": "string",
+                        "enum": [
+                          "tcp",
+                          "udp",
+                          "icmp",
+                          "gre",
+                          "other"
+                        ]
+                      },
+                      "ports": {
+                        "type": "array",
+                        "items": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 65535
+                        }
+                      },
+                      "expected_latency_ms": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "protocol"
+                    ]
+                  }
+                },
+                "estimated_bandwidth_mbps": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "profile_id"
+              ]
+            }
+          },
+          "simulation_options": {
+            "type": "object",
+            "properties": {
+              "duration_minutes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1440,
+                "default": 60
+              },
+              "include_failover_scenarios": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_security_policy_evaluation": {
+                "type": "boolean",
+                "default": true
+              },
+              "max_paths_per_flow": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10,
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Simulation run identifier, along with aggregated impact metrics, potential bottlenecks, and policy regression highlights tied to the migration plan."
+    },
+    {
+      "name": "create_migration_change_set",
+      "description": "Generate a concrete change set containing device- and provider-specific configuration deltas for the migration.",
+      "stage": "preparation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "include_prechecks": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to include automated pre-check steps in the change set"
+          },
+          "include_postchecks": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to include automated post-check steps in the change set"
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "abstract",
+              "provider_specific",
+              "both"
+            ],
+            "default": "both",
+            "description": "Whether to generate abstract changes, provider-specific artifacts, or both"
+          },
+          "filters": {
+            "type": "object",
+            "description": "Optional filters narrowing which objects are included",
+            "properties": {
+              "resource_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "policies",
+                    "routes",
+                    "tunnels",
+                    "qos",
+                    "monitoring",
+                    "identity"
+                  ]
+                }
+              },
+              "endpoints": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/endpoint_reference"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Detailed migration change set including ordered steps, dependencies, and provider-specific artifacts tied to the migration_id."
+    },
+    {
+      "name": "start_migration_execution",
+      "description": "Initiate execution of a validated migration plan and associated change set.",
+      "stage": "execution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "dry_run",
+              "pilot",
+              "full"
+            ],
+            "default": "full",
+            "description": "Determine whether changes are simulated, applied to a subset, or fully executed"
+          },
+          "phase_overrides": {
+            "type": "array",
+            "description": "Optional phase-level overrides for this execution run",
+            "items": {
+              "type": "object",
+              "properties": {
+                "phase_id": {
+                  "type": "string"
+                },
+                "skip": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "traffic_cutover_percentage": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100
+                },
+                "change_window": {
+                  "$ref": "#/shared_entities/change_window"
+                }
+              },
+              "required": [
+                "phase_id"
+              ]
+            }
+          },
+          "confirmation": {
+            "type": "object",
+            "description": "Explicit confirmation controls for destructive operations",
+            "properties": {
+              "allow_downtime_minutes": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Maximum allowed downtime for critical endpoints"
+              },
+              "allow_policy_relaxation": {
+                "type": "boolean",
+                "default": false,
+                "description": "Allow temporary policy relaxations during migration"
+              },
+              "change_ticket_reference": {
+                "type": "string",
+                "description": "External change management ticket reference"
+              }
+            }
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Execution handle with current status, list of spawned task_ids, and initial phase execution summary."
+    },
+    {
+      "name": "get_migration_status",
+      "description": "Retrieve real-time status, progress, and health for a running or completed migration.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional details to include in the status response",
+            "items": {
+              "type": "string",
+              "enum": [
+                "phases",
+                "tasks",
+                "metrics",
+                "events",
+                "change_set"
+              ]
+            }
+          },
+          "phase_filter": {
+            "type": "array",
+            "description": "Limit details to specific phases",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Current migration state (pending, running, completed, failed, rolling_back), per-phase progress, task summaries, and key SLO metrics."
+    },
+    {
+      "name": "get_task_diagnostics",
+      "description": "Fetch detailed diagnostics, logs, and remediation suggestions for a specific migration task.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string"
+          },
+          "log_options": {
+            "type": "object",
+            "properties": {
+              "include_logs": {
+                "type": "boolean",
+                "default": true
+              },
+              "log_level": {
+                "type": "string",
+                "enum": [
+                  "error",
+                  "warning",
+                  "info",
+                  "debug"
+                ],
+                "default": "info"
+              },
+              "max_entries": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 5000,
+                "default": 500
+              }
+            }
+          },
+          "include_environment_state": {
+            "type": "boolean",
+            "default": false,
+            "description": "Include snapshot of environment state relevant to the task"
+          }
+        },
+        "required": [
+          "migration_id",
+          "task_id"
+        ]
+      },
+      "returns": "Task-level diagnostics including status, error traces, relevant logs, environment diffs, and suggested remediation actions."
+    },
+    {
+      "name": "retry_migration_step",
+      "description": "Retry a failed or stuck step within a migration, optionally with overrides or manual remediations.",
+      "stage": "error_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "task_id": {
+            "type": "string",
+            "description": "Identifier of the specific task/step to retry"
+          },
+          "retry_mode": {
+            "type": "string",
+            "enum": [
+              "auto",
+              "manual_override",
+              "skip_and_continue"
+            ],
+            "default": "auto"
+          },
+          "override_parameters": {
+            "type": "object",
+            "description": "Optional overrides applied during retry",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "backoff_strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "linear",
+                  "exponential"
+                ]
+              },
+              "manual_commands": {
+                "type": "array",
+                "description": "Manually specified commands or operations to run before retry",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "target": {
+                      "type": "string",
+                      "description": "Device or endpoint identifier"
+                    },
+                    "command": {
+                      "type": "string",
+                      "description": "Command or operation to perform"
+                    },
+                    "expected_outcome": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "target",
+                    "command"
+                  ]
+                }
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Operator-provided reason for the retry or override"
+          }
+        },
+        "required": [
+          "migration_id",
+          "task_id",
+          "retry_mode"
+        ]
+      },
+      "returns": "Updated task execution status, new task_id if a new attempt is spawned, and linkage to previous attempts for audit."
+    },
+    {
+      "name": "rollback_migration",
+      "description": "Initiate a rollback of all or part of a migration to the previous stable network state.",
+      "stage": "rollback",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "description": "Scope of rollback within the migration",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "full",
+                  "phase",
+                  "endpoint"
+                ],
+                "default": "full"
+              },
+              "phases": {
+                "type": "array",
+                "description": "Phases to rollback when mode is 'phase'",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "endpoints": {
+                "type": "array",
+                "description": "Endpoints to rollback when mode is 'endpoint'",
+                "items": {
+                  "$ref": "#/shared_entities/endpoint_reference"
+                }
+              }
+            }
+          },
+          "rollback_window": {
+            "$ref": "#/shared_entities/change_window"
+          },
+          "auto_reenable_monitoring": {
+            "type": "boolean",
+            "default": true,
+            "description": "Enable extra monitoring rules during rollback"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Operator-provided rollback reason, often linked to incident or ticket"
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Rollback operation handle with status, impacted resources, and linkage to original migration execution details."
+    },
+    {
+      "name": "cancel_migration",
+      "description": "Cancel a pending or running migration, attempting to safely stop execution without changing current state.",
+      "stage": "control",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "cancellation_mode": {
+            "type": "string",
+            "enum": [
+              "graceful",
+              "force"
+            ],
+            "default": "graceful",
+            "description": "Graceful waits for in-flight operations to complete safely; force attempts immediate termination."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason or incident reference for audit trail"
+          },
+          "preserve_partial_changes": {
+            "type": "boolean",
+            "default": true,
+            "description": "If false, system may attempt automatic rollback of partially applied changes"
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Cancellation confirmation, final migration state, and whether any rollback actions were triggered."
+    },
+    {
+      "name": "list_migrations",
+      "description": "List and filter migrations for a tenant across environments and time ranges.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "planned",
+                    "validated",
+                    "running",
+                    "completed",
+                    "failed",
+                    "canceled",
+                    "rolling_back",
+                    "rolled_back"
+                  ]
+                }
+              },
+              "source_environment_id": {
+                "type": "string"
+              },
+              "target_environment_id": {
+                "type": "string"
+              },
+              "created_after": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_before": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "strategy_type": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "big_bang",
+                    "phased",
+                    "canary"
+                  ]
+                }
+              },
+              "has_rollback": {
+                "type": "boolean"
+              },
+              "labels": {
+                "type": "array",
+                "description": "Arbitrary labels/tags applied to migrations",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "status",
+              "strategy"
+            ],
+            "default": "created_at"
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ]
+      },
+      "returns": "Paginated list of migrations with basic metadata, current status, and key fields for each migration."
+    },
+    {
+      "name": "get_migration_details",
+      "description": "Retrieve complete details for a single migration, including plan, change set, execution history, and outcomes.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Control which sections of the migration to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "plan",
+                "strategy",
+                "validation_reports",
+                "simulation_results",
+                "change_set",
+                "execution_history",
+                "rollback_history",
+                "audit_log"
+              ]
+            }
+          },
+          "redact_sensitive_data": {
+            "type": "boolean",
+            "default": true,
+            "description": "Redact secrets or keys from returned details"
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Full migration record containing plan, validations, simulations, executions, and rollback/audit information as requested via include."
+    }
+  ]
+}

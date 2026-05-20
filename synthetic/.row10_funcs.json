@@ -1,0 +1,585 @@
+{
+  "deploy_sase_changes": {
+    "name": "deploy_sase_changes",
+    "description": "Trigger deployment of pending SASE configuration changes for a service or specific change request.",
+    "stage": "deploy",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tenant_id": {
+          "type": "string"
+        },
+        "sase_service_id": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "object",
+          "description": "Scope of deployment.",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "full_service",
+                "change_request",
+                "site_subset"
+              ]
+            },
+            "change_request_id": {
+              "type": "string",
+              "description": "Required when type is change_request."
+            },
+            "site_ids": {
+              "type": "array",
+              "description": "Required when type is site_subset.",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        "validation_options": {
+          "type": "object",
+          "description": "Validation and pre-check options.",
+          "properties": {
+            "simulate_only": {
+              "type": "boolean",
+              "default": false
+            },
+            "run_traffic_impact_analysis": {
+              "type": "boolean",
+              "default": true
+            },
+            "run_compliance_checks": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        }
+      },
+      "required": [
+        "tenant_id",
+        "sase_service_id",
+        "scope"
+      ]
+    },
+    "returns": "deployment_job_id, validation results (if simulate_only), and initial deployment job status."
+  },
+  "get_sase_service_status": {
+    "name": "get_sase_service_status",
+    "description": "Retrieve the current status, health, and configuration state of a SASE service, optionally scoped to sites.",
+    "stage": "monitor",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tenant_id": {
+          "type": "string"
+        },
+        "sase_service_id": {
+          "type": "string"
+        },
+        "site_ids": {
+          "type": "array",
+          "description": "Optional list of site_ids to filter status by.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "include": {
+          "type": "array",
+          "description": "Additional details to include in the response.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "topology",
+              "policy_attachments",
+              "health_metrics",
+              "pending_changes",
+              "last_deployments"
+            ]
+          }
+        }
+      },
+      "required": [
+        "tenant_id",
+        "sase_service_id"
+      ]
+    },
+    "returns": "Service-level and per-site operational status, health metrics, and optionally topology and policy attachment summaries."
+  },
+  "check_connectivity_health": {
+    "name": "check_connectivity_health",
+    "description": "Run on-demand health and reachability checks for tunnels, PoPs, and critical applications within a SASE service.",
+    "stage": "monitor",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tenant_id": {
+          "type": "string"
+        },
+        "sase_service_id": {
+          "type": "string"
+        },
+        "targets": {
+          "type": "object",
+          "description": "Targets for health checks.",
+          "properties": {
+            "site_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "application_fqdns": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tunnel_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "checks": {
+          "type": "array",
+          "description": "Types of health checks to perform.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "tunnel_reachability",
+              "path_latency",
+              "packet_loss",
+              "dns_resolution",
+              "policy_hit_rate"
+            ]
+          }
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "default": 60
+        }
+      },
+      "required": [
+        "tenant_id",
+        "sase_service_id",
+        "checks"
+      ]
+    },
+    "returns": "Per-target health check results including status, metrics, and recommended remediation hints."
+  },
+  "list_sase_services": {
+    "name": "list_sase_services",
+    "description": "List and filter SASE service instances for a tenant.",
+    "stage": "read",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tenant_id": {
+          "type": "string"
+        },
+        "filters": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "designing",
+                  "provisioning",
+                  "active",
+                  "degraded",
+                  "suspended",
+                  "retired"
+                ]
+              }
+            },
+            "created_after": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "created_before": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "name_contains": {
+              "type": "string"
+            },
+            "tags": {
+              "type": "array",
+              "description": "Match services that contain all of these tags (key or key=value).",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "page": {
+          "type": "integer",
+          "default": 1
+        },
+        "page_size": {
+          "type": "integer",
+          "default": 50
+        },
+        "sort_by": {
+          "type": "string",
+          "enum": [
+            "created_at",
+            "name",
+            "status"
+          ],
+          "default": "created_at"
+        },
+        "sort_order": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "default": "desc"
+        }
+      },
+      "required": [
+        "tenant_id"
+      ]
+    },
+    "returns": "Paginated list of SASE services with basic metadata and status for each."
+  },
+  "modify_sase_configuration": {
+    "name": "modify_sase_configuration",
+    "description": "Submit a change request to modify SASE configuration (sites, policies, or topology settings) for an existing service.",
+    "stage": "change",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tenant_id": {
+          "type": "string"
+        },
+        "sase_service_id": {
+          "type": "string"
+        },
+        "change_scope": {
+          "type": "string",
+          "enum": [
+            "site",
+            "policy_attachment",
+            "service_settings"
+          ]
+        },
+        "site_changes": {
+          "type": "object",
+          "description": "Changes related to sites. Required when change_scope is site.",
+          "properties": {
+            "site_id": {
+              "type": "string"
+            },
+            "updates": {
+              "type": "object",
+              "properties": {
+                "connectivity": {
+                  "type": "object",
+                  "description": "Updated connectivity parameters.",
+                  "properties": {
+                    "primary_bandwidth_mbps": {
+                      "type": "number"
+                    },
+                    "backup_enabled": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "edge_devices": {
+                  "type": "array",
+                  "description": "Edge devices to add or update.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "serial_number": {
+                        "type": "string"
+                      },
+                      "software_version": {
+                        "type": "string"
+                      },
+                      "operation": {
+                        "type": "string",
+                        "enum": [
+                          "add",
+                          "update",
+                          "remove"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "serial_number",
+                      "operation"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "policy_attachment_changes": {
+          "type": "object",
+          "description": "Changes to policy attachments. Required when change_scope is policy_attachment.",
+          "properties": {
+            "attach": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "policy_id": {
+                    "type": "string"
+                  },
+                  "scope": {
+                    "type": "object",
+                    "properties": {
+                      "sites": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "segments": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "policy_id"
+                ]
+              }
+            },
+            "detach": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "policy_id": {
+                    "type": "string"
+                  },
+                  "scope_filter": {
+                    "type": "object",
+                    "properties": {
+                      "sites": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "segments": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "policy_id"
+                ]
+              }
+            }
+          }
+        },
+        "service_settings_changes": {
+          "type": "object",
+          "description": "Changes to service-level settings. Required when change_scope is service_settings.",
+          "properties": {
+            "default_security_posture": {
+              "type": "string",
+              "enum": [
+                "zero_trust",
+                "balanced",
+                "open_then_monitor"
+              ]
+            },
+            "logging_settings": {
+              "type": "object",
+              "properties": {
+                "log_retention_days": {
+                  "type": "integer"
+                },
+                "export_destinations": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "syslog",
+                          "siem_api",
+                          "object_storage"
+                        ]
+                      },
+                      "endpoint": {
+                        "type": "string"
+                      },
+                      "auth": {
+                        "type": "object",
+                        "properties": {
+                          "method": {
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "basic",
+                              "token"
+                            ]
+                          },
+                          "username": {
+                            "type": "string"
+                          },
+                          "token": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "endpoint"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "change_metadata": {
+          "type": "object",
+          "description": "Metadata for this change request.",
+          "properties": {
+            "requested_by": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "risk_level": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            "schedule": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "immediate",
+                    "window"
+                  ]
+                },
+                "window_start": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "window_end": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "type"
+              ]
+            }
+          },
+          "required": [
+            "requested_by",
+            "reason"
+          ]
+        }
+      },
+      "required": [
+        "tenant_id",
+        "sase_service_id",
+        "change_scope",
+        "change_metadata"
+      ]
+    },
+    "returns": "New change_request_id, summary of proposed changes, and validation warnings if any."
+  },
+  "retry_or_rollback_deployment": {
+    "name": "retry_or_rollback_deployment",
+    "description": "Retry a failed deployment job or initiate a rollback to the last known good configuration.",
+    "stage": "recovery",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "tenant_id": {
+          "type": "string"
+        },
+        "sase_service_id": {
+          "type": "string"
+        },
+        "deployment_job_id": {
+          "type": "string",
+          "description": "The deployment job to retry or rollback from."
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "retry",
+            "rollback"
+          ]
+        },
+        "rollback_options": {
+          "type": "object",
+          "description": "Additional options for rollback operation.",
+          "properties": {
+            "rollback_scope": {
+              "type": "string",
+              "enum": [
+                "entire_service",
+                "sites_with_errors_only"
+              ],
+              "default": "sites_with_errors_only"
+            },
+            "preserve_new_objects": {
+              "type": "boolean",
+              "description": "If true, preserves newly created objects while reverting their bindings.",
+              "default": false
+            }
+          }
+        },
+        "retry_options": {
+          "type": "object",
+          "description": "Additional options for retry operation.",
+          "properties": {
+            "override_validation_errors": {
+              "type": "boolean",
+              "default": false
+            },
+            "max_retries": {
+              "type": "integer",
+              "default": 1
+            }
+          }
+        }
+      },
+      "required": [
+        "tenant_id",
+        "sase_service_id",
+        "deployment_job_id",
+        "operation"
+      ]
+    },
+    "returns": "New deployment_job_id for the retry or rollback operation and its initial status."
+  }
+}

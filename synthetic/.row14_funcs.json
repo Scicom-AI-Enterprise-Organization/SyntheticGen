@@ -1,0 +1,606 @@
+{
+  "ingest_raw_alarm": {
+    "name": "ingest_raw_alarm",
+    "description": "Ingest a raw alarm event from an external source, normalize it, and create or update a normalized alarm record.",
+    "stage": "ingest",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "ingestion_source": {
+          "type": "string",
+          "description": "Source of the incoming alarm",
+          "enum": [
+            "ems",
+            "nms",
+            "probe",
+            "ticketing",
+            "synthetic_test"
+          ]
+        },
+        "received_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the event was received"
+        },
+        "raw_payload": {
+          "type": "object",
+          "description": "Original alarm payload from the source system",
+          "properties": {
+            "headers": {
+              "type": "object",
+              "description": "Transport or protocol headers"
+            },
+            "body": {
+              "type": "object",
+              "description": "Alarm body as parsed key-value structure"
+            },
+            "raw_text": {
+              "type": "string",
+              "description": "Raw unparsed message content if available"
+            }
+          },
+          "required": [
+            "body"
+          ]
+        },
+        "signature": {
+          "$ref": "#/shared_entities/alarm_signature"
+        },
+        "network_element": {
+          "$ref": "#/shared_entities/network_element_ref"
+        },
+        "lifecycle_event": {
+          "type": "string",
+          "description": "Alarm lifecycle change type",
+          "enum": [
+            "raise",
+            "update",
+            "clear"
+          ]
+        },
+        "ingestion_options": {
+          "type": "object",
+          "description": "Options influencing ingestion behavior",
+          "properties": {
+            "deduplication": {
+              "type": "object",
+              "properties": {
+                "strategy": {
+                  "type": "string",
+                  "enum": [
+                    "time_window",
+                    "signature_hash",
+                    "none"
+                  ]
+                },
+                "time_window_seconds": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "enrichment": {
+              "type": "object",
+              "properties": {
+                "load_inventory_context": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "load_service_impact": {
+                  "type": "boolean",
+                  "default": false
+                }
+              }
+            },
+            "validation_mode": {
+              "type": "string",
+              "description": "If set, ingestion will be used for QA validation workflow",
+              "enum": [
+                "none",
+                "shadow",
+                "blocking"
+              ],
+              "default": "none"
+            }
+          }
+        }
+      },
+      "required": [
+        "ingestion_source",
+        "received_at",
+        "raw_payload",
+        "signature",
+        "network_element",
+        "lifecycle_event"
+      ]
+    },
+    "returns": "Normalized alarm with assigned alarm_id, deduplication info, and ingestion quality metrics."
+  },
+  "validate_alarm_normalization": {
+    "name": "validate_alarm_normalization",
+    "description": "Run quality checks on a normalized alarm mapping to ensure fields are correctly derived from raw payload.",
+    "stage": "qa_validation",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "alarm_id": {
+          "type": "string"
+        },
+        "validation_profile": {
+          "type": "string",
+          "description": "Named profile defining which rules to apply",
+          "enum": [
+            "default",
+            "vendor_strict",
+            "regulatory",
+            "custom"
+          ]
+        },
+        "expected_fields": {
+          "type": "object",
+          "description": "Expected values or patterns for key normalized fields",
+          "properties": {
+            "severity": {
+              "type": "string",
+              "enum": [
+                "critical",
+                "major",
+                "minor",
+                "warning",
+                "info"
+              ]
+            },
+            "alarm_class": {
+              "type": "string"
+            },
+            "category": {
+              "type": "string",
+              "enum": [
+                "power",
+                "transmission",
+                "capacity",
+                "hardware",
+                "software",
+                "configuration",
+                "environmental",
+                "security",
+                "other"
+              ]
+            },
+            "kpi_impacted": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "description": "List of KPI identifiers expected to be impacted"
+              }
+            }
+          }
+        },
+        "rule_overrides": {
+          "type": "array",
+          "description": "Overrides for specific normalization QA rules",
+          "items": {
+            "type": "object",
+            "properties": {
+              "rule_id": {
+                "type": "string"
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "disable",
+                  "downgrade_severity",
+                  "upgrade_severity",
+                  "force_pass"
+                ]
+              },
+              "justification": {
+                "type": "string",
+                "maxLength": 500
+              }
+            },
+            "required": [
+              "rule_id",
+              "action"
+            ]
+          }
+        }
+      },
+      "required": [
+        "alarm_id"
+      ]
+    },
+    "returns": "Validation result including rule-by-rule outcomes, detected discrepancies, and an overall normalization quality score."
+  },
+  "correlate_alarms": {
+    "name": "correlate_alarms",
+    "description": "Correlate alarms into an incident or correlation group based on topology, time, and signatures.",
+    "stage": "correlation",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "primary_alarm_id": {
+          "type": "string",
+          "description": "Primary alarm around which correlation is performed"
+        },
+        "time_window": {
+          "type": "object",
+          "description": "Time window around the primary alarm for correlation candidates",
+          "properties": {
+            "from": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "to": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "sliding_window_seconds": {
+              "type": "integer",
+              "description": "Alternative to explicit from/to, relative to primary alarm timestamp"
+            }
+          }
+        },
+        "correlation_policies": {
+          "type": "array",
+          "description": "List of correlation policies to apply",
+          "items": {
+            "type": "object",
+            "properties": {
+              "policy_id": {
+                "type": "string"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "same_ne",
+                  "same_site",
+                  "same_region",
+                  "topology_neighbor",
+                  "service_chain"
+                ]
+              },
+              "max_hops": {
+                "type": "integer",
+                "description": "Maximum topology hops when scope is topology-based"
+              },
+              "include_severity": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "critical",
+                    "major",
+                    "minor",
+                    "warning",
+                    "info"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "policy_id",
+              "scope"
+            ]
+          }
+        },
+        "existing_correlation_id": {
+          "type": "string",
+          "description": "If provided, extend or recompute correlation for an existing group"
+        },
+        "qa_mode": {
+          "type": "object",
+          "description": "Quality assurance mode for correlation evaluation",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "expected_root_cause_alarm_id": {
+              "type": "string"
+            },
+            "tolerance": {
+              "type": "object",
+              "properties": {
+                "max_false_positives": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "max_missed_candidates": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "primary_alarm_id",
+        "correlation_policies"
+      ]
+    },
+    "returns": "Correlation group with correlation_id, member alarms, identified root cause, and correlation quality metrics (if QA mode is enabled)."
+  },
+  "trigger_auto_remediation": {
+    "name": "trigger_auto_remediation",
+    "description": "Trigger an auto-remediation workflow for a specific alarm or correlation group and track its execution.",
+    "stage": "remediation",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target_type": {
+          "type": "string",
+          "enum": [
+            "alarm",
+            "correlation"
+          ],
+          "description": "Whether remediation is for a single alarm or an entire correlation group"
+        },
+        "alarm_id": {
+          "type": "string",
+          "description": "Required if target_type is alarm"
+        },
+        "correlation_id": {
+          "type": "string",
+          "description": "Required if target_type is correlation"
+        },
+        "playbook_id": {
+          "type": "string",
+          "description": "Identifier of the remediation playbook/workflow to run"
+        },
+        "playbook_inputs": {
+          "type": "object",
+          "description": "Dynamic inputs for the remediation playbook",
+          "properties": {
+            "network_element": {
+              "$ref": "#/shared_entities/network_element_ref"
+            },
+            "parameters": {
+              "type": "object",
+              "description": "Free-form parameters, validated separately"
+            }
+          }
+        },
+        "execution_mode": {
+          "type": "string",
+          "enum": [
+            "dry_run",
+            "manual_approval",
+            "auto"
+          ],
+          "description": "Determines how remediation is executed"
+        },
+        "qa_guardrails": {
+          "type": "object",
+          "description": "Quality and risk guardrails for the remediation run",
+          "properties": {
+            "max_impact_scope": {
+              "type": "string",
+              "enum": [
+                "single_ne",
+                "single_site",
+                "region",
+                "network_wide"
+              ]
+            },
+            "rollback_on_alarm_increase": {
+              "type": "boolean",
+              "default": true
+            },
+            "alarm_increase_threshold": {
+              "type": "integer",
+              "description": "Number of new alarms post-remediation to trigger rollback"
+            }
+          }
+        }
+      },
+      "required": [
+        "target_type",
+        "playbook_id",
+        "execution_mode"
+      ],
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "target_type": {
+                "const": "alarm"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "alarm_id"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "target_type": {
+                "const": "correlation"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "correlation_id"
+            ]
+          }
+        }
+      ]
+    },
+    "returns": "Auto-remediation run details including remediation_run_id, initial status, approval requirements, and evaluated risk/quality checks."
+  },
+  "get_remediation_status": {
+    "name": "get_remediation_status",
+    "description": "Check the current status and detailed step execution log of an auto-remediation run.",
+    "stage": "remediation",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "remediation_run_id": {
+          "type": "string"
+        },
+        "include_logs": {
+          "type": "boolean",
+          "default": false
+        },
+        "log_filter": {
+          "type": "object",
+          "description": "Filter for remediation step logs when include_logs is true",
+          "properties": {
+            "levels": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "debug",
+                  "info",
+                  "warning",
+                  "error"
+                ]
+              }
+            },
+            "from_step_index": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "max_entries": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          }
+        }
+      },
+      "required": [
+        "remediation_run_id"
+      ]
+    },
+    "returns": "Current remediation run state, step-by-step execution results, any partial rollbacks, and summarized success/quality indicators."
+  },
+  "record_validation_outcome": {
+    "name": "record_validation_outcome",
+    "description": "Record or update human QA feedback for alarms or correlations within an existing validation session.",
+    "stage": "qa_session",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "validation_session_id": {
+          "type": "string"
+        },
+        "entries": {
+          "type": "array",
+          "description": "List of validation outcomes to record",
+          "items": {
+            "type": "object",
+            "properties": {
+              "target_type": {
+                "type": "string",
+                "enum": [
+                  "alarm",
+                  "correlation"
+                ]
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "label_type": {
+                "type": "string",
+                "enum": [
+                  "true_positive",
+                  "false_positive",
+                  "false_negative",
+                  "informational"
+                ]
+              },
+              "quality_issues": {
+                "type": "array",
+                "description": "Identified quality issues",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "issue_type": {
+                      "type": "string",
+                      "enum": [
+                        "missing_enrichment",
+                        "wrong_severity",
+                        "wrong_correlation",
+                        "duplicate_alarm",
+                        "late_detection",
+                        "unnecessary_alarm",
+                        "missing_root_cause",
+                        "other"
+                      ]
+                    },
+                    "severity": {
+                      "type": "string",
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "critical"
+                      ]
+                    },
+                    "description": {
+                      "type": "string",
+                      "maxLength": 500
+                    }
+                  },
+                  "required": [
+                    "issue_type"
+                  ]
+                }
+              },
+              "reviewer": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "noc_engineer",
+                      "qa_engineer",
+                      "architect",
+                      "vendor_support",
+                      "other"
+                    ]
+                  }
+                }
+              },
+              "timestamp": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "target_type",
+              "target_id",
+              "label_type"
+            ]
+          }
+        },
+        "merge_strategy": {
+          "type": "string",
+          "enum": [
+            "append",
+            "override_latest_per_target"
+          ],
+          "default": "append"
+        }
+      },
+      "required": [
+        "validation_session_id",
+        "entries"
+      ]
+    },
+    "returns": "Updated validation session statistics, per-target latest labels, and aggregated quality indicators."
+  }
+}

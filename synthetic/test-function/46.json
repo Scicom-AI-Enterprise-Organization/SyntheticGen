@@ -1,0 +1,4149 @@
+{
+  "workflow_name": "identity_verification_flow",
+  "description": "End-to-end identity and trust verification workflow leveraging network intelligence and risk signals for Trust-as-a-Service (TaaS) scenarios.",
+  "domain": "taas/network_intelligence",
+  "shared_entities": {
+    "session_id": {
+      "type": "string",
+      "description": "Unique identifier for an identity verification session"
+    },
+    "profile_id": {
+      "type": "string",
+      "description": "Persistent user or entity profile identifier"
+    },
+    "network_context_id": {
+      "type": "string",
+      "description": "Identifier for captured network intelligence context (IP, device, ASN, etc.)"
+    },
+    "risk_assessment_id": {
+      "type": "string",
+      "description": "Identifier for a specific risk assessment associated with a session"
+    },
+    "verification_request_id": {
+      "type": "string",
+      "description": "Identifier for a submitted verification request (e.g., KYC check)"
+    },
+    "decision_id": {
+      "type": "string",
+      "description": "Identifier for a final trust/verification decision"
+    }
+  },
+  "functions": [
+    {
+      "name": "init_verification_session",
+      "description": "Initialize a new identity verification session, capturing initial channel and network metadata.",
+      "stage": "init",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "profile_hint": {
+            "type": "object",
+            "description": "Optional basic identity hints if known prior to full profiling.",
+            "properties": {
+              "external_user_id": {
+                "type": "string",
+                "description": "Caller-side user identifier (e.g., app user ID)."
+              },
+              "email": {
+                "type": "string",
+                "format": "email"
+              },
+              "phone_number": {
+                "type": "string",
+                "description": "E.164 formatted phone number if available."
+              },
+              "country": {
+                "type": "string",
+                "description": "ISO 3166-1 alpha-2 country code."
+              }
+            }
+          },
+          "entry_channel": {
+            "type": "string",
+            "description": "Channel where the verification is initiated.",
+            "enum": [
+              "web",
+              "mobile_app",
+              "api",
+              "ivr",
+              "branch",
+              "kiosk"
+            ]
+          },
+          "network_snapshot": {
+            "type": "object",
+            "description": "Initial network-related attributes captured at session start.",
+            "properties": {
+              "ip_address": {
+                "type": "string",
+                "description": "Client public IP address."
+              },
+              "user_agent": {
+                "type": "string"
+              },
+              "device": {
+                "type": "object",
+                "properties": {
+                  "device_id": {
+                    "type": "string",
+                    "description": "Client-specific device identifier if available."
+                  },
+                  "os": {
+                    "type": "string"
+                  },
+                  "os_version": {
+                    "type": "string"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "fingerprint": {
+                    "type": "string",
+                    "description": "Derived device fingerprint or browser fingerprint."
+                  }
+                }
+              },
+              "location_hint": {
+                "type": "object",
+                "description": "Coarse-grained location from client, if available.",
+                "properties": {
+                  "latitude": {
+                    "type": "number"
+                  },
+                  "longitude": {
+                    "type": "number"
+                  },
+                  "accuracy_meters": {
+                    "type": "number"
+                  }
+                }
+              }
+            },
+            "required": [
+              "ip_address"
+            ]
+          },
+          "policy_context": {
+            "type": "object",
+            "description": "Contextual info used to route to the correct verification policy.",
+            "properties": {
+              "use_case": {
+                "type": "string",
+                "enum": [
+                  "account_opening",
+                  "high_value_transaction",
+                  "login_risk_review",
+                  "password_reset",
+                  "kyb_onboarding",
+                  "periodic_review"
+                ]
+              },
+              "risk_appetite": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "tenant_id": {
+                "type": "string",
+                "description": "Identifier for the consuming tenant/application."
+              }
+            },
+            "required": [
+              "use_case"
+            ]
+          }
+        },
+        "required": [
+          "entry_channel",
+          "network_snapshot",
+          "policy_context"
+        ]
+      },
+      "returns": "New verification session with session_id, optional profile_id, and initial status."
+    },
+    {
+      "name": "enrich_network_context",
+      "description": "Enrich raw network telemetry (IP, ASN, device) into a structured network intelligence context.",
+      "stage": "network_enrichment",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "network_observation": {
+            "type": "object",
+            "description": "Collected network signals to enrich.",
+            "properties": {
+              "ip": {
+                "type": "string"
+              },
+              "connection": {
+                "type": "object",
+                "properties": {
+                  "asn": {
+                    "type": "integer",
+                    "description": "Autonomous System Number if known."
+                  },
+                  "isp_name": {
+                    "type": "string"
+                  },
+                  "network_type": {
+                    "type": "string",
+                    "enum": [
+                      "residential",
+                      "mobile",
+                      "corporate",
+                      "vpn",
+                      "tor",
+                      "hosting",
+                      "unknown"
+                    ]
+                  },
+                  "port": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "device_fingerprint": {
+                "type": "string"
+              },
+              "cookies": {
+                "type": "array",
+                "description": "Hashed or pseudonymous cookie identifiers.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "cookie_id": {
+                      "type": "string"
+                    },
+                    "domain": {
+                      "type": "string"
+                    },
+                    "first_seen_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+              "ip"
+            ]
+          },
+          "include_history": {
+            "type": "boolean",
+            "description": "If true, include historical intelligence on this network and device.",
+            "default": true
+          }
+        },
+        "required": [
+          "session_id",
+          "network_observation"
+        ]
+      },
+      "returns": "Enriched network context with network_context_id, geo, reputation scores, and related profiles."
+    },
+    {
+      "name": "create_or_link_profile",
+      "description": "Create a new identity profile or link to an existing one using provided identifiers and enriched network context.",
+      "stage": "profiling",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "network_context_id": {
+            "type": "string"
+          },
+          "identity_attributes": {
+            "type": "object",
+            "description": "Identity attributes used to search/link or create profile.",
+            "properties": {
+              "legal_name": {
+                "type": "string"
+              },
+              "dob": {
+                "type": "string",
+                "format": "date"
+              },
+              "national_ids": {
+                "type": "array",
+                "description": "List of government-issued identifiers.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id_type": {
+                      "type": "string",
+                      "enum": [
+                        "passport",
+                        "national_id",
+                        "driver_license",
+                        "tax_id",
+                        "other"
+                      ]
+                    },
+                    "id_number": {
+                      "type": "string"
+                    },
+                    "country": {
+                      "type": "string",
+                      "description": "Issuing country ISO code."
+                    },
+                    "expiry_date": {
+                      "type": "string",
+                      "format": "date"
+                    }
+                  },
+                  "required": [
+                    "id_type",
+                    "id_number"
+                  ]
+                }
+              },
+              "contacts": {
+                "type": "object",
+                "properties": {
+                  "emails": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "email"
+                    }
+                  },
+                  "phones": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "addresses": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "line1": {
+                      "type": "string"
+                    },
+                    "line2": {
+                      "type": "string"
+                    },
+                    "city": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "postal_code": {
+                      "type": "string"
+                    },
+                    "country": {
+                      "type": "string"
+                    },
+                    "address_type": {
+                      "type": "string",
+                      "enum": [
+                        "residential",
+                        "business",
+                        "mailing",
+                        "other"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "line1",
+                    "city",
+                    "country"
+                  ]
+                }
+              }
+            }
+          },
+          "linking_strategy": {
+            "type": "string",
+            "enum": [
+              "strict",
+              "fuzzy",
+              "network_anchored"
+            ],
+            "description": "Strategy to use for matching with existing profiles."
+          }
+        },
+        "required": [
+          "session_id",
+          "network_context_id",
+          "identity_attributes"
+        ]
+      },
+      "returns": "Profile linkage result with profile_id, match confidence, and any merged identities."
+    },
+    {
+      "name": "run_risk_assessment",
+      "description": "Execute a composite risk assessment using identity, network intelligence, and behavioral signals.",
+      "stage": "risk_assessment",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "network_context_id": {
+            "type": "string"
+          },
+          "behavioral_signals": {
+            "type": "object",
+            "description": "Optional real-time behavioral telemetry.",
+            "properties": {
+              "event_sequence": {
+                "type": "array",
+                "description": "Key events in this session used for risk scoring.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "event_type": {
+                      "type": "string",
+                      "enum": [
+                        "login",
+                        "credential_change",
+                        "device_change",
+                        "payment_attempt",
+                        "document_upload",
+                        "otp_request",
+                        "other"
+                      ]
+                    },
+                    "timestamp": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "metadata": {
+                      "type": "object",
+                      "description": "Arbitrary structured event metadata."
+                    }
+                  },
+                  "required": [
+                    "event_type",
+                    "timestamp"
+                  ]
+                }
+              },
+              "keystroke_dynamics": {
+                "type": "object",
+                "description": "Optional anonymized behavioral biometrics.",
+                "properties": {
+                  "typing_speed_wpm": {
+                    "type": "number"
+                  },
+                  "error_rate": {
+                    "type": "number"
+                  },
+                  "pattern_id": {
+                    "type": "string",
+                    "description": "Reference to a precomputed behavior pattern."
+                  }
+                }
+              }
+            }
+          },
+          "risk_factors": {
+            "type": "object",
+            "description": "Risk factor toggles or weight overrides.",
+            "properties": {
+              "enable_network_anomaly_rules": {
+                "type": "boolean",
+                "default": true
+              },
+              "enable_velocity_checks": {
+                "type": "boolean",
+                "default": true
+              },
+              "enable_device_consistency": {
+                "type": "boolean",
+                "default": true
+              },
+              "custom_weights": {
+                "type": "object",
+                "description": "Optional custom weights for each risk dimension.",
+                "properties": {
+                  "identity": {
+                    "type": "number"
+                  },
+                  "network": {
+                    "type": "number"
+                  },
+                  "behavior": {
+                    "type": "number"
+                  },
+                  "history": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "session_id",
+          "profile_id",
+          "network_context_id"
+        ]
+      },
+      "returns": "Risk assessment with risk_assessment_id, risk scores per dimension, and recommended actions."
+    },
+    {
+      "name": "submit_verification_request",
+      "description": "Submit a verification request (eKYC/eKYB/step-up check) to internal or external verification providers.",
+      "stage": "verification_submission",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "risk_assessment_id": {
+            "type": "string"
+          },
+          "verification_plan": {
+            "type": "object",
+            "description": "Definition of what checks to run.",
+            "properties": {
+              "verification_level": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "standard",
+                  "enhanced",
+                  "manual_review"
+                ]
+              },
+              "checks": {
+                "type": "array",
+                "description": "Discrete checks to perform.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "check_type": {
+                      "type": "string",
+                      "enum": [
+                        "document_ocr",
+                        "document_authenticity",
+                        "selfie_liveness",
+                        "selfie_match",
+                        "database_watchlist",
+                        "credit_bureau",
+                        "phone_carrier",
+                        "email_reputation",
+                        "network_reputation",
+                        "business_registry"
+                      ]
+                    },
+                    "provider": {
+                      "type": "string",
+                      "description": "Preferred provider or integration key for this check."
+                    },
+                    "priority": {
+                      "type": "string",
+                      "enum": [
+                        "primary",
+                        "fallback"
+                      ]
+                    },
+                    "config": {
+                      "type": "object",
+                      "description": "Provider-specific config, thresholds, and options."
+                    }
+                  },
+                  "required": [
+                    "check_type"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "verification_level",
+              "checks"
+            ]
+          },
+          "attachments": {
+            "type": "array",
+            "description": "Identity artifacts required for verification (documents, selfies).",
+            "items": {
+              "type": "object",
+              "properties": {
+                "attachment_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "id_document_front",
+                    "id_document_back",
+                    "passport",
+                    "selfie",
+                    "proof_of_address",
+                    "business_document",
+                    "other"
+                  ]
+                },
+                "content_type": {
+                  "type": "string"
+                },
+                "storage_url": {
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "attachment_id",
+                "type"
+              ]
+            }
+          }
+        },
+        "required": [
+          "session_id",
+          "profile_id",
+          "risk_assessment_id",
+          "verification_plan"
+        ]
+      },
+      "returns": "Verification request with verification_request_id, list of dispatched checks, and initial statuses."
+    },
+    {
+      "name": "get_verification_status",
+      "description": "Retrieve the latest status of an in-progress verification request and its constituent checks.",
+      "stage": "verification_status",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "verification_request_id": {
+            "type": "string"
+          },
+          "include_check_details": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_raw_provider_responses": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "verification_request_id"
+        ]
+      },
+      "returns": "Current verification status with per-check results, errors, and overall progress."
+    },
+    {
+      "name": "evaluate_verification_decision",
+      "description": "Evaluate verification outcomes, risk scores, and policy rules to generate an approval/deny/review decision.",
+      "stage": "decisioning",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "profile_id": {
+            "type": "string"
+          },
+          "risk_assessment_id": {
+            "type": "string"
+          },
+          "verification_request_id": {
+            "type": "string"
+          },
+          "policy_overrides": {
+            "type": "object",
+            "description": "Optional ad-hoc policy overrides for this session.",
+            "properties": {
+              "force_outcome": {
+                "type": "string",
+                "enum": [
+                  "approve",
+                  "deny",
+                  "manual_review"
+                ]
+              },
+              "allowed_risk_band": {
+                "type": "string",
+                "enum": [
+                  "very_low",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "notes": {
+                "type": "string"
+              }
+            }
+          },
+          "decision_metadata": {
+            "type": "object",
+            "description": "Additional contextual info used during decisioning.",
+            "properties": {
+              "requested_limits": {
+                "type": "object",
+                "properties": {
+                  "transaction_limit": {
+                    "type": "number"
+                  },
+                  "daily_limit": {
+                    "type": "number"
+                  }
+                }
+              },
+              "jurisdiction": {
+                "type": "string",
+                "description": "Primary regulatory jurisdiction for this decision."
+              }
+            }
+          }
+        },
+        "required": [
+          "session_id",
+          "profile_id",
+          "risk_assessment_id",
+          "verification_request_id"
+        ]
+      },
+      "returns": "Decision payload with decision_id, outcome, reasons, and any applied policy rules."
+    },
+    {
+      "name": "list_sessions",
+      "description": "List verification sessions filtered by profile, status, and time window.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "profile_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "array",
+                "description": "Filter by session status.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "initialized",
+                    "in_progress",
+                    "awaiting_documents",
+                    "awaiting_review",
+                    "approved",
+                    "denied",
+                    "cancelled",
+                    "expired"
+                  ]
+                }
+              },
+              "use_case": {
+                "type": "string"
+              },
+              "created_after": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_before": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "min_risk_score": {
+                "type": "number"
+              },
+              "max_risk_score": {
+                "type": "number"
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "risk_score"
+            ]
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 20,
+            "maximum": 200
+          }
+        }
+      },
+      "returns": "Paginated list of sessions with summary status and associated risk bands."
+    },
+    {
+      "name": "get_session_details",
+      "description": "Get full details of a verification session, including linked profile, network context, risk, and decisions.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Optional sections to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "profile",
+                "network_context",
+                "risk_assessments",
+                "verification_requests",
+                "decisions",
+                "audit_log"
+              ]
+            }
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      "returns": "Comprehensive session object with optionally expanded related entities."
+    },
+    {
+      "name": "cancel_verification_session",
+      "description": "Cancel an in-progress verification session and propagate cancellation to running checks where possible.",
+      "stage": "exception_handling",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "user_abandoned",
+              "duplicate_request",
+              "fraud_suspected",
+              "technical_issue",
+              "other"
+            ]
+          },
+          "reason_details": {
+            "type": "string",
+            "description": "Free-text description with more detail about the cancellation."
+          },
+          "propagate_to_providers": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to attempt to cancel external provider checks."
+          }
+        },
+        "required": [
+          "session_id",
+          "reason"
+        ]
+      },
+      "returns": "Cancellation confirmation with updated session status and list of affected checks."
+    },
+    {
+      "name": "retry_verification_check",
+      "description": "Retry a failed or inconclusive verification check, optionally with a different provider or configuration.",
+      "stage": "exception_handling",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "verification_request_id": {
+            "type": "string"
+          },
+          "check_id": {
+            "type": "string",
+            "description": "Identifier of the specific check within the verification request."
+          },
+          "retry_strategy": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "same_provider",
+                  "fallback_provider",
+                  "alternate_config"
+                ]
+              },
+              "provider_override": {
+                "type": "string",
+                "description": "Optional override provider key for the retry."
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 1
+              },
+              "backoff_seconds": {
+                "type": "integer",
+                "default": 0
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "updated_attachments": {
+            "type": "array",
+            "description": "Optional updated documents/selfies to use for retry.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "attachment_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "storage_url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "attachment_id"
+              ]
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for retry, used for audit."
+          }
+        },
+        "required": [
+          "verification_request_id",
+          "check_id",
+          "retry_strategy"
+        ]
+      },
+      "returns": "Retry operation result with new check instance identifiers and updated status."
+    },
+    {
+      "name": "rollback_decision",
+      "description": "Rollback or supersede a previous verification decision, typically after dispute or new intelligence.",
+      "stage": "exception_handling",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "decision_id": {
+            "type": "string"
+          },
+          "rollback_reason": {
+            "type": "string",
+            "enum": [
+              "user_dispute_upheld",
+              "provider_error",
+              "new_adverse_information",
+              "policy_change",
+              "data_correction",
+              "other"
+            ]
+          },
+          "comment": {
+            "type": "string",
+            "description": "Explanation for audit and downstream consumers."
+          },
+          "new_outcome": {
+            "type": "string",
+            "description": "Optional immediate new decision outcome to apply.",
+            "enum": [
+              "approve",
+              "deny",
+              "manual_review"
+            ]
+          },
+          "notify_downstream_systems": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "decision_id",
+          "rollback_reason"
+        ]
+      },
+      "returns": "Rollback confirmation with updated decision state and references to superseding decisions if any."
+    },
+    {
+      "name": "update_trust_profile",
+      "description": "Update the long-term trust profile with new risk outcomes, labels, and network intelligence history.",
+      "stage": "post_processing",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "profile_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "trust_updates": {
+            "type": "object",
+            "properties": {
+              "risk_labels": {
+                "type": "array",
+                "description": "Add or remove risk labels associated with this profile.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "enum": [
+                        "trusted",
+                        "vip",
+                        "first_party_fraud",
+                        "third_party_fraud",
+                        "money_mule_suspected",
+                        "synthetic_identity_suspected",
+                        "high_chargeback_risk",
+                        "document_tampering_suspected"
+                      ]
+                    },
+                    "operation": {
+                      "type": "string",
+                      "enum": [
+                        "add",
+                        "remove"
+                      ]
+                    },
+                    "source": {
+                      "type": "string",
+                      "description": "System or analyst that added/removed the label."
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "operation"
+                  ]
+                }
+              },
+              "network_history": {
+                "type": "array",
+                "description": "Append new network contexts associated with this profile.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "network_context_id": {
+                      "type": "string"
+                    },
+                    "relationship": {
+                      "type": "string",
+                      "enum": [
+                        "primary_device",
+                        "secondary_device",
+                        "suspicious_device",
+                        "historical_ip",
+                        "vpn_endpoint",
+                        "tor_node"
+                      ]
+                    },
+                    "first_seen_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "network_context_id",
+                    "relationship"
+                  ]
+                }
+              },
+              "limits_adjustment": {
+                "type": "object",
+                "description": "Adjust profile-based risk and transaction limits.",
+                "properties": {
+                  "new_risk_tier": {
+                    "type": "string",
+                    "enum": [
+                      "tier_0",
+                      "tier_1",
+                      "tier_2",
+                      "tier_3"
+                    ]
+                  },
+                  "transaction_limits": {
+                    "type": "object",
+                    "properties": {
+                      "single_transaction": {
+                        "type": "number"
+                      },
+                      "daily_total": {
+                        "type": "number"
+                      },
+                      "monthly_total": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "audit_info": {
+            "type": "object",
+            "properties": {
+              "performed_by": {
+                "type": "string",
+                "description": "System or analyst performing the update."
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "profile_id",
+          "trust_updates"
+        ]
+      },
+      "returns": "Updated trust profile summary with current labels, risk tier, and limits."
+    },
+    {
+      "name": "bulk_import_verifications",
+      "description": "Bulk-import multiple verifications from an upstream source with validation and idempotency keys.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "import_source": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "json",
+                  "parquet",
+                  "kafka",
+                  "s3",
+                  "api"
+                ]
+              },
+              "location": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "format_options": {
+                "type": "object",
+                "properties": {
+                  "delimiter": {
+                    "type": "string"
+                  },
+                  "encoding": {
+                    "type": "string"
+                  },
+                  "header_row": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "required": [
+              "type",
+              "location"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "description": "Field mapping from source to canonical schema",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_id": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "batch_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "default": 500
+          },
+          "on_error": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "abort",
+              "quarantine"
+            ],
+            "default": "quarantine"
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "import_source",
+          "actor"
+        ]
+      },
+      "returns": "A bulk-import job descriptor with counts of accepted, rejected, and quarantined verifications, plus a job_id for follow-up."
+    },
+    {
+      "name": "bulk_update_verifications",
+      "description": "Apply a partial update to a batch of verifications matched by filter or id list.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/verification_request_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "patch": {
+            "type": "object",
+            "description": "Fields to patch on each matched item",
+            "properties": {
+              "set": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "unset": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "add_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "remove_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "preconditions": {
+            "type": "object",
+            "description": "Optional optimistic-concurrency preconditions",
+            "properties": {
+              "if_match_version": {
+                "type": "string"
+              },
+              "expected_status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "max_items": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1000
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "patch",
+          "actor"
+        ]
+      },
+      "returns": "Summary of matched, updated, and skipped verifications with per-item error details."
+    },
+    {
+      "name": "bulk_archive_verifications",
+      "description": "Archive (soft-delete) a batch of verifications with retention metadata and audit reasons.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/verification_request_id"
+            },
+            "minItems": 1
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retain_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "legal_hold": {
+            "type": "boolean",
+            "default": false
+          },
+          "tombstone_metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "ids",
+          "reason",
+          "actor"
+        ]
+      },
+      "returns": "Per-id archive results with new lifecycle state."
+    },
+    {
+      "name": "bulk_export_verifications",
+      "description": "Export a filtered set of verifications to a downstream destination (S3, GCS, blob, SFTP).",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Projection; empty means all fields"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "csv",
+              "parquet",
+              "ndjson"
+            ],
+            "default": "json"
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp",
+                  "http"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "compression": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "gzip",
+                  "zstd"
+                ],
+                "default": "none"
+              }
+            },
+            "required": [
+              "type",
+              "uri"
+            ]
+          },
+          "chunk_size_mb": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1024,
+            "default": 64
+          },
+          "include_audit_columns": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "sse-s3",
+                  "sse-kms",
+                  "client-side"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "destination",
+          "actor"
+        ]
+      },
+      "returns": "Export job handle including job_id, expected object URIs, row count, and signed download URLs when applicable."
+    },
+    {
+      "name": "search_verifications_advanced",
+      "description": "Advanced faceted search across verifications with full-text, structured filters, aggregations, and sort.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Full-text query string with Lucene-like syntax"
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "contains",
+                    "starts_with",
+                    "exists"
+                  ]
+                },
+                "value": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "array",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "aggregations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "terms",
+                    "histogram",
+                    "date_histogram",
+                    "stats",
+                    "cardinality"
+                  ]
+                },
+                "field": {
+                  "type": "string"
+                },
+                "interval": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "field"
+              ]
+            }
+          },
+          "highlight_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": []
+      },
+      "returns": "Search response with verifications hits, total count, aggregation buckets, and a next-cursor."
+    },
+    {
+      "name": "create_verification_subscription",
+      "description": "Create a subscription that fires webhooks or notifications on verification lifecycle events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "created",
+                "updated",
+                "status_changed",
+                "deleted",
+                "escalated",
+                "resolved",
+                "custom"
+              ]
+            },
+            "minItems": 1
+          },
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "target": {
+            "type": "object",
+            "description": "Notification target descriptor",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "email",
+                  "sms",
+                  "webhook",
+                  "push",
+                  "slack",
+                  "teams",
+                  "pagerduty"
+                ]
+              },
+              "address": {
+                "type": "string"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "secret_ref": {
+                "type": "string",
+                "description": "Reference to a stored secret"
+              }
+            },
+            "required": [
+              "type",
+              "address"
+            ]
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "retry_policy": {
+                "type": "object",
+                "properties": {
+                  "max_attempts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  },
+                  "backoff": {
+                    "type": "string",
+                    "enum": [
+                      "linear",
+                      "exponential",
+                      "fixed"
+                    ],
+                    "default": "exponential"
+                  },
+                  "initial_delay_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  }
+                }
+              },
+              "rate_limit_per_minute": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "batch_size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            }
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "events",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "The created subscription including subscription_id, active state, and last_delivery info (initially null)."
+    },
+    {
+      "name": "list_verification_subscriptions",
+      "description": "List existing verification subscriptions with optional filters and pagination.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "target_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of subscription objects including delivery health stats."
+    },
+    {
+      "name": "deactivate_verification_subscription",
+      "description": "Deactivate or delete a verification subscription and optionally flush pending deliveries.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "delete"
+            ],
+            "default": "pause"
+          },
+          "flush_pending": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "subscription_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated subscription state and the number of pending deliveries flushed or kept."
+    },
+    {
+      "name": "get_verification_audit_log",
+      "description": "Return the audit/change log for a single verification with field-level diffs and actor info.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/verification_request_id"
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "include_field_diff": {
+            "type": "boolean",
+            "default": true
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Chronological list of audit events with before/after diffs, actor, and source IP/system."
+    },
+    {
+      "name": "search_audit_events",
+      "description": "Search audit events across verifications for compliance and forensic review.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "actor_user_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "object_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/verification_request_id"
+                }
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              },
+              "source_systems": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated audit-event hits with cross-entity references."
+    },
+    {
+      "name": "schedule_verification_job",
+      "description": "Create a recurring schedule that triggers a named operation on a target set of verifications.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "description": "Named operation to invoke (e.g., refresh, recompute, export, reconcile)"
+          },
+          "target_selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/verification_request_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Parameters passed to each invocation"
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Schedule definition",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "once",
+                  "cron",
+                  "interval",
+                  "calendar"
+                ]
+              },
+              "cron": {
+                "type": "string",
+                "description": "Cron expression (UTC by default)"
+              },
+              "interval_seconds": {
+                "type": "integer",
+                "minimum": 30
+              },
+              "start_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "max_runs": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "jitter_seconds": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "concurrency_policy": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "forbid",
+              "replace"
+            ],
+            "default": "forbid"
+          },
+          "notify_on": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure",
+                "skipped"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "operation",
+          "schedule",
+          "actor"
+        ]
+      },
+      "returns": "The created scheduled-job descriptor with job_id, next_run_at, and current status."
+    },
+    {
+      "name": "list_verification_jobs",
+      "description": "List scheduled or in-flight jobs related to verifications with status filtering and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "skipped"
+                  ]
+                }
+              },
+              "operation_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "include_runs": {
+            "type": "boolean",
+            "default": false
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of verification jobs and their last run summaries."
+    },
+    {
+      "name": "cancel_verification_job",
+      "description": "Cancel a scheduled or in-flight verification job, optionally interrupting running steps.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "job_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated job status with cancellation timestamp and any side effects."
+    },
+    {
+      "name": "simulate_verification_change",
+      "description": "Simulate a proposed change against a verification (or batch) without committing; returns expected diffs and warnings.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/verification_request_id"
+          },
+          "proposed_change": {
+            "type": "object",
+            "description": "Polymorphic change object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "patch",
+                  "replace",
+                  "transition",
+                  "policy_apply"
+                ]
+              },
+              "patch": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "replace": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "transition_to": {
+                "type": "string"
+              },
+              "policy_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "evaluation_options": {
+            "type": "object",
+            "properties": {
+              "evaluate_rules": {
+                "type": "boolean",
+                "default": true
+              },
+              "evaluate_dependencies": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_cost_impact": {
+                "type": "boolean",
+                "default": false
+              },
+              "include_sla_impact": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "proposed_change",
+          "actor"
+        ]
+      },
+      "returns": "Simulation result with predicted diffs, rule violations, cost/SLA impact, and a confidence score."
+    },
+    {
+      "name": "request_verification_approval",
+      "description": "Open an approval request for a sensitive verification change requiring reviewer sign-off.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/verification_request_id"
+          },
+          "change_summary": {
+            "type": "string"
+          },
+          "change_payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "user_id": {
+                  "type": "string"
+                },
+                "role_required": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "user_id"
+              ]
+            },
+            "minItems": 1
+          },
+          "quorum": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "escalation_policy_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "approvers",
+          "actor"
+        ]
+      },
+      "returns": "Created approval request with approval_request_id, current state, and notification targets."
+    },
+    {
+      "name": "submit_verification_approval_decision",
+      "description": "Submit an approve, reject, or request-changes decision against a verification approval request.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_request_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "request_changes"
+            ]
+          },
+          "comment": {
+            "type": "string"
+          },
+          "signed_evidence": {
+            "type": "object",
+            "properties": {
+              "signature": {
+                "type": "string"
+              },
+              "signed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "totp",
+                  "webauthn",
+                  "sso",
+                  "manual"
+                ]
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "approval_request_id",
+          "decision",
+          "actor"
+        ]
+      },
+      "returns": "Updated approval request state including quorum progress and final decision (if reached)."
+    },
+    {
+      "name": "add_verification_comment",
+      "description": "Append a comment or annotation to a verification, optionally attaching files or mentioning users.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/verification_request_id"
+          },
+          "body": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "internal",
+              "tenant",
+              "public"
+            ],
+            "default": "internal"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_name": {
+                  "type": "string"
+                },
+                "content_type": {
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "type": "integer"
+                },
+                "uri": {
+                  "type": "string"
+                },
+                "checksum_sha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_name",
+                "uri"
+              ]
+            }
+          },
+          "parent_comment_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "body",
+          "actor"
+        ]
+      },
+      "returns": "The created comment object with comment_id, timestamps, and visibility-resolved permissions."
+    },
+    {
+      "name": "list_verification_comments",
+      "description": "List comments and annotations attached to a verification, with optional thread expansion.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/verification_request_id"
+          },
+          "include_threads": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_attachments": {
+            "type": "boolean",
+            "default": true
+          },
+          "visibility_in": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "internal",
+                "tenant",
+                "public"
+              ]
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Paginated comment list with thread tree and attachment metadata."
+    },
+    {
+      "name": "snapshot_verification",
+      "description": "Create a point-in-time immutable snapshot of a verification for forensic, rollback, or compliance use.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/verification_request_id"
+          },
+          "label": {
+            "type": "string"
+          },
+          "include_related": {
+            "type": "array",
+            "description": "Optional related-entity inclusion list",
+            "items": {
+              "type": "string"
+            }
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "kms",
+                  "client"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "retention": {
+            "type": "object",
+            "properties": {
+              "policy": {
+                "type": "string",
+                "enum": [
+                  "short",
+                  "standard",
+                  "long",
+                  "indefinite"
+                ]
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "actor"
+        ]
+      },
+      "returns": "Snapshot descriptor with snapshot_id, checksum, byte size, and retention expiry."
+    },
+    {
+      "name": "restore_verification_snapshot",
+      "description": "Restore a verification from a previously created snapshot, optionally as a new copy.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "overwrite",
+                  "new_copy",
+                  "merge"
+                ]
+              },
+              "target_id": {
+                "$ref": "#/shared_entities/verification_request_id"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "fail",
+              "skip_existing",
+              "overwrite"
+            ],
+            "default": "fail"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "Restore job descriptor including resulting id and any per-field conflicts that were resolved."
+    },
+    {
+      "name": "get_verification_metrics",
+      "description": "Compute KPI metrics over verifications (counts, MTTR, SLA compliance, error rates) for a time window.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "count",
+                "open_count",
+                "closed_count",
+                "mttr_seconds",
+                "mttd_seconds",
+                "sla_compliance_pct",
+                "error_rate",
+                "p50_latency_ms",
+                "p95_latency_ms",
+                "p99_latency_ms",
+                "throughput_per_minute",
+                "backlog_age_seconds"
+              ]
+            },
+            "minItems": 1
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "1m",
+              "5m",
+              "15m",
+              "1h",
+              "1d",
+              "1w"
+            ],
+            "default": "1h"
+          }
+        },
+        "required": [
+          "metrics"
+        ]
+      },
+      "returns": "Time-bucketed metric series and aggregate KPIs for the matched verifications."
+    },
+    {
+      "name": "build_verification_dashboard",
+      "description": "Persist a named dashboard composed of widgets (charts, tables, single-stat) over verifications data.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "widgets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "line",
+                    "bar",
+                    "pie",
+                    "table",
+                    "single_stat",
+                    "heatmap"
+                  ]
+                },
+                "query": {
+                  "type": "object",
+                  "properties": {
+                    "metrics": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "filter": {
+                      "type": "object",
+                      "description": "Filter constraints",
+                      "properties": {
+                        "text": {
+                          "type": "string",
+                          "description": "Free-text search across indexed fields"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "labels": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "Key/value labels to match"
+                        },
+                        "created_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "updated_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "owner_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "group_by": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "time_range": {
+                      "type": "object",
+                      "description": "Time window for filtering or scoping the operation",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "end": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "timezone": {
+                          "type": "string",
+                          "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "metrics"
+                  ]
+                },
+                "position": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "integer"
+                    },
+                    "y": {
+                      "type": "integer"
+                    },
+                    "w": {
+                      "type": "integer"
+                    },
+                    "h": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "title",
+                "type",
+                "query"
+              ]
+            },
+            "minItems": 1
+          },
+          "refresh_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "default": 60
+          },
+          "shared_with": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "widgets",
+          "actor"
+        ]
+      },
+      "returns": "Created dashboard descriptor with dashboard_id, shareable URL, and computed first-render preview."
+    },
+    {
+      "name": "upsert_verification_policy",
+      "description": "Create or update a policy/rule used to govern verification behavior, validation, or routing.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "expression": {
+                  "type": "string",
+                  "description": "CEL or JEXL expression"
+                },
+                "action": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "allow",
+                        "deny",
+                        "route",
+                        "transform",
+                        "notify",
+                        "tag"
+                      ]
+                    },
+                    "params": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "expression",
+                "action"
+              ]
+            },
+            "minItems": 1
+          },
+          "version_strategy": {
+            "type": "string",
+            "enum": [
+              "bump_minor",
+              "bump_major",
+              "replace"
+            ],
+            "default": "bump_minor"
+          },
+          "effective_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "rules",
+          "actor"
+        ]
+      },
+      "returns": "Persisted policy with policy_id, version, rule count, and validation warnings (if any)."
+    },
+    {
+      "name": "list_verification_policies",
+      "description": "List policies governing verifications with version, scope, and lifecycle filters.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "scope_label": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          },
+          "include_rule_summary": {
+            "type": "boolean",
+            "default": true
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated policy entries with rule counts and last evaluation metrics."
+    },
+    {
+      "name": "link_verification_dependencies",
+      "description": "Establish or update dependency links between a verification and related artefacts.",
+      "stage": "depends",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/verification_request_id"
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_type": {
+                  "type": "string"
+                },
+                "target_id": {
+                  "type": "string"
+                },
+                "relation": {
+                  "type": "string",
+                  "enum": [
+                    "depends_on",
+                    "blocks",
+                    "related_to",
+                    "parent_of",
+                    "child_of"
+                  ]
+                },
+                "weight": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "default": 1.0
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "target_type",
+                "target_id",
+                "relation"
+              ]
+            },
+            "minItems": 1
+          },
+          "replace_existing": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "dependencies",
+          "actor"
+        ]
+      },
+      "returns": "Updated dependency graph summary with added/removed/updated edges."
+    }
+  ]
+}

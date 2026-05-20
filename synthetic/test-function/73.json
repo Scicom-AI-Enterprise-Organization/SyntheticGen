@@ -1,0 +1,3166 @@
+{
+  "workflow_name": "rcs_campaign_incident_lifecycle",
+  "description": "End-to-end lifecycle for managing incidents related to RCS business messaging campaigns on a CPaaS/TaaS platform, from detection and triage through mitigation, rollback, and closure.",
+  "domain": "taas_cpaas/rcs_messaging",
+  "shared_entities": {
+    "incident_id": {
+      "type": "string",
+      "description": "Unique identifier for an RCS campaign incident"
+    },
+    "campaign_id": {
+      "type": "string",
+      "description": "RCS campaign or flow identifier associated with the incident"
+    },
+    "rcs_project_id": {
+      "type": "string",
+      "description": "CPaaS RCS project or tenant identifier"
+    },
+    "message_batch_id": {
+      "type": "string",
+      "description": "Identifier of a specific RCS message batch or send job"
+    },
+    "playbook_id": {
+      "type": "string",
+      "description": "Identifier for a predefined incident response playbook"
+    },
+    "user_id": {
+      "type": "string",
+      "description": "Platform user or engineer identifier"
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "detect_rcs_incident",
+      "description": "Detect or ingest a new RCS messaging incident based on monitoring alerts, delivery anomalies, or manual reports.",
+      "stage": "detect",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "rcs_project_id": {
+            "type": "string",
+            "description": "RCS project where the anomaly was detected"
+          },
+          "source": {
+            "type": "string",
+            "description": "Origin of the detection event",
+            "enum": [
+              "automated_monitor",
+              "carrier_alert",
+              "customer_report",
+              "internal_qc",
+              "other"
+            ]
+          },
+          "detection_payload": {
+            "type": "object",
+            "description": "Raw payload from the detection source",
+            "properties": {
+              "monitor_rule_id": {
+                "type": "string",
+                "description": "If triggered by a monitoring rule"
+              },
+              "external_ticket_id": {
+                "type": "string",
+                "description": "Reference to customer or carrier ticket"
+              },
+              "reporter": {
+                "type": "object",
+                "description": "Information about who reported the issue",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "organization": {
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string",
+                    "enum": [
+                      "customer",
+                      "carrier",
+                      "internal",
+                      "unknown"
+                    ]
+                  }
+                }
+              },
+              "metrics_snapshot": {
+                "type": "object",
+                "description": "Key metrics at detection time",
+                "properties": {
+                  "delivery_rate": {
+                    "type": "number"
+                  },
+                  "error_rate": {
+                    "type": "number"
+                  },
+                  "throughput_msgs_per_min": {
+                    "type": "number"
+                  }
+                }
+              },
+              "raw_event": {
+                "type": "object",
+                "description": "Source-specific nested event payload"
+              }
+            }
+          },
+          "impacted_scope": {
+            "type": "object",
+            "description": "Scope of impact, such as campaigns, tenants, traffic segments",
+            "properties": {
+              "campaign_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Candidate campaigns suspected to be impacted"
+              },
+              "message_batch_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "countries": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "description": "ISO country code"
+                }
+              },
+              "carriers": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "traffic_type": {
+                "type": "string",
+                "enum": [
+                  "otp",
+                  "promotional",
+                  "transactional",
+                  "two_way",
+                  "mixed",
+                  "unknown"
+                ]
+              }
+            }
+          },
+          "severity_hint": {
+            "type": "string",
+            "description": "Initial guess of severity from detection mechanism",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low",
+              "unknown"
+            ]
+          },
+          "description": {
+            "type": "string",
+            "description": "Free-text summary of the detected issue"
+          }
+        },
+        "required": [
+          "rcs_project_id",
+          "source",
+          "description"
+        ]
+      },
+      "returns": "New incident_id with initial incident record including detected scope and raw payload reference."
+    },
+    {
+      "name": "get_incident",
+      "description": "Get full details for a specific RCS incident, including timeline, related entities, and current status.",
+      "stage": "identify",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string",
+            "description": "Incident identifier to retrieve"
+          },
+          "include": {
+            "type": "array",
+            "description": "Optional related resources to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "timeline",
+                "events",
+                "rcs_metrics",
+                "rcs_routes",
+                "playbook_runs",
+                "linked_tickets"
+              ]
+            }
+          }
+        },
+        "required": [
+          "incident_id"
+        ]
+      },
+      "returns": "Incident details including metadata, status, scope, timelines, links to RCS campaigns and monitoring artifacts."
+    },
+    {
+      "name": "list_incidents",
+      "description": "Search and list RCS incidents with filtering, sorting, and pagination.",
+      "stage": "identify",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "description": "Filter criteria for incidents",
+            "properties": {
+              "rcs_project_id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "investigating",
+                    "mitigating",
+                    "monitoring",
+                    "resolved",
+                    "cancelled"
+                  ]
+                }
+              },
+              "severity": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "critical",
+                    "high",
+                    "medium",
+                    "low"
+                  ]
+                }
+              },
+              "campaign_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_after": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_before": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "has_active_mitigation": {
+                "type": "boolean"
+              },
+              "origin_source": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "automated_monitor",
+                    "carrier_alert",
+                    "customer_report",
+                    "internal_qc",
+                    "other"
+                  ]
+                }
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "severity",
+              "status"
+            ]
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50
+          }
+        }
+      },
+      "returns": "Paginated list of incidents and summary metadata (total count, next page token)."
+    },
+    {
+      "name": "classify_rcs_incident",
+      "description": "Classify and update an incident with type, severity, and suspected root cause based on investigation findings.",
+      "stage": "triage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "classification": {
+            "type": "object",
+            "description": "Classification attributes for the incident",
+            "properties": {
+              "incident_type": {
+                "type": "string",
+                "enum": [
+                  "delivery_degradation",
+                  "latency_spike",
+                  "template_rejection_spike",
+                  "campaign_misconfiguration",
+                  "rcs_agent_suspension",
+                  "carrier_routing_issue",
+                  "spam_filtering",
+                  "reporting_incorrect",
+                  "other"
+                ]
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "critical",
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              "customer_impact": {
+                "type": "object",
+                "description": "Details on customer-level impact",
+                "properties": {
+                  "impacted_tenants_estimate": {
+                    "type": "integer"
+                  },
+                  "impacted_end_users_estimate": {
+                    "type": "integer"
+                  },
+                  "impact_description": {
+                    "type": "string"
+                  },
+                  "sla_breach_risk": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "low",
+                      "moderate",
+                      "high"
+                    ]
+                  }
+                }
+              },
+              "suspected_root_cause": {
+                "type": "string",
+                "enum": [
+                  "carrier_side",
+                  "google_rcs_platform",
+                  "brand_agent_suspension",
+                  "misconfigured_routing",
+                  "template_policy_violation",
+                  "traffic_spike",
+                  "cpas_infrastructure",
+                  "unknown",
+                  "other"
+                ]
+              },
+              "tags": {
+                "type": "array",
+                "description": "Flexible tags for search and reporting",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "incident_type",
+              "severity"
+            ]
+          },
+          "updated_by": {
+            "type": "string",
+            "description": "User ID who performed the classification"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Free-text notes about classification decision"
+          }
+        },
+        "required": [
+          "incident_id",
+          "classification"
+        ]
+      },
+      "returns": "Updated incident record with classification and severity, plus audit metadata."
+    },
+    {
+      "name": "attach_rcs_context",
+      "description": "Attach additional RCS-specific context to an incident, such as campaign configuration, routes, and sample messages.",
+      "stage": "triage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "rcs_context": {
+            "type": "object",
+            "description": "RCS context to associate with the incident",
+            "properties": {
+              "campaigns": {
+                "type": "array",
+                "description": "Impacted RCS campaigns",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "campaign_id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "marketing",
+                        "transactional",
+                        "support",
+                        "verification",
+                        "other"
+                      ]
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "paused",
+                        "stopped",
+                        "archived"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "campaign_id"
+                  ]
+                }
+              },
+              "routes": {
+                "type": "array",
+                "description": "RCS routing paths in use (carrier, region, etc.)",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "route_id": {
+                      "type": "string"
+                    },
+                    "carrier": {
+                      "type": "string"
+                    },
+                    "country": {
+                      "type": "string",
+                      "description": "ISO country code"
+                    },
+                    "channel_type": {
+                      "type": "string",
+                      "enum": [
+                        "rcs_business_messaging",
+                        "sms_fallback",
+                        "whatsapp_fallback"
+                      ]
+                    },
+                    "priority": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "route_id",
+                    "carrier",
+                    "country"
+                  ]
+                }
+              },
+              "sample_messages": {
+                "type": "array",
+                "description": "Representative sample of impacted RCS messages",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "message_id": {
+                      "type": "string"
+                    },
+                    "message_batch_id": {
+                      "type": "string"
+                    },
+                    "content": {
+                      "type": "object",
+                      "description": "Polymorphic RCS content container",
+                      "properties": {
+                        "content_type": {
+                          "type": "string",
+                          "enum": [
+                            "text_only",
+                            "rich_card",
+                            "carousel",
+                            "suggestions_only"
+                          ]
+                        },
+                        "text": {
+                          "type": "string"
+                        },
+                        "rich_card": {
+                          "type": "object",
+                          "properties": {
+                            "title": {
+                              "type": "string"
+                            },
+                            "description": {
+                              "type": "string"
+                            },
+                            "media_url": {
+                              "type": "string"
+                            },
+                            "suggestions": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "type": {
+                                    "type": "string",
+                                    "enum": [
+                                      "reply",
+                                      "open_url",
+                                      "dial",
+                                      "view_location"
+                                    ]
+                                  },
+                                  "label": {
+                                    "type": "string"
+                                  },
+                                  "payload": {
+                                    "type": "object"
+                                  }
+                                },
+                                "required": [
+                                  "type",
+                                  "label"
+                                ]
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "required": [
+                        "content_type"
+                      ]
+                    },
+                    "last_status": {
+                      "type": "string"
+                    },
+                    "last_error_code": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "replace_existing": {
+            "type": "boolean",
+            "description": "If true, replaces existing RCS context instead of merging",
+            "default": false
+          }
+        },
+        "required": [
+          "incident_id",
+          "rcs_context"
+        ]
+      },
+      "returns": "Incident with updated RCS context, including campaigns, routes, and sampled messages."
+    },
+    {
+      "name": "check_rcs_incident_status",
+      "description": "Retrieve the current operational status and metrics snapshot for an incident, including live RCS delivery performance.",
+      "stage": "diagnose",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "metrics_window": {
+            "type": "object",
+            "description": "Desired time window for metrics",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "aggregation": {
+                "type": "string",
+                "enum": [
+                  "1m",
+                  "5m",
+                  "15m",
+                  "1h"
+                ]
+              }
+            }
+          },
+          "dimensions": {
+            "type": "array",
+            "description": "Break down metrics by these dimensions",
+            "items": {
+              "type": "string",
+              "enum": [
+                "campaign_id",
+                "carrier",
+                "country",
+                "route_id",
+                "message_type"
+              ]
+            }
+          }
+        },
+        "required": [
+          "incident_id"
+        ]
+      },
+      "returns": "Current high-level incident status plus a metrics snapshot for the requested window and dimensions."
+    },
+    {
+      "name": "plan_rcs_mitigation",
+      "description": "Plan a mitigation strategy for an RCS incident using predefined playbooks and customizable actions.",
+      "stage": "plan",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "playbook_id": {
+            "type": "string",
+            "description": "Predefined playbook to use as a base"
+          },
+          "custom_plan": {
+            "type": "object",
+            "description": "Optional custom or overriding mitigation plan",
+            "properties": {
+              "halt_or_reroute": {
+                "type": "object",
+                "description": "Define traffic halting or rerouting behavior",
+                "properties": {
+                  "strategy": {
+                    "type": "string",
+                    "enum": [
+                      "no_change",
+                      "pause_all_campaigns",
+                      "pause_selected_campaigns",
+                      "reroute_to_alternative_carriers",
+                      "fallback_to_sms"
+                    ]
+                  },
+                  "campaign_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "If pausing or rerouting selected campaigns"
+                  },
+                  "fallback_channel": {
+                    "type": "string",
+                    "enum": [
+                      "sms",
+                      "email",
+                      "whatsapp"
+                    ]
+                  }
+                }
+              },
+              "template_adjustments": {
+                "type": "array",
+                "description": "Changes to message templates to reduce rejection/spam",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "campaign_id": {
+                      "type": "string"
+                    },
+                    "template_id": {
+                      "type": "string"
+                    },
+                    "actions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "remove_url",
+                          "simplify_content",
+                          "remove_media",
+                          "reduce_frequency",
+                          "change_branding"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "campaign_id",
+                    "template_id",
+                    "actions"
+                  ]
+                }
+              },
+              "communication_plan": {
+                "type": "object",
+                "description": "How to communicate about the incident",
+                "properties": {
+                  "notify_external": {
+                    "type": "boolean"
+                  },
+                  "channels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "status_page",
+                        "email",
+                        "slack",
+                        "pagerduty"
+                      ]
+                    }
+                  },
+                  "initial_message": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "requested_by": {
+            "type": "string",
+            "description": "User requesting the mitigation plan"
+          }
+        },
+        "required": [
+          "incident_id"
+        ]
+      },
+      "returns": "Draft mitigation plan object with resolved playbook steps, ready for execution or approval."
+    },
+    {
+      "name": "apply_rcs_mitigation",
+      "description": "Execute an approved mitigation plan for an RCS incident, such as pausing campaigns or enabling fallbacks.",
+      "stage": "respond",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "mitigation_plan_id": {
+            "type": "string",
+            "description": "Identifier of the prepared mitigation plan"
+          },
+          "execution_mode": {
+            "type": "string",
+            "description": "Whether to run in dry-run or full execution mode",
+            "enum": [
+              "dry_run",
+              "full"
+            ]
+          },
+          "step_overrides": {
+            "type": "array",
+            "description": "Optional overrides for individual mitigation steps",
+            "items": {
+              "type": "object",
+              "properties": {
+                "step_id": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "parameters": {
+                  "type": "object",
+                  "description": "Override parameters for the step"
+                }
+              },
+              "required": [
+                "step_id"
+              ]
+            }
+          },
+          "approval": {
+            "type": "object",
+            "description": "Approval metadata for audit and compliance",
+            "properties": {
+              "approved_by": {
+                "type": "string"
+              },
+              "approval_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "change_ticket_id": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "incident_id",
+          "mitigation_plan_id",
+          "execution_mode"
+        ]
+      },
+      "returns": "Mitigation execution result including per-step status, applied changes, and any failures."
+    },
+    {
+      "name": "rollback_rcs_mitigation",
+      "description": "Rollback or partially revert an RCS mitigation previously applied for an incident.",
+      "stage": "respond",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "mitigation_execution_id": {
+            "type": "string",
+            "description": "Identifier of the mitigation execution to rollback"
+          },
+          "rollback_scope": {
+            "type": "object",
+            "description": "Which parts of mitigation to rollback",
+            "properties": {
+              "rollback_all": {
+                "type": "boolean",
+                "default": false
+              },
+              "steps": {
+                "type": "array",
+                "description": "Specific steps to rollback",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "campaign_ids": {
+                "type": "array",
+                "description": "If specified, only rollback for selected campaigns",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for rollback"
+          },
+          "requested_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "mitigation_execution_id"
+        ]
+      },
+      "returns": "Rollback execution log including what was reverted, what failed, and follow-up actions if needed."
+    },
+    {
+      "name": "retry_rcs_delivery_for_incident",
+      "description": "Selectively retry failed or deferred RCS messages associated with an incident, with constraints and safety checks.",
+      "stage": "respond",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "retry_scope": {
+            "type": "object",
+            "description": "Scope of messages to retry",
+            "properties": {
+              "campaign_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "message_batch_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status_filter": {
+                "type": "array",
+                "description": "Only retry messages currently in these statuses",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "failed",
+                    "expired",
+                    "deferred"
+                  ]
+                }
+              },
+              "error_code_filter": {
+                "type": "array",
+                "description": "Limit retry to specific error codes (e.g., transient)",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "time_window": {
+                "type": "object",
+                "description": "Only retry messages sent in this time window",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "max_messages": {
+                "type": "integer",
+                "description": "Hard cap on number of messages to retry"
+              }
+            }
+          },
+          "retry_policy": {
+            "type": "object",
+            "description": "Retry behavior configuration",
+            "properties": {
+              "backoff_strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "fixed",
+                  "exponential"
+                ]
+              },
+              "backoff_interval_seconds": {
+                "type": "integer"
+              },
+              "max_attempts": {
+                "type": "integer"
+              },
+              "respect_do_not_retry_flags": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "safety_checks": {
+            "type": "object",
+            "description": "Safety constraints for the retry job",
+            "properties": {
+              "require_carrier_recovered": {
+                "type": "boolean",
+                "default": true
+              },
+              "throttle_msgs_per_minute": {
+                "type": "integer"
+              }
+            }
+          },
+          "initiated_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "retry_scope"
+        ]
+      },
+      "returns": "Retry job identifier and summary of messages selected for retry, plus estimated completion time."
+    },
+    {
+      "name": "update_incident_status",
+      "description": "Update the lifecycle status of an RCS incident (e.g., move from investigating to monitoring or resolved).",
+      "stage": "recover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "investigating",
+              "mitigating",
+              "monitoring",
+              "resolved",
+              "cancelled"
+            ]
+          },
+          "resolution": {
+            "type": "object",
+            "description": "Resolution details, required when marking as resolved or cancelled",
+            "properties": {
+              "resolution_type": {
+                "type": "string",
+                "enum": [
+                  "platform_fix",
+                  "carrier_fix",
+                  "configuration_change",
+                  "false_positive",
+                  "wont_fix",
+                  "duplicate",
+                  "other"
+                ]
+              },
+              "summary": {
+                "type": "string"
+              },
+              "rca": {
+                "type": "object",
+                "description": "Root cause analysis summary",
+                "properties": {
+                  "root_cause": {
+                    "type": "string"
+                  },
+                  "contributing_factors": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "preventive_actions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "updated_by": {
+            "type": "string"
+          },
+          "status_note": {
+            "type": "string",
+            "description": "Context or reasoning for the status change"
+          }
+        },
+        "required": [
+          "incident_id",
+          "status"
+        ]
+      },
+      "returns": "Updated incident state including new status, resolution data if applicable, and transition timestamps."
+    },
+    {
+      "name": "cancel_or_merge_incident",
+      "description": "Cancel an incident that is no longer valid or merge it into another primary incident to avoid duplicates.",
+      "stage": "recover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string",
+            "description": "Incident to cancel or merge"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "cancel",
+              "merge_into"
+            ]
+          },
+          "merge_target_incident_id": {
+            "type": "string",
+            "description": "Target incident to merge into when action is merge_into"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Explanation for cancel or merge action"
+          },
+          "preserve_timeline": {
+            "type": "boolean",
+            "description": "Whether to keep a read-only stub of the merged/cancelled incident for audit",
+            "default": true
+          },
+          "performed_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "action"
+        ]
+      },
+      "returns": "Confirmation of cancel or merge operation, including updated references and any conflicts encountered."
+    },
+    {
+      "name": "export_incident_report",
+      "description": "Generate and export a post-incident report for RCS incidents, including metrics, timeline, and RCA summary.",
+      "stage": "closed",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "pdf",
+              "html",
+              "json"
+            ]
+          },
+          "sections": {
+            "type": "array",
+            "description": "Optional selection of sections to include in the report",
+            "items": {
+              "type": "string",
+              "enum": [
+                "overview",
+                "timeline",
+                "metrics",
+                "rcs_context",
+                "mitigation_actions",
+                "rollback_history",
+                "rca",
+                "follow_up_tasks"
+              ]
+            }
+          },
+          "redaction": {
+            "type": "object",
+            "description": "Redaction rules for PII or sensitive data in the report",
+            "properties": {
+              "redact_end_user_identifiers": {
+                "type": "boolean",
+                "default": true
+              },
+              "redact_message_content": {
+                "type": "boolean",
+                "default": false
+              },
+              "custom_redaction_rules": {
+                "type": "array",
+                "description": "Custom regex or field rules to apply during export",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string"
+                    },
+                    "pattern": {
+                      "type": "string"
+                    },
+                    "replacement": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "pattern"
+                  ]
+                }
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "description": "How the report should be delivered",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "download_url",
+                  "email",
+                  "webhook"
+                ]
+              },
+              "email_recipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "webhook_url": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "method"
+            ]
+          },
+          "requested_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "incident_id",
+          "format",
+          "delivery"
+        ]
+      },
+      "returns": "Report generation job status and, when available, a download URL or delivery confirmation."
+    },
+    {
+      "name": "search_rcs_incident_entities",
+      "description": "Faceted search across rcs_incident entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching rcs_incident entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_rcs_incident_records",
+      "description": "Bulk-create up to N rcs_incident records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_rcs_incident_records",
+      "description": "Apply a partial update patch to many rcs_incident records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_rcs_incident_records",
+      "description": "Delete or soft-delete many rcs_incident records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_rcs_incident_dataset",
+      "description": "Schedule or stream an export of rcs_incident data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_rcs_incident_dataset",
+      "description": "Validate and import a rcs_incident dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_rcs_incident_state",
+      "description": "Create a point-in-time snapshot of one or more rcs_incident entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_rcs_incident_snapshot",
+      "description": "Restore rcs_incident state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_rcs_incident_metrics",
+      "description": "Query aggregated metrics/KPIs for the rcs_incident workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_rcs_incident_dashboard",
+      "description": "Compose a dashboard view across rcs_incident metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_rcs_incident_audit_events",
+      "description": "Search the rcs_incident audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_rcs_incident_events",
+      "description": "Create a webhook subscription that delivers rcs_incident workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_rcs_incident_subscriptions",
+      "description": "List webhook subscriptions for rcs_incident events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_rcs_incident_subscription",
+      "description": "Remove a webhook subscription for rcs_incident events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_rcs_incident_job",
+      "description": "Schedule a recurring or one-off rcs_incident job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_rcs_incident_schedules",
+      "description": "List scheduled rcs_incident jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_rcs_incident_schedule",
+      "description": "Cancel or pause a scheduled rcs_incident job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_rcs_incident_operation",
+      "description": "Run a what-if simulation of a rcs_incident operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_rcs_incident_approval",
+      "description": "Open an approval request for a rcs_incident action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_rcs_incident_approval",
+      "description": "Record an approve/reject/abstain decision on a rcs_incident approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_rcs_incident_comment",
+      "description": "Add a threaded comment or annotation to any rcs_incident entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_rcs_incident_comments",
+      "description": "List comments/annotations attached to a rcs_incident entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_rcs_incident_policy",
+      "description": "Create or update a policy/rule controlling rcs_incident behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_rcs_incident_policies",
+      "description": "List rcs_incident policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_rcs_incident_entities",
+      "description": "Create a typed relationship between two rcs_incident-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_rcs_incident_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a rcs_incident entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_rcs_incident_entities",
+      "description": "Add, remove, or replace tags on one or many rcs_incident entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}

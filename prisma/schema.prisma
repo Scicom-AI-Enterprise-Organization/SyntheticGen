@@ -36,6 +36,7 @@ model User {
   benchmarkRunsCreated BenchmarkRun[]
   rubricsCreated       Rubric[]
   auditLog             AuditLogEntry[]
+  bootstrapJobs        BootstrapJob[]       @relation("BootstrapJobCreatedBy")
 }
 
 model Account {
@@ -172,9 +173,60 @@ model Project {
   auditLog         AuditLogEntry[]
   knowledgeBase    KnowledgeBaseEntry[]
   knowledgeCrawls  KnowledgeCrawl[]
+  bootstrapJobs    BootstrapJob[]
 
   @@index([createdById])
   @@index([archivedAt])
+}
+
+// One-prompt end-to-end project bootstrap. The orchestrator calls AI-assist for
+// each entity kind (taxonomy → languages → personas → templates → tools →
+// flows), inserts the parsed entities into the project, and appends a stream
+// of structured events to `events`. The row is durable so a navigated-away
+// user can return and resume the SSE stream from `events.length`.
+model BootstrapJob {
+  id            String   @id @default(cuid())
+  projectId     String
+  // queued | running | completed | failed | cancelled
+  status        String   @default("queued")
+  prompt        String
+  providerId    String
+  model         String?
+  // Sampling knobs shared by every AI-assist call this job makes. Both
+  // optional — null means "use the kind default" (0.3 / KIND_MAX_TOKENS on
+  // the Python side).
+  temperature   Float?
+  maxTokens     Int?
+  // Which entity kinds to generate. Stored as JSON so we can extend later
+  // without a migration: { taxonomy: bool, languages: bool, personas: bool,
+  // templates: bool, tools: bool, flows: bool }.
+  scope         Json
+  // Name of the currently-running step (or last step if status ≠ running).
+  currentStep   String?
+  // Append-only log of events: { idx, ts, step, kind, payload }.
+  // kind is one of: step-start | step-progress | step-done | step-error |
+  // inserted | warning | done | error.
+  events        Json     @default("[]")
+  // Counts of inserted entities per kind, for the summary view.
+  inserted      Json     @default("{}")
+  // Throttled snapshot of the currently-streaming AI call's accumulated text:
+  // `{ step, phaseIndex, text }` while an LLM stream is in flight, NULL
+  // between phases. Lets a refreshed page seed the live agent panel with the
+  // tokens that already arrived instead of starting blank.
+  currentPhaseBuffer Json?
+  // Top-level fatal error message if the job died before finishing.
+  error         String?
+  createdById   String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy User?   @relation("BootstrapJobCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([projectId, createdAt])
+  @@index([projectId, status])
 }
 
 // Cached result of a "Add from URL" crawl. Pages stay around so the user can

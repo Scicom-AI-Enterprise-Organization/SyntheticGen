@@ -1,0 +1,3399 @@
+{
+  "workflow_name": "lpwan_campaign_to_conversion",
+  "description": "End-to-end workflow to design, simulate, deploy, monitor, and optimize LPWAN IoT connectivity campaigns from initial design to device activation and billing conversion.",
+  "domain": "taas_iot/lpwan_service",
+  "shared_entities": {
+    "tenant_id": {
+      "type": "string",
+      "description": "Identifier of the customer/tenant account"
+    },
+    "campaign_id": {
+      "type": "string",
+      "description": "Identifier of an LPWAN connectivity campaign"
+    },
+    "network_profile_id": {
+      "type": "string",
+      "description": "Identifier of a reusable LPWAN network configuration profile (e.g., LoRaWAN, NB-IoT settings)"
+    },
+    "device_batch_id": {
+      "type": "string",
+      "description": "Identifier for a batch of devices to be onboarded in a campaign"
+    },
+    "simulation_id": {
+      "type": "string",
+      "description": "Identifier of a coverage or traffic simulation run"
+    },
+    "deployment_id": {
+      "type": "string",
+      "description": "Identifier of a network deployment attempt associated with a campaign"
+    },
+    "activation_token": {
+      "type": "string",
+      "description": "Short-lived token used for binding devices to campaign and tenant"
+    },
+    "device_id": {
+      "type": "string",
+      "description": "Logical identifier of an IoT device within the LPWAN service"
+    },
+    "org_user_id": {
+      "type": "string",
+      "description": "Identifier for a user/operator within the tenant organization"
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "search_network_profiles",
+      "description": "Search and filter reusable LPWAN network profiles suitable for a new campaign.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant requesting available profiles; if omitted, returns global defaults only."
+          },
+          "query": {
+            "type": "string",
+            "description": "Free-text search across profile names, descriptions, and tags."
+          },
+          "lpwan_technology": {
+            "type": "string",
+            "enum": [
+              "lorawan",
+              "nb_iot",
+              "lte_m",
+              "sigfox",
+              "mioty",
+              "proprietary"
+            ],
+            "description": "Filter by LPWAN technology."
+          },
+          "filters": {
+            "type": "object",
+            "description": "Structured filters for profile capabilities and constraints.",
+            "properties": {
+              "frequency_bands": {
+                "type": "array",
+                "description": "Requested frequency bands (e.g., EU868, US915).",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "supports_roaming": {
+                "type": "boolean",
+                "description": "Whether profiles should support roaming between operators."
+              },
+              "max_uplink_rate": {
+                "type": "object",
+                "description": "Filter by maximum uplink rate per device.",
+                "properties": {
+                  "min": {
+                    "type": "number",
+                    "description": "Minimum messages per hour."
+                  },
+                  "max": {
+                    "type": "number",
+                    "description": "Maximum messages per hour."
+                  }
+                }
+              },
+              "security_level": {
+                "type": "string",
+                "enum": [
+                  "basic",
+                  "standard",
+                  "hardened"
+                ],
+                "description": "Security posture expected for the profile."
+              },
+              "tags": {
+                "type": "array",
+                "description": "Required tags assigned to profiles (e.g., 'industrial', 'citywide').",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "relevance",
+              "created_at",
+              "updated_at",
+              "popularity"
+            ],
+            "description": "Sorting key for profiles."
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "description": "Sort direction."
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1,
+            "description": "Page number for paginated results."
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 20,
+            "description": "Number of profiles per page."
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of candidate network_profile_id values with basic capabilities and metadata."
+    },
+    {
+      "name": "create_campaign",
+      "description": "Create a new LPWAN connectivity campaign with target geography, device characteristics, and goals.",
+      "stage": "design",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant under which the campaign is created."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable name of the campaign."
+          },
+          "description": {
+            "type": "string",
+            "description": "Detailed description of the campaign use case."
+          },
+          "lpwan_technology": {
+            "type": "string",
+            "enum": [
+              "lorawan",
+              "nb_iot",
+              "lte_m",
+              "sigfox",
+              "mioty",
+              "proprietary"
+            ],
+            "description": "LPWAN technology to be used in the campaign."
+          },
+          "network_profile_id": {
+            "type": "string",
+            "description": "Optional preset network profile; if missing, a default based on lpwan_technology is used."
+          },
+          "target_geography": {
+            "type": "object",
+            "description": "Geographical scope of the campaign.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "single_site",
+                  "multi_site",
+                  "corridor",
+                  "nationwide"
+                ],
+                "description": "Shape of the deployment area."
+              },
+              "sites": {
+                "type": "array",
+                "description": "List of location descriptors if type != nationwide.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "description": "Friendly name of the site."
+                    },
+                    "coordinates": {
+                      "type": "object",
+                      "description": "Geo coordinates of the site center.",
+                      "properties": {
+                        "lat": {
+                          "type": "number"
+                        },
+                        "lng": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "lat",
+                        "lng"
+                      ]
+                    },
+                    "radius_m": {
+                      "type": "number",
+                      "description": "Approximate radius in meters covered around the site."
+                    },
+                    "indoor": {
+                      "type": "boolean",
+                      "description": "Indicates whether the deployment is primarily indoor."
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "coordinates"
+                  ]
+                }
+              },
+              "countries": {
+                "type": "array",
+                "description": "Applicable if type is nationwide or multi-national.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "device_profile": {
+            "type": "object",
+            "description": "Expected device behavior in the campaign.",
+            "properties": {
+              "estimated_device_count": {
+                "type": "integer",
+                "description": "Total number of devices planned."
+              },
+              "traffic_pattern": {
+                "type": "object",
+                "description": "Uplink and downlink messaging characteristics.",
+                "properties": {
+                  "uplink": {
+                    "type": "object",
+                    "properties": {
+                      "messages_per_day_per_device": {
+                        "type": "number"
+                      },
+                      "payload_size_bytes": {
+                        "type": "number"
+                      },
+                      "burstiness": {
+                        "type": "string",
+                        "enum": [
+                          "uniform",
+                          "peak_hours",
+                          "event_driven"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "messages_per_day_per_device",
+                      "payload_size_bytes"
+                    ]
+                  },
+                  "downlink": {
+                    "type": "object",
+                    "properties": {
+                      "messages_per_day_per_device": {
+                        "type": "number"
+                      },
+                      "payload_size_bytes": {
+                        "type": "number"
+                      },
+                      "latency_sensitivity": {
+                        "type": "string",
+                        "enum": [
+                          "low",
+                          "medium",
+                          "high"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "uplink"
+                ]
+              },
+              "mobility": {
+                "type": "string",
+                "enum": [
+                  "static",
+                  "low_mobility",
+                  "high_mobility"
+                ],
+                "description": "Expected mobility of devices in the campaign."
+              }
+            },
+            "required": [
+              "estimated_device_count",
+              "traffic_pattern"
+            ]
+          },
+          "business_goals": {
+            "type": "object",
+            "description": "High-level business KPIs and constraints for the campaign.",
+            "properties": {
+              "target_activation_rate": {
+                "type": "number",
+                "description": "Target percentage of devices to be successfully activated."
+              },
+              "max_monthly_connectivity_cost": {
+                "type": "number",
+                "description": "Budget cap for monthly connectivity cost."
+              },
+              "expected_lifetime_months": {
+                "type": "integer",
+                "description": "Expected campaign duration."
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Arbitrary key-value metadata, such as external system IDs or notes."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "name",
+          "lpwan_technology",
+          "target_geography",
+          "device_profile"
+        ]
+      },
+      "returns": "Newly created campaign_id with initial status, resolved network_profile_id, and summary of inferred parameters."
+    },
+    {
+      "name": "simulate_coverage_and_capacity",
+      "description": "Run a coverage and capacity simulation for a campaign using radio, terrain, and traffic assumptions.",
+      "stage": "simulation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "description": "Campaign for which the simulation is run."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant owning the campaign; used for quota and access checks."
+          },
+          "simulation_scope": {
+            "type": "string",
+            "enum": [
+              "coverage_only",
+              "capacity_only",
+              "coverage_and_capacity"
+            ],
+            "description": "Which aspects to simulate."
+          },
+          "radio_parameters": {
+            "type": "object",
+            "description": "Fine-grained radio configuration overriding profile defaults.",
+            "properties": {
+              "tx_power_dbm": {
+                "type": "number",
+                "description": "Transmission power for devices in dBm."
+              },
+              "antenna_gain_dbi": {
+                "type": "number",
+                "description": "Antenna gain used for base stations."
+              },
+              "spreading_factors": {
+                "type": "array",
+                "description": "For LoRaWAN, allowed spreading factors.",
+                "items": {
+                  "type": "integer",
+                  "enum": [
+                    7,
+                    8,
+                    9,
+                    10,
+                    11,
+                    12
+                  ]
+                }
+              },
+              "duty_cycle_limit": {
+                "type": "number",
+                "description": "Regional duty cycle constraints as a percentage."
+              }
+            }
+          },
+          "environment_model": {
+            "type": "object",
+            "description": "Environment assumptions for propagation modeling.",
+            "properties": {
+              "terrain_type": {
+                "type": "string",
+                "enum": [
+                  "urban_dense",
+                  "urban_light",
+                  "suburban",
+                  "rural",
+                  "industrial",
+                  "indoor"
+                ],
+                "description": "Dominant terrain type."
+              },
+              "building_density": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ],
+                "description": "Building density in the deployment area."
+              },
+              "custom_obstacles": {
+                "type": "array",
+                "description": "Optional custom RF obstacles to account for.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string"
+                    },
+                    "polygon": {
+                      "type": "array",
+                      "description": "List of lat/lng vertices forming polygon.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "lat": {
+                            "type": "number"
+                          },
+                          "lng": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "lat",
+                          "lng"
+                        ]
+                      }
+                    },
+                    "attenuation_db": {
+                      "type": "number",
+                      "description": "Additional attenuation introduced by this obstacle."
+                    }
+                  },
+                  "required": [
+                    "label",
+                    "polygon"
+                  ]
+                }
+              }
+            }
+          },
+          "traffic_overrides": {
+            "type": "object",
+            "description": "Optional overrides of campaign device_profile.traffic_pattern for simulation-only what-if analysis.",
+            "properties": {
+              "uplink_messages_per_day_per_device": {
+                "type": "number"
+              },
+              "downlink_messages_per_day_per_device": {
+                "type": "number"
+              }
+            }
+          },
+          "simulation_options": {
+            "type": "object",
+            "description": "Execution behavior for the simulation.",
+            "properties": {
+              "priority": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "normal",
+                  "high"
+                ],
+                "description": "Queue priority for this simulation."
+              },
+              "notify": {
+                "type": "object",
+                "description": "Notification preferences when simulation completes or fails.",
+                "properties": {
+                  "email": {
+                    "type": "string"
+                  },
+                  "webhook_url": {
+                    "type": "string"
+                  },
+                  "org_user_id": {
+                    "type": "string"
+                  }
+                }
+              },
+              "result_detail_level": {
+                "type": "string",
+                "enum": [
+                  "summary",
+                  "per_site",
+                  "per_tile"
+                ],
+                "description": "Granularity of simulation results."
+              }
+            }
+          }
+        },
+        "required": [
+          "campaign_id",
+          "tenant_id",
+          "simulation_scope"
+        ]
+      },
+      "returns": "simulation_id with queued or running status and an initial estimate summary for coverage and capacity."
+    },
+    {
+      "name": "review_simulation_results",
+      "description": "Retrieve and review simulation results to decide if the campaign is viable or needs adjustments.",
+      "stage": "simulation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "simulation_id": {
+            "type": "string",
+            "description": "Simulation run identifier."
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional details to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "coverage_heatmap",
+                "capacity_hotspots",
+                "site_breakdown",
+                "raw_tiles"
+              ]
+            }
+          },
+          "max_tiles": {
+            "type": "integer",
+            "description": "Limit number of coverage tiles returned when requesting raw_tiles."
+          }
+        },
+        "required": [
+          "simulation_id"
+        ]
+      },
+      "returns": "Simulation status, KPIs (coverage %, blocking probability, headroom), and optionally heatmaps and per-site breakdowns."
+    },
+    {
+      "name": "prepare_device_batch",
+      "description": "Prepare a batch of devices (identities and keys) for onboarding into the campaign.",
+      "stage": "pre_onboarding",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "description": "Campaign into which these devices will be onboarded."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant for which the batch is prepared."
+          },
+          "batch_label": {
+            "type": "string",
+            "description": "Human-readable label for the device batch."
+          },
+          "device_template": {
+            "type": "object",
+            "description": "Template defining device type and credentials provisioning scheme.",
+            "properties": {
+              "device_type": {
+                "type": "string",
+                "enum": [
+                  "sensor",
+                  "actuator",
+                  "tracker",
+                  "meter",
+                  "custom"
+                ]
+              },
+              "hardware_sku": {
+                "type": "string",
+                "description": "Hardware SKU or model identifier."
+              },
+              "credential_scheme": {
+                "type": "string",
+                "enum": [
+                  "otaa",
+                  "abp",
+                  "sim_based",
+                  "certificate",
+                  "pre_shared_key"
+                ],
+                "description": "How devices authenticate with the network."
+              },
+              "key_provisioning": {
+                "type": "object",
+                "description": "How to assign security keys or credentials.",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "generate",
+                      "import",
+                      "external_kms"
+                    ]
+                  },
+                  "import_reference": {
+                    "type": "string",
+                    "description": "Reference to an external file or KMS key set (if mode != generate)."
+                  },
+                  "encryption_profile_id": {
+                    "type": "string",
+                    "description": "Reference to an encryption profile used if external_kms."
+                  }
+                },
+                "required": [
+                  "mode"
+                ]
+              }
+            },
+            "required": [
+              "device_type",
+              "credential_scheme",
+              "key_provisioning"
+            ]
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000,
+            "description": "Number of devices to prepare in this batch."
+          },
+          "labeling_options": {
+            "type": "object",
+            "description": "Optional automatic labeling or grouping of devices.",
+            "properties": {
+              "prefix": {
+                "type": "string",
+                "description": "String prefix for device IDs in this batch."
+              },
+              "start_index": {
+                "type": "integer",
+                "default": 1,
+                "description": "Start index used when generating sequential device IDs."
+              },
+              "group_tags": {
+                "type": "array",
+                "description": "Tags applied to all devices in this batch.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "callback": {
+            "type": "object",
+            "description": "Optional callback settings when batch is ready.",
+            "properties": {
+              "webhook_url": {
+                "type": "string"
+              },
+              "notify_org_user_id": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "campaign_id",
+          "tenant_id",
+          "batch_label",
+          "device_template",
+          "quantity"
+        ]
+      },
+      "returns": "device_batch_id with provisioning summary, estimated completion time, and initial activation_token for the batch."
+    },
+    {
+      "name": "issue_activation_tokens",
+      "description": "Generate or refresh activation tokens for devices or batches, enabling device-side onboarding flows.",
+      "stage": "pre_onboarding",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant requesting activation tokens."
+          },
+          "campaign_id": {
+            "type": "string",
+            "description": "Campaign associated with token issuance."
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "batch",
+              "single_device",
+              "bulk_devices"
+            ],
+            "description": "Scope of activation token issuance."
+          },
+          "device_batch_id": {
+            "type": "string",
+            "description": "Required if scope is batch."
+          },
+          "devices": {
+            "type": "array",
+            "description": "Required if scope is single_device or bulk_devices.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "device_id": {
+                  "type": "string",
+                  "description": "Logical device identifier."
+                },
+                "external_serial": {
+                  "type": "string",
+                  "description": "Optional external serial number used by manufacturers."
+                }
+              },
+              "required": [
+                "device_id"
+              ]
+            }
+          },
+          "token_policy": {
+            "type": "object",
+            "description": "Token lifetime and constraints.",
+            "properties": {
+              "ttl_minutes": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 10080,
+                "description": "Time-to-live in minutes (up to 7 days)."
+              },
+              "one_time_use": {
+                "type": "boolean",
+                "default": true,
+                "description": "Whether the token becomes invalid after first successful activation."
+              },
+              "bind_to_ip": {
+                "type": "boolean",
+                "default": false,
+                "description": "If true, token is bound to originating IP when first used."
+              }
+            },
+            "required": [
+              "ttl_minutes"
+            ]
+          }
+        },
+        "required": [
+          "tenant_id",
+          "campaign_id",
+          "scope",
+          "token_policy"
+        ]
+      },
+      "returns": "List of issued activation_token values with associated device or batch references and expiry timestamps."
+    },
+    {
+      "name": "deploy_campaign_network",
+      "description": "Trigger deployment of the underlying LPWAN network resources and routing for a campaign.",
+      "stage": "deployment",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "description": "Campaign to be deployed."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant requesting the deployment."
+          },
+          "deployment_mode": {
+            "type": "string",
+            "enum": [
+              "testbed",
+              "pilot",
+              "production"
+            ],
+            "description": "Intensity and isolation level of the deployment."
+          },
+          "resource_overrides": {
+            "type": "object",
+            "description": "Optional overrides for network resource allocation.",
+            "properties": {
+              "max_gateways": {
+                "type": "integer",
+                "description": "Maximum number of gateways to allocate for this campaign."
+              },
+              "peering_policy": {
+                "type": "string",
+                "enum": [
+                  "tenant_dedicated",
+                  "shared_operator",
+                  "open_roaming"
+                ],
+                "description": "How traffic is peered across operators."
+              },
+              "uplink_qos": {
+                "type": "string",
+                "enum": [
+                  "best_effort",
+                  "priority",
+                  "reserved"
+                ]
+              }
+            }
+          },
+          "rollback_policy": {
+            "type": "object",
+            "description": "Automatic rollback rules in case deployment fails or KPIs are not met.",
+            "properties": {
+              "on_failure": {
+                "type": "string",
+                "enum": [
+                  "auto_rollback",
+                  "manual_review"
+                ],
+                "description": "What to do if deployment fails."
+              },
+              "max_activation_failure_rate": {
+                "type": "number",
+                "description": "If activation failure rate (0-1) exceeds this threshold after grace period, auto-rollback may trigger."
+              },
+              "grace_period_minutes": {
+                "type": "integer",
+                "description": "Grace period in minutes before KPI-based rollback checks."
+              }
+            },
+            "required": [
+              "on_failure"
+            ]
+          },
+          "notification": {
+            "type": "object",
+            "description": "How to notify stakeholders about deployment progress.",
+            "properties": {
+              "org_user_id": {
+                "type": "string"
+              },
+              "webhook_url": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "campaign_id",
+          "tenant_id",
+          "deployment_mode",
+          "rollback_policy"
+        ]
+      },
+      "returns": "deployment_id with initial deployment status, timeline estimates, and applied resource configuration."
+    },
+    {
+      "name": "get_campaign_status",
+      "description": "Get current status and KPIs for a campaign, including deployment, onboarding, and activation metrics.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "description": "Campaign to inspect."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant requesting campaign status."
+          },
+          "include": {
+            "type": "array",
+            "description": "Extra data to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "deployment_details",
+                "simulation_links",
+                "device_batches",
+                "recent_alerts",
+                "billing_preview"
+              ]
+            }
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Optional time window for KPI aggregation.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        },
+        "required": [
+          "campaign_id",
+          "tenant_id"
+        ]
+      },
+      "returns": "Current campaign lifecycle state, deployment and activation KPIs, error counts, and optional billing previews."
+    },
+    {
+      "name": "list_onboarding_issues",
+      "description": "List and categorize device onboarding and activation issues for a campaign to support targeted remediation.",
+      "stage": "remediation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "description": "Campaign whose onboarding issues should be listed."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant ID for access control."
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filters for narrowing down issues.",
+            "properties": {
+              "severity": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warning",
+                    "error",
+                    "critical"
+                  ]
+                }
+              },
+              "issue_type": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "rf_coverage",
+                    "join_failures",
+                    "auth_failure",
+                    "misconfiguration",
+                    "quota_exceeded",
+                    "unknown"
+                  ]
+                }
+              },
+              "device_batch_id": {
+                "type": "string"
+              },
+              "device_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_after": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_before": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 50
+          }
+        },
+        "required": [
+          "campaign_id",
+          "tenant_id"
+        ]
+      },
+      "returns": "Paginated list of onboarding issues per device or batch, with classifications and suggested remediation actions."
+    },
+    {
+      "name": "retry_or_rollback_deployment",
+      "description": "Retry a failed deployment step or perform a partial/full rollback for a problematic campaign deployment.",
+      "stage": "remediation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_id": {
+            "type": "string",
+            "description": "Deployment instance to act upon."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant requesting retry or rollback."
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "retry_failed_steps",
+              "rollback_last_step",
+              "rollback_full",
+              "resume"
+            ],
+            "description": "High-level requested action on the deployment."
+          },
+          "retry_policy": {
+            "type": "object",
+            "description": "Optional fine-grained retry behavior when action is retry_failed_steps.",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              },
+              "backoff_strategy": {
+                "type": "string",
+                "enum": [
+                  "fixed",
+                  "exponential"
+                ]
+              },
+              "fixed_delay_seconds": {
+                "type": "integer",
+                "description": "Delay between retries for fixed strategy."
+              }
+            }
+          },
+          "rollback_scope": {
+            "type": "object",
+            "description": "Fine-grained scope when rolling back.",
+            "properties": {
+              "network_resources": {
+                "type": "boolean",
+                "default": true
+              },
+              "routing_policies": {
+                "type": "boolean",
+                "default": true
+              },
+              "device_registrations": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable reason for retry or rollback, for audit logging."
+          },
+          "requested_by": {
+            "type": "string",
+            "description": "org_user_id of the operator triggering this action."
+          }
+        },
+        "required": [
+          "deployment_id",
+          "tenant_id",
+          "action"
+        ]
+      },
+      "returns": "Updated deployment status, summary of steps queued for retry or rollback, and any irreversible impacts."
+    },
+    {
+      "name": "activate_devices",
+      "description": "Perform or confirm activation of one or more devices into an LPWAN campaign and network.",
+      "stage": "conversion",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant owning the devices."
+          },
+          "campaign_id": {
+            "type": "string",
+            "description": "Campaign that devices are being activated into."
+          },
+          "activation_token": {
+            "type": "string",
+            "description": "Activation token obtained via issue_activation_tokens or embedded in device manufacturing."
+          },
+          "devices": {
+            "type": "array",
+            "description": "Devices to activate under this token.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "device_id": {
+                  "type": "string",
+                  "description": "Logical device ID; may be server-assigned if not provided for some technologies."
+                },
+                "device_batch_id": {
+                  "type": "string",
+                  "description": "Optional batch identifier this device belongs to."
+                },
+                "hardware_identifiers": {
+                  "type": "object",
+                  "description": "Physical identifiers presented by the device.",
+                  "properties": {
+                    "imei": {
+                      "type": "string"
+                    },
+                    "dev_eui": {
+                      "type": "string"
+                    },
+                    "serial_number": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "firmware": {
+                  "type": "object",
+                  "description": "Firmware details provided at activation.",
+                  "properties": {
+                    "version": {
+                      "type": "string"
+                    },
+                    "build_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "initial_config": {
+                  "type": "object",
+                  "description": "Optional initial configuration overrides for this device.",
+                  "properties": {
+                    "uplink_interval_seconds": {
+                      "type": "integer"
+                    },
+                    "max_retransmissions": {
+                      "type": "integer"
+                    },
+                    "custom_tags": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "hardware_identifiers"
+              ]
+            }
+          },
+          "activation_mode": {
+            "type": "string",
+            "enum": [
+              "validate_only",
+              "activate_now"
+            ],
+            "description": "If validate_only, checks feasibility without committing changes."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "campaign_id",
+          "activation_token",
+          "devices",
+          "activation_mode"
+        ]
+      },
+      "returns": "Per-device activation or validation results, including assigned device_id where applicable and any errors per device."
+    },
+    {
+      "name": "update_campaign_and_network_settings",
+      "description": "Update campaign-level business settings and underlying network parameters post-deployment.",
+      "stage": "optimization",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "description": "Campaign to update."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant performing the update."
+          },
+          "updates": {
+            "type": "object",
+            "description": "Fields that can be updated for an active campaign.",
+            "properties": {
+              "business_goals": {
+                "type": "object",
+                "description": "Updated KPIs and constraints.",
+                "properties": {
+                  "target_activation_rate": {
+                    "type": "number"
+                  },
+                  "max_monthly_connectivity_cost": {
+                    "type": "number"
+                  }
+                }
+              },
+              "network_parameters": {
+                "type": "object",
+                "description": "Network-related parameters that can be tuned.",
+                "properties": {
+                  "fair_usage_policy": {
+                    "type": "object",
+                    "properties": {
+                      "max_daily_uplink_messages": {
+                        "type": "integer"
+                      },
+                      "throttle_on_excess": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "allowed_geographies": {
+                    "type": "array",
+                    "description": "List of ISO country codes or regional identifiers where devices are allowed to roam.",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "downlink_qos": {
+                    "type": "string",
+                    "enum": [
+                      "best_effort",
+                      "priority",
+                      "strict"
+                    ]
+                  }
+                }
+              },
+              "data_routing": {
+                "type": "object",
+                "description": "Application-layer data routing rules.",
+                "properties": {
+                  "default_route": {
+                    "type": "object",
+                    "properties": {
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "webhook",
+                          "mq",
+                          "cloud_connector"
+                        ]
+                      },
+                      "endpoint": {
+                        "type": "string",
+                        "description": "URL, topic, or connector identifier depending on type."
+                      }
+                    },
+                    "required": [
+                      "type",
+                      "endpoint"
+                    ]
+                  },
+                  "per_batch_overrides": {
+                    "type": "array",
+                    "description": "Optional overrides per device batch.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "device_batch_id": {
+                          "type": "string"
+                        },
+                        "route": {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "webhook",
+                                "mq",
+                                "cloud_connector"
+                              ]
+                            },
+                            "endpoint": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "type",
+                            "endpoint"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "device_batch_id",
+                        "route"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "change_reason": {
+            "type": "string",
+            "description": "Reason for updating the campaign, for audit trail."
+          }
+        },
+        "required": [
+          "campaign_id",
+          "tenant_id",
+          "updates"
+        ]
+      },
+      "returns": "Updated campaign and network configuration snapshot with versioning information and any parameters pending rollout."
+    },
+    {
+      "name": "convert_to_billing_and_close_campaign",
+      "description": "Finalize an LPWAN campaign by converting active usage into billing plans and closing or archiving the campaign.",
+      "stage": "conversion",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "campaign_id": {
+            "type": "string",
+            "description": "Campaign to close and convert."
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant that will be billed."
+          },
+          "billing_options": {
+            "type": "object",
+            "description": "Options for how the campaign should be billed long term.",
+            "properties": {
+              "plan_type": {
+                "type": "string",
+                "enum": [
+                  "per_device",
+                  "per_message",
+                  "hybrid",
+                  "custom"
+                ]
+              },
+              "term_months": {
+                "type": "integer",
+                "description": "Contract term length for recurring plans."
+              },
+              "auto_renew": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_test_traffic": {
+                "type": "boolean",
+                "default": false,
+                "description": "Whether to include test or pilot traffic in billed usage."
+              }
+            },
+            "required": [
+              "plan_type"
+            ]
+          },
+          "device_migration": {
+            "type": "object",
+            "description": "What to do with devices after the campaign is closed.",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "keep_active",
+                  "move_to_another_campaign",
+                  "suspend",
+                  "disconnect"
+                ]
+              },
+              "target_campaign_id": {
+                "type": "string",
+                "description": "If action is move_to_another_campaign, the target campaign."
+              },
+              "selection": {
+                "type": "object",
+                "description": "Selection of devices affected by this rule.",
+                "properties": {
+                  "scope": {
+                    "type": "string",
+                    "enum": [
+                      "all",
+                      "by_batch",
+                      "by_device_ids"
+                    ]
+                  },
+                  "device_batch_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "device_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "scope"
+                ]
+              }
+            },
+            "required": [
+              "action",
+              "selection"
+            ]
+          },
+          "archive": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, campaign will be archived after conversion; otherwise kept visible as closed."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, compute billing and migration outcome without applying changes."
+          }
+        },
+        "required": [
+          "campaign_id",
+          "tenant_id",
+          "billing_options",
+          "device_migration"
+        ]
+      },
+      "returns": "Billing conversion summary, projected recurring charges, and final campaign status, or a simulation of these if dry_run is true."
+    },
+    {
+      "name": "search_lpwan_campaign_entities",
+      "description": "Faceted search across lpwan_campaign entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching lpwan_campaign entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_lpwan_campaign_records",
+      "description": "Bulk-create up to N lpwan_campaign records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_lpwan_campaign_records",
+      "description": "Apply a partial update patch to many lpwan_campaign records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_lpwan_campaign_records",
+      "description": "Delete or soft-delete many lpwan_campaign records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_lpwan_campaign_dataset",
+      "description": "Schedule or stream an export of lpwan_campaign data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_lpwan_campaign_dataset",
+      "description": "Validate and import a lpwan_campaign dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_lpwan_campaign_state",
+      "description": "Create a point-in-time snapshot of one or more lpwan_campaign entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_lpwan_campaign_snapshot",
+      "description": "Restore lpwan_campaign state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_lpwan_campaign_metrics",
+      "description": "Query aggregated metrics/KPIs for the lpwan_campaign workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_lpwan_campaign_dashboard",
+      "description": "Compose a dashboard view across lpwan_campaign metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_lpwan_campaign_audit_events",
+      "description": "Search the lpwan_campaign audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_lpwan_campaign_events",
+      "description": "Create a webhook subscription that delivers lpwan_campaign workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_lpwan_campaign_subscriptions",
+      "description": "List webhook subscriptions for lpwan_campaign events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_lpwan_campaign_subscription",
+      "description": "Remove a webhook subscription for lpwan_campaign events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_lpwan_campaign_job",
+      "description": "Schedule a recurring or one-off lpwan_campaign job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_lpwan_campaign_schedules",
+      "description": "List scheduled lpwan_campaign jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_lpwan_campaign_schedule",
+      "description": "Cancel or pause a scheduled lpwan_campaign job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_lpwan_campaign_operation",
+      "description": "Run a what-if simulation of a lpwan_campaign operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_lpwan_campaign_approval",
+      "description": "Open an approval request for a lpwan_campaign action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_lpwan_campaign_approval",
+      "description": "Record an approve/reject/abstain decision on a lpwan_campaign approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_lpwan_campaign_comment",
+      "description": "Add a threaded comment or annotation to any lpwan_campaign entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_lpwan_campaign_comments",
+      "description": "List comments/annotations attached to a lpwan_campaign entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_lpwan_campaign_policy",
+      "description": "Create or update a policy/rule controlling lpwan_campaign behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_lpwan_campaign_policies",
+      "description": "List lpwan_campaign policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_lpwan_campaign_entities",
+      "description": "Create a typed relationship between two lpwan_campaign-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_lpwan_campaign_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a lpwan_campaign entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_lpwan_campaign_entities",
+      "description": "Add, remove, or replace tags on one or many lpwan_campaign entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}

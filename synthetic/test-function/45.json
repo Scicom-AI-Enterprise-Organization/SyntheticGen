@@ -1,0 +1,4251 @@
+{
+  "workflow_name": "email_support_ticket_flow",
+  "description": "End-to-end customer support ticket lifecycle orchestrated via a CPaaS email API, including email ingestion, ticket creation, routing, replies, status updates, and error handling.",
+  "domain": "taas_cpaas/email_api",
+  "shared_entities": {
+    "ticket_id": {
+      "type": "string",
+      "description": "Unique identifier for a support ticket"
+    },
+    "thread_id": {
+      "type": "string",
+      "description": "Identifier linking related email messages in a conversation"
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Unique identifier for an email message"
+    },
+    "customer_id": {
+      "type": "string",
+      "description": "Identifier of the end-customer in the support system"
+    },
+    "agent_id": {
+      "type": "string",
+      "description": "Identifier of the support agent or queue"
+    },
+    "email_address": {
+      "type": "string",
+      "description": "Email address in RFC 5321/5322 format"
+    },
+    "ticket_status": {
+      "type": "string",
+      "enum": [
+        "new",
+        "open",
+        "pending_customer",
+        "pending_internal",
+        "resolved",
+        "closed",
+        "on_hold"
+      ],
+      "description": "Lifecycle status of the support ticket"
+    },
+    "priority": {
+      "type": "string",
+      "enum": [
+        "low",
+        "normal",
+        "high",
+        "urgent"
+      ],
+      "description": "Ticket priority level"
+    }
+  },
+  "functions": [
+    {
+      "name": "ingest_incoming_email",
+      "description": "Ingest an incoming email from the CPaaS/email gateway and normalize it into a support-ready structure. May create a new thread or attach to an existing one based on headers.",
+      "stage": "ingest",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "raw_email": {
+            "type": "object",
+            "description": "Raw email content and metadata as received from CPaaS",
+            "properties": {
+              "headers": {
+                "type": "object",
+                "description": "Key-value pairs of email headers",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "from": {
+                "type": "string",
+                "description": "Sender email address"
+              },
+              "to": {
+                "type": "array",
+                "description": "Recipient addresses",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cc": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "subject": {
+                "type": "string"
+              },
+              "body": {
+                "type": "object",
+                "description": "Email body in different formats",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "html": {
+                    "type": "string"
+                  }
+                }
+              },
+              "attachments": {
+                "type": "array",
+                "description": "List of attachments",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "filename": {
+                      "type": "string"
+                    },
+                    "content_type": {
+                      "type": "string"
+                    },
+                    "size_bytes": {
+                      "type": "integer"
+                    },
+                    "content_id": {
+                      "type": "string",
+                      "description": "CID for inline attachments"
+                    },
+                    "storage_ref": {
+                      "type": "string",
+                      "description": "Reference/URL where attachment is stored"
+                    }
+                  },
+                  "required": [
+                    "filename",
+                    "content_type",
+                    "size_bytes",
+                    "storage_ref"
+                  ]
+                }
+              },
+              "received_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timestamp when the email was received"
+              },
+              "cpas_message_id": {
+                "type": "string",
+                "description": "Identifier assigned by CPaaS/email gateway"
+              }
+            },
+            "required": [
+              "from",
+              "to",
+              "subject",
+              "body",
+              "received_at"
+            ]
+          },
+          "ingestion_options": {
+            "type": "object",
+            "description": "Options to control ingestion behavior",
+            "properties": {
+              "deduplication": {
+                "type": "object",
+                "properties": {
+                  "strategy": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "by_message_id",
+                      "by_subject_and_sender"
+                    ],
+                    "default": "by_message_id"
+                  },
+                  "lookback_minutes": {
+                    "type": "integer",
+                    "description": "Window to check for duplicates if strategy is not 'none'",
+                    "default": 60
+                  }
+                }
+              },
+              "thread_detection": {
+                "type": "object",
+                "properties": {
+                  "use_in_reply_to": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "use_references": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "subject_normalization": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Strip prefixes like Re:, Fwd: for thread detection"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "raw_email"
+        ]
+      },
+      "returns": "Normalized email entity with detected or new thread_id, message_id, candidate customer_id, and flags indicating if this likely starts a new ticket."
+    },
+    {
+      "name": "auto_classify_and_route",
+      "description": "Classify an ingested email into categories, determine priority, and suggest routing to a support queue or agent.",
+      "stage": "classification",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "thread_id": {
+            "type": "string",
+            "description": "Thread identifier from ingestion"
+          },
+          "message_id": {
+            "type": "string",
+            "description": "Latest message identifier to classify"
+          },
+          "content": {
+            "type": "object",
+            "description": "Content features used for classification",
+            "properties": {
+              "subject": {
+                "type": "string"
+              },
+              "body_text": {
+                "type": "string"
+              },
+              "language_hint": {
+                "type": "string",
+                "description": "Optional language code (e.g. en, fr, es)"
+              },
+              "customer_metadata": {
+                "type": "object",
+                "description": "Optional customer context",
+                "properties": {
+                  "customer_id": {
+                    "type": "string"
+                  },
+                  "plan_tier": {
+                    "type": "string",
+                    "enum": [
+                      "free",
+                      "standard",
+                      "premium",
+                      "enterprise"
+                    ]
+                  },
+                  "account_age_days": {
+                    "type": "integer"
+                  },
+                  "mrr_usd": {
+                    "type": "number"
+                  }
+                }
+              }
+            },
+            "required": [
+              "subject",
+              "body_text"
+            ]
+          },
+          "routing_policies": {
+            "type": "object",
+            "description": "Policies controlling routing decisions",
+            "properties": {
+              "default_queue": {
+                "type": "string",
+                "description": "Fallback queue if no specific rule matches"
+              },
+              "vip_queue": {
+                "type": "string"
+              },
+              "language_queues": {
+                "type": "object",
+                "description": "Map of language code to queue ID",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "thread_id",
+          "message_id",
+          "content"
+        ]
+      },
+      "returns": "Classification result including categories, detected language, suggested priority, and suggested agent_id or queue_id."
+    },
+    {
+      "name": "create_or_update_ticket_from_email",
+      "description": "Create a new support ticket or update an existing one based on an email thread and classification result.",
+      "stage": "ticketing",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "thread_id": {
+            "type": "string"
+          },
+          "message_id": {
+            "type": "string"
+          },
+          "customer": {
+            "type": "object",
+            "description": "Customer identification and attributes",
+            "properties": {
+              "customer_id": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "external_refs": {
+                "type": "object",
+                "description": "External system references (e.g. CRM IDs)",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "classification": {
+            "type": "object",
+            "description": "Classification and routing hints",
+            "properties": {
+              "categories": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "priority": {
+                "$ref": "#/shared_entities/priority"
+              },
+              "detected_language": {
+                "type": "string"
+              },
+              "suggested_queue": {
+                "type": "string"
+              },
+              "intent": {
+                "type": "string",
+                "enum": [
+                  "bug_report",
+                  "billing_issue",
+                  "feature_request",
+                  "general_question",
+                  "account_access",
+                  "other"
+                ]
+              }
+            }
+          },
+          "ticket_linking": {
+            "type": "object",
+            "description": "Options and hints for linking to existing tickets",
+            "properties": {
+              "existing_ticket_id": {
+                "type": "string",
+                "description": "Force linking to this ticket if provided"
+              },
+              "linking_strategy": {
+                "type": "string",
+                "enum": [
+                  "by_thread_only",
+                  "by_subject_and_customer",
+                  "never_link"
+                ],
+                "default": "by_thread_only"
+              },
+              "max_lookback_days": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "initial_ticket_fields": {
+            "type": "object",
+            "description": "Optional initial fields when creating a new ticket",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "status": {
+                "$ref": "#/shared_entities/ticket_status"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "custom_fields": {
+                "type": "object",
+                "description": "Arbitrary key-value fields",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "thread_id",
+          "message_id"
+        ]
+      },
+      "returns": "Ticket entity including ticket_id, whether it was newly created or updated, and link between thread_id and ticket_id."
+    },
+    {
+      "name": "get_ticket",
+      "description": "Retrieve a ticket with its current state, associated email thread summary, and latest messages.",
+      "stage": "ticketing",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ticket_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional related data to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "messages",
+                "full_thread",
+                "audit_log",
+                "customer_profile",
+                "sla_status"
+              ]
+            }
+          },
+          "messages_pagination": {
+            "type": "object",
+            "description": "Pagination options for messages if included",
+            "properties": {
+              "limit": {
+                "type": "integer",
+                "default": 20,
+                "maximum": 100
+              },
+              "before_message_id": {
+                "type": "string"
+              },
+              "after_message_id": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "ticket_id"
+        ]
+      },
+      "returns": "Complete ticket details including ticket fields, status, assigned agent, and optionally related emails/messages."
+    },
+    {
+      "name": "update_ticket_properties",
+      "description": "Update ticket properties such as status, priority, assignment, tags, and custom fields.",
+      "stage": "ticketing",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ticket_id": {
+            "type": "string"
+          },
+          "updates": {
+            "type": "object",
+            "description": "Fields to update on the ticket",
+            "properties": {
+              "status": {
+                "$ref": "#/shared_entities/ticket_status"
+              },
+              "priority": {
+                "$ref": "#/shared_entities/priority"
+              },
+              "assignee": {
+                "type": "object",
+                "properties": {
+                  "agent_id": {
+                    "type": "string"
+                  },
+                  "queue_id": {
+                    "type": "string"
+                  },
+                  "assignment_type": {
+                    "type": "string",
+                    "enum": [
+                      "agent",
+                      "queue",
+                      "unassigned"
+                    ]
+                  }
+                }
+              },
+              "tags": {
+                "type": "object",
+                "properties": {
+                  "add": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "remove": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "custom_fields": {
+                "type": "object",
+                "description": "Partial updates to custom fields",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              "internal_notes": {
+                "type": "array",
+                "description": "Internal notes to append",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "author_id": {
+                      "type": "string"
+                    },
+                    "body": {
+                      "type": "string"
+                    },
+                    "visibility": {
+                      "type": "string",
+                      "enum": [
+                        "internal",
+                        "internal_restricted"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "author_id",
+                    "body"
+                  ]
+                }
+              }
+            }
+          },
+          "update_reason": {
+            "type": "string",
+            "description": "Reason for the update, stored in audit log"
+          }
+        },
+        "required": [
+          "ticket_id",
+          "updates"
+        ]
+      },
+      "returns": "Updated ticket state with new properties and a reference to the audit log entry for this update."
+    },
+    {
+      "name": "send_ticket_reply_email",
+      "description": "Send an outbound email reply associated with a ticket and thread, optionally including attachments and CC/BCC recipients.",
+      "stage": "communication",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ticket_id": {
+            "type": "string"
+          },
+          "thread_id": {
+            "type": "string"
+          },
+          "reply_to_message_id": {
+            "type": "string",
+            "description": "Message being replied to; used to set In-Reply-To and References"
+          },
+          "from": {
+            "type": "object",
+            "description": "Sender identity",
+            "properties": {
+              "email": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "reply_to": {
+                "type": "string",
+                "description": "Optional separate reply-to email"
+              }
+            },
+            "required": [
+              "email"
+            ]
+          },
+          "recipients": {
+            "type": "object",
+            "description": "Recipients of the reply",
+            "properties": {
+              "to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cc": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bcc": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "to"
+            ]
+          },
+          "content": {
+            "type": "object",
+            "properties": {
+              "subject": {
+                "type": "string"
+              },
+              "body": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "html": {
+                    "type": "string"
+                  }
+                }
+              },
+              "signature_id": {
+                "type": "string",
+                "description": "Optional ID of a saved agent or team signature to append"
+              }
+            },
+            "required": [
+              "subject",
+              "body"
+            ]
+          },
+          "attachments": {
+            "type": "array",
+            "description": "Attachments to be included in the reply",
+            "items": {
+              "type": "object",
+              "properties": {
+                "filename": {
+                  "type": "string"
+                },
+                "content_type": {
+                  "type": "string"
+                },
+                "storage_ref": {
+                  "type": "string",
+                  "description": "Reference/URL or blob ID where file is stored"
+                },
+                "inline": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "content_id": {
+                  "type": "string",
+                  "description": "Content ID for inline attachments, used in HTML body"
+                }
+              },
+              "required": [
+                "filename",
+                "content_type",
+                "storage_ref"
+              ]
+            }
+          },
+          "delivery_options": {
+            "type": "object",
+            "description": "Controls CPaaS delivery behavior",
+            "properties": {
+              "track_opens": {
+                "type": "boolean",
+                "default": true
+              },
+              "track_clicks": {
+                "type": "boolean",
+                "default": false
+              },
+              "priority": {
+                "type": "string",
+                "enum": [
+                  "normal",
+                  "high"
+                ],
+                "default": "normal"
+              },
+              "schedule_send_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Optional future time to send the email"
+              }
+            }
+          }
+        },
+        "required": [
+          "ticket_id",
+          "thread_id",
+          "from",
+          "recipients",
+          "content"
+        ]
+      },
+      "returns": "Outbound email send result including new message_id, updated thread_id if changed, and delivery tracking identifiers."
+    },
+    {
+      "name": "list_ticket_messages",
+      "description": "List messages (emails and internal notes) associated with a ticket in chronological or reverse-chronological order.",
+      "stage": "communication",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ticket_id": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "inbound",
+                  "outbound",
+                  "internal",
+                  "all"
+                ],
+                "default": "all"
+              },
+              "since": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "contains_text": {
+                "type": "string",
+                "description": "Filter messages containing this text snippet"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "limit": {
+                "type": "integer",
+                "default": 50,
+                "maximum": 200
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for fetching next page"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "asc"
+              }
+            }
+          }
+        },
+        "required": [
+          "ticket_id"
+        ]
+      },
+      "returns": "List of messages with message_id, direction, timestamps, snippet of content, and pagination cursor for next page."
+    },
+    {
+      "name": "get_ticket_status_and_sla",
+      "description": "Retrieve the current status, SLA information, and key timing metrics for a ticket.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ticket_id": {
+            "type": "string"
+          },
+          "include_timeline": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, include a timeline of major status changes"
+          }
+        },
+        "required": [
+          "ticket_id"
+        ]
+      },
+      "returns": "Ticket status summary including current status, priority, SLA policy, time to first response, time to resolution, and whether SLA is breached or at risk."
+    },
+    {
+      "name": "retry_email_delivery",
+      "description": "Retry delivery of a previously failed outbound email associated with a ticket, optionally modifying certain fields before retry.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "message_id": {
+            "type": "string",
+            "description": "Identifier of the failed outbound message"
+          },
+          "override_recipients": {
+            "type": "object",
+            "description": "Optional recipient overrides for the retry",
+            "properties": {
+              "to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "cc": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bcc": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "override_content": {
+            "type": "object",
+            "description": "Optional content overrides for the retry",
+            "properties": {
+              "subject": {
+                "type": "string"
+              },
+              "body_text": {
+                "type": "string"
+              },
+              "body_html": {
+                "type": "string"
+              }
+            }
+          },
+          "retry_policy": {
+            "type": "object",
+            "description": "Retry control options",
+            "properties": {
+              "max_attempts": {
+                "type": "integer",
+                "default": 3
+              },
+              "backoff_strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "first_retry_delay_seconds": {
+                "type": "integer",
+                "default": 60
+              }
+            }
+          }
+        },
+        "required": [
+          "message_id"
+        ]
+      },
+      "returns": "Retry job result including new delivery attempt IDs, next scheduled attempt if any, and final status if immediate retry is attempted."
+    },
+    {
+      "name": "escalate_or_reassign_ticket",
+      "description": "Escalate a ticket to a higher support tier or reassign it to a different queue or agent with optional notification via email.",
+      "stage": "escalation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ticket_id": {
+            "type": "string"
+          },
+          "escalation": {
+            "type": "object",
+            "description": "Details of the escalation or reassignment",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "escalate_tier",
+                  "reassign_queue",
+                  "reassign_agent"
+                ]
+              },
+              "target_tier": {
+                "type": "string",
+                "description": "Target support tier (for escalate_tier)"
+              },
+              "target_queue_id": {
+                "type": "string",
+                "description": "Target queue (for reassign_queue)"
+              },
+              "target_agent_id": {
+                "type": "string",
+                "description": "Target agent (for reassign_agent)"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "urgency": {
+                "type": "string",
+                "enum": [
+                  "normal",
+                  "high",
+                  "critical"
+                ]
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "notify": {
+            "type": "object",
+            "description": "Notification options for the escalation",
+            "properties": {
+              "via_email": {
+                "type": "boolean",
+                "default": true
+              },
+              "to_addresses": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "email_template_id": {
+                "type": "string"
+              },
+              "include_ticket_summary": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "required": [
+          "ticket_id",
+          "escalation"
+        ]
+      },
+      "returns": "Updated ticket assignment and escalation metadata, plus notification send results if email notifications were triggered."
+    },
+    {
+      "name": "resolve_or_close_ticket",
+      "description": "Mark a ticket as resolved or closed, optionally sending a resolution email and capturing resolution metrics.",
+      "stage": "resolution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ticket_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "resolve",
+              "close"
+            ]
+          },
+          "resolution": {
+            "type": "object",
+            "description": "Resolution details",
+            "properties": {
+              "summary": {
+                "type": "string"
+              },
+              "resolution_code": {
+                "type": "string",
+                "enum": [
+                  "fixed_bug",
+                  "answered_question",
+                  "workaround_provided",
+                  "duplicate",
+                  "user_error",
+                  "no_response_from_customer",
+                  "other"
+                ]
+              },
+              "public_notes": {
+                "type": "string",
+                "description": "Optional public note to attach to the ticket"
+              },
+              "internal_notes": {
+                "type": "string",
+                "description": "Internal-only resolution note"
+              }
+            }
+          },
+          "send_resolution_email": {
+            "type": "boolean",
+            "default": true
+          },
+          "email_options": {
+            "type": "object",
+            "description": "Options for the resolution email when send_resolution_email is true",
+            "properties": {
+              "from": {
+                "type": "string"
+              },
+              "to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "subject": {
+                "type": "string"
+              },
+              "body_template_id": {
+                "type": "string",
+                "description": "Template ID to render resolution email"
+              },
+              "include_survey_link": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          }
+        },
+        "required": [
+          "ticket_id",
+          "action"
+        ]
+      },
+      "returns": "Final ticket state, including updated status, resolution metadata, and resolution email send result if applicable."
+    },
+    {
+      "name": "cancel_or_rollback_ticket_changes",
+      "description": "Rollback recent ticket changes or cancel a ticket closure, restoring a previous state snapshot.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ticket_id": {
+            "type": "string"
+          },
+          "rollback_strategy": {
+            "type": "string",
+            "enum": [
+              "rollback_last_change",
+              "rollback_to_snapshot"
+            ]
+          },
+          "target_snapshot_id": {
+            "type": "string",
+            "description": "Snapshot identifier when using rollback_to_snapshot"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for rollback, added to audit log"
+          },
+          "options": {
+            "type": "object",
+            "description": "Additional options controlling rollback behavior",
+            "properties": {
+              "preserve_new_messages": {
+                "type": "boolean",
+                "default": true,
+                "description": "If true, keep messages added after the snapshot"
+              },
+              "notify_agent": {
+                "type": "boolean",
+                "default": false
+              },
+              "notify_customer": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          }
+        },
+        "required": [
+          "ticket_id",
+          "rollback_strategy"
+        ]
+      },
+      "returns": "Ticket state after rollback, including snapshot metadata and which changes were reverted."
+    },
+    {
+      "name": "search_tickets",
+      "description": "Search for tickets based on email attributes, status, customer metadata, and full-text query.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Full-text search query across subject, body, and notes"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/ticket_status"
+                }
+              },
+              "priority": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/priority"
+                }
+              },
+              "assignee_agent_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "queue_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "customer_id": {
+                "type": "string"
+              },
+              "created_between": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "updated_since": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tags": {
+                "type": "object",
+                "properties": {
+                  "any": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "all": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "sla_breached": {
+                "type": "boolean"
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "priority",
+              "status",
+              "sla_due_at"
+            ],
+            "default": "updated_at"
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 20,
+            "maximum": 100
+          }
+        }
+      },
+      "returns": "Paged list of tickets matching the search criteria, including summary fields and pagination metadata (total, page, page_size)."
+    },
+    {
+      "name": "bulk_import_tickets",
+      "description": "Bulk-import multiple tickets from an upstream source with validation and idempotency keys.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "import_source": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "json",
+                  "parquet",
+                  "kafka",
+                  "s3",
+                  "api"
+                ]
+              },
+              "location": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "format_options": {
+                "type": "object",
+                "properties": {
+                  "delimiter": {
+                    "type": "string"
+                  },
+                  "encoding": {
+                    "type": "string"
+                  },
+                  "header_row": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "required": [
+              "type",
+              "location"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "description": "Field mapping from source to canonical schema",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_id": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "batch_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "default": 500
+          },
+          "on_error": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "abort",
+              "quarantine"
+            ],
+            "default": "quarantine"
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "import_source",
+          "actor"
+        ]
+      },
+      "returns": "A bulk-import job descriptor with counts of accepted, rejected, and quarantined tickets, plus a job_id for follow-up."
+    },
+    {
+      "name": "bulk_update_tickets",
+      "description": "Apply a partial update to a batch of tickets matched by filter or id list.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/ticket_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "patch": {
+            "type": "object",
+            "description": "Fields to patch on each matched item",
+            "properties": {
+              "set": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "unset": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "add_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "remove_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "preconditions": {
+            "type": "object",
+            "description": "Optional optimistic-concurrency preconditions",
+            "properties": {
+              "if_match_version": {
+                "type": "string"
+              },
+              "expected_status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "max_items": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1000
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "patch",
+          "actor"
+        ]
+      },
+      "returns": "Summary of matched, updated, and skipped tickets with per-item error details."
+    },
+    {
+      "name": "bulk_archive_tickets",
+      "description": "Archive (soft-delete) a batch of tickets with retention metadata and audit reasons.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/ticket_id"
+            },
+            "minItems": 1
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retain_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "legal_hold": {
+            "type": "boolean",
+            "default": false
+          },
+          "tombstone_metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "ids",
+          "reason",
+          "actor"
+        ]
+      },
+      "returns": "Per-id archive results with new lifecycle state."
+    },
+    {
+      "name": "bulk_export_tickets",
+      "description": "Export a filtered set of tickets to a downstream destination (S3, GCS, blob, SFTP).",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Projection; empty means all fields"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "csv",
+              "parquet",
+              "ndjson"
+            ],
+            "default": "json"
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp",
+                  "http"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "compression": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "gzip",
+                  "zstd"
+                ],
+                "default": "none"
+              }
+            },
+            "required": [
+              "type",
+              "uri"
+            ]
+          },
+          "chunk_size_mb": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1024,
+            "default": 64
+          },
+          "include_audit_columns": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "sse-s3",
+                  "sse-kms",
+                  "client-side"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "destination",
+          "actor"
+        ]
+      },
+      "returns": "Export job handle including job_id, expected object URIs, row count, and signed download URLs when applicable."
+    },
+    {
+      "name": "search_tickets_advanced",
+      "description": "Advanced faceted search across tickets with full-text, structured filters, aggregations, and sort.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Full-text query string with Lucene-like syntax"
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "contains",
+                    "starts_with",
+                    "exists"
+                  ]
+                },
+                "value": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "array",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "aggregations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "terms",
+                    "histogram",
+                    "date_histogram",
+                    "stats",
+                    "cardinality"
+                  ]
+                },
+                "field": {
+                  "type": "string"
+                },
+                "interval": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "field"
+              ]
+            }
+          },
+          "highlight_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": []
+      },
+      "returns": "Search response with tickets hits, total count, aggregation buckets, and a next-cursor."
+    },
+    {
+      "name": "create_ticket_subscription",
+      "description": "Create a subscription that fires webhooks or notifications on ticket lifecycle events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "created",
+                "updated",
+                "status_changed",
+                "deleted",
+                "escalated",
+                "resolved",
+                "custom"
+              ]
+            },
+            "minItems": 1
+          },
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "target": {
+            "type": "object",
+            "description": "Notification target descriptor",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "email",
+                  "sms",
+                  "webhook",
+                  "push",
+                  "slack",
+                  "teams",
+                  "pagerduty"
+                ]
+              },
+              "address": {
+                "type": "string"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "secret_ref": {
+                "type": "string",
+                "description": "Reference to a stored secret"
+              }
+            },
+            "required": [
+              "type",
+              "address"
+            ]
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "retry_policy": {
+                "type": "object",
+                "properties": {
+                  "max_attempts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  },
+                  "backoff": {
+                    "type": "string",
+                    "enum": [
+                      "linear",
+                      "exponential",
+                      "fixed"
+                    ],
+                    "default": "exponential"
+                  },
+                  "initial_delay_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  }
+                }
+              },
+              "rate_limit_per_minute": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "batch_size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            }
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "events",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "The created subscription including subscription_id, active state, and last_delivery info (initially null)."
+    },
+    {
+      "name": "list_ticket_subscriptions",
+      "description": "List existing ticket subscriptions with optional filters and pagination.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "target_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of subscription objects including delivery health stats."
+    },
+    {
+      "name": "deactivate_ticket_subscription",
+      "description": "Deactivate or delete a ticket subscription and optionally flush pending deliveries.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "delete"
+            ],
+            "default": "pause"
+          },
+          "flush_pending": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "subscription_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated subscription state and the number of pending deliveries flushed or kept."
+    },
+    {
+      "name": "get_ticket_audit_log",
+      "description": "Return the audit/change log for a single ticket with field-level diffs and actor info.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/ticket_id"
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "include_field_diff": {
+            "type": "boolean",
+            "default": true
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Chronological list of audit events with before/after diffs, actor, and source IP/system."
+    },
+    {
+      "name": "search_audit_events",
+      "description": "Search audit events across tickets for compliance and forensic review.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "actor_user_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "object_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/ticket_id"
+                }
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              },
+              "source_systems": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated audit-event hits with cross-entity references."
+    },
+    {
+      "name": "schedule_ticket_job",
+      "description": "Create a recurring schedule that triggers a named operation on a target set of tickets.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "description": "Named operation to invoke (e.g., refresh, recompute, export, reconcile)"
+          },
+          "target_selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/ticket_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Parameters passed to each invocation"
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Schedule definition",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "once",
+                  "cron",
+                  "interval",
+                  "calendar"
+                ]
+              },
+              "cron": {
+                "type": "string",
+                "description": "Cron expression (UTC by default)"
+              },
+              "interval_seconds": {
+                "type": "integer",
+                "minimum": 30
+              },
+              "start_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "max_runs": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "jitter_seconds": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "concurrency_policy": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "forbid",
+              "replace"
+            ],
+            "default": "forbid"
+          },
+          "notify_on": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure",
+                "skipped"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "operation",
+          "schedule",
+          "actor"
+        ]
+      },
+      "returns": "The created scheduled-job descriptor with job_id, next_run_at, and current status."
+    },
+    {
+      "name": "list_ticket_jobs",
+      "description": "List scheduled or in-flight jobs related to tickets with status filtering and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "skipped"
+                  ]
+                }
+              },
+              "operation_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "include_runs": {
+            "type": "boolean",
+            "default": false
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of ticket jobs and their last run summaries."
+    },
+    {
+      "name": "cancel_ticket_job",
+      "description": "Cancel a scheduled or in-flight ticket job, optionally interrupting running steps.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "job_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated job status with cancellation timestamp and any side effects."
+    },
+    {
+      "name": "simulate_ticket_change",
+      "description": "Simulate a proposed change against a ticket (or batch) without committing; returns expected diffs and warnings.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/ticket_id"
+          },
+          "proposed_change": {
+            "type": "object",
+            "description": "Polymorphic change object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "patch",
+                  "replace",
+                  "transition",
+                  "policy_apply"
+                ]
+              },
+              "patch": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "replace": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "transition_to": {
+                "type": "string"
+              },
+              "policy_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "evaluation_options": {
+            "type": "object",
+            "properties": {
+              "evaluate_rules": {
+                "type": "boolean",
+                "default": true
+              },
+              "evaluate_dependencies": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_cost_impact": {
+                "type": "boolean",
+                "default": false
+              },
+              "include_sla_impact": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "proposed_change",
+          "actor"
+        ]
+      },
+      "returns": "Simulation result with predicted diffs, rule violations, cost/SLA impact, and a confidence score."
+    },
+    {
+      "name": "request_ticket_approval",
+      "description": "Open an approval request for a sensitive ticket change requiring reviewer sign-off.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/ticket_id"
+          },
+          "change_summary": {
+            "type": "string"
+          },
+          "change_payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "user_id": {
+                  "type": "string"
+                },
+                "role_required": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "user_id"
+              ]
+            },
+            "minItems": 1
+          },
+          "quorum": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "escalation_policy_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "approvers",
+          "actor"
+        ]
+      },
+      "returns": "Created approval request with approval_request_id, current state, and notification targets."
+    },
+    {
+      "name": "submit_ticket_approval_decision",
+      "description": "Submit an approve, reject, or request-changes decision against a ticket approval request.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_request_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "request_changes"
+            ]
+          },
+          "comment": {
+            "type": "string"
+          },
+          "signed_evidence": {
+            "type": "object",
+            "properties": {
+              "signature": {
+                "type": "string"
+              },
+              "signed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "totp",
+                  "webauthn",
+                  "sso",
+                  "manual"
+                ]
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "approval_request_id",
+          "decision",
+          "actor"
+        ]
+      },
+      "returns": "Updated approval request state including quorum progress and final decision (if reached)."
+    },
+    {
+      "name": "add_ticket_comment",
+      "description": "Append a comment or annotation to a ticket, optionally attaching files or mentioning users.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/ticket_id"
+          },
+          "body": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "internal",
+              "tenant",
+              "public"
+            ],
+            "default": "internal"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_name": {
+                  "type": "string"
+                },
+                "content_type": {
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "type": "integer"
+                },
+                "uri": {
+                  "type": "string"
+                },
+                "checksum_sha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_name",
+                "uri"
+              ]
+            }
+          },
+          "parent_comment_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "body",
+          "actor"
+        ]
+      },
+      "returns": "The created comment object with comment_id, timestamps, and visibility-resolved permissions."
+    },
+    {
+      "name": "list_ticket_comments",
+      "description": "List comments and annotations attached to a ticket, with optional thread expansion.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/ticket_id"
+          },
+          "include_threads": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_attachments": {
+            "type": "boolean",
+            "default": true
+          },
+          "visibility_in": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "internal",
+                "tenant",
+                "public"
+              ]
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Paginated comment list with thread tree and attachment metadata."
+    },
+    {
+      "name": "snapshot_ticket",
+      "description": "Create a point-in-time immutable snapshot of a ticket for forensic, rollback, or compliance use.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/ticket_id"
+          },
+          "label": {
+            "type": "string"
+          },
+          "include_related": {
+            "type": "array",
+            "description": "Optional related-entity inclusion list",
+            "items": {
+              "type": "string"
+            }
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "kms",
+                  "client"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "retention": {
+            "type": "object",
+            "properties": {
+              "policy": {
+                "type": "string",
+                "enum": [
+                  "short",
+                  "standard",
+                  "long",
+                  "indefinite"
+                ]
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "actor"
+        ]
+      },
+      "returns": "Snapshot descriptor with snapshot_id, checksum, byte size, and retention expiry."
+    },
+    {
+      "name": "restore_ticket_snapshot",
+      "description": "Restore a ticket from a previously created snapshot, optionally as a new copy.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "overwrite",
+                  "new_copy",
+                  "merge"
+                ]
+              },
+              "target_id": {
+                "$ref": "#/shared_entities/ticket_id"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "fail",
+              "skip_existing",
+              "overwrite"
+            ],
+            "default": "fail"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "Restore job descriptor including resulting id and any per-field conflicts that were resolved."
+    },
+    {
+      "name": "get_ticket_metrics",
+      "description": "Compute KPI metrics over tickets (counts, MTTR, SLA compliance, error rates) for a time window.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "count",
+                "open_count",
+                "closed_count",
+                "mttr_seconds",
+                "mttd_seconds",
+                "sla_compliance_pct",
+                "error_rate",
+                "p50_latency_ms",
+                "p95_latency_ms",
+                "p99_latency_ms",
+                "throughput_per_minute",
+                "backlog_age_seconds"
+              ]
+            },
+            "minItems": 1
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "1m",
+              "5m",
+              "15m",
+              "1h",
+              "1d",
+              "1w"
+            ],
+            "default": "1h"
+          }
+        },
+        "required": [
+          "metrics"
+        ]
+      },
+      "returns": "Time-bucketed metric series and aggregate KPIs for the matched tickets."
+    },
+    {
+      "name": "build_ticket_dashboard",
+      "description": "Persist a named dashboard composed of widgets (charts, tables, single-stat) over tickets data.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "widgets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "line",
+                    "bar",
+                    "pie",
+                    "table",
+                    "single_stat",
+                    "heatmap"
+                  ]
+                },
+                "query": {
+                  "type": "object",
+                  "properties": {
+                    "metrics": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "filter": {
+                      "type": "object",
+                      "description": "Filter constraints",
+                      "properties": {
+                        "text": {
+                          "type": "string",
+                          "description": "Free-text search across indexed fields"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "labels": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "Key/value labels to match"
+                        },
+                        "created_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "updated_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "owner_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "group_by": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "time_range": {
+                      "type": "object",
+                      "description": "Time window for filtering or scoping the operation",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "end": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "timezone": {
+                          "type": "string",
+                          "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "metrics"
+                  ]
+                },
+                "position": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "integer"
+                    },
+                    "y": {
+                      "type": "integer"
+                    },
+                    "w": {
+                      "type": "integer"
+                    },
+                    "h": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "title",
+                "type",
+                "query"
+              ]
+            },
+            "minItems": 1
+          },
+          "refresh_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "default": 60
+          },
+          "shared_with": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "widgets",
+          "actor"
+        ]
+      },
+      "returns": "Created dashboard descriptor with dashboard_id, shareable URL, and computed first-render preview."
+    },
+    {
+      "name": "upsert_ticket_policy",
+      "description": "Create or update a policy/rule used to govern ticket behavior, validation, or routing.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "expression": {
+                  "type": "string",
+                  "description": "CEL or JEXL expression"
+                },
+                "action": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "allow",
+                        "deny",
+                        "route",
+                        "transform",
+                        "notify",
+                        "tag"
+                      ]
+                    },
+                    "params": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "expression",
+                "action"
+              ]
+            },
+            "minItems": 1
+          },
+          "version_strategy": {
+            "type": "string",
+            "enum": [
+              "bump_minor",
+              "bump_major",
+              "replace"
+            ],
+            "default": "bump_minor"
+          },
+          "effective_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "rules",
+          "actor"
+        ]
+      },
+      "returns": "Persisted policy with policy_id, version, rule count, and validation warnings (if any)."
+    },
+    {
+      "name": "list_ticket_policies",
+      "description": "List policies governing tickets with version, scope, and lifecycle filters.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "scope_label": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          },
+          "include_rule_summary": {
+            "type": "boolean",
+            "default": true
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated policy entries with rule counts and last evaluation metrics."
+    },
+    {
+      "name": "link_ticket_dependencies",
+      "description": "Establish or update dependency links between a ticket and related artefacts.",
+      "stage": "depends",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/ticket_id"
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_type": {
+                  "type": "string"
+                },
+                "target_id": {
+                  "type": "string"
+                },
+                "relation": {
+                  "type": "string",
+                  "enum": [
+                    "depends_on",
+                    "blocks",
+                    "related_to",
+                    "parent_of",
+                    "child_of"
+                  ]
+                },
+                "weight": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "default": 1.0
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "target_type",
+                "target_id",
+                "relation"
+              ]
+            },
+            "minItems": 1
+          },
+          "replace_existing": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "dependencies",
+          "actor"
+        ]
+      },
+      "returns": "Updated dependency graph summary with added/removed/updated edges."
+    }
+  ]
+}

@@ -1,0 +1,1449 @@
+{
+  "workflow_name": "network_performance_management",
+  "description": "End-to-end performance management workflow for telecom-as-a-service network intelligence, covering KPI configuration, baseline learning, anomaly detection, incident lifecycle, and remediation automation.",
+  "domain": "taas/network_intelligence",
+  "shared_entities": {
+    "tenant_id": {
+      "type": "string",
+      "description": "Tenant or operator identifier"
+    },
+    "domain_id": {
+      "type": "string",
+      "description": "Logical network domain identifier (e.g., RAN, Core, Transport)"
+    },
+    "kpi_profile_id": {
+      "type": "string",
+      "description": "Identifier for a KPI configuration profile"
+    },
+    "baseline_id": {
+      "type": "string",
+      "description": "Identifier for a learned KPI baseline model"
+    },
+    "monitoring_job_id": {
+      "type": "string",
+      "description": "Identifier for a continuous monitoring and anomaly detection job"
+    },
+    "incident_id": {
+      "type": "string",
+      "description": "Identifier for a performance incident"
+    },
+    "remediation_plan_id": {
+      "type": "string",
+      "description": "Identifier for an automated remediation plan"
+    },
+    "topology_node_id": {
+      "type": "string",
+      "description": "Identifier for a network element (cell, site, router, gNB, etc.)"
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Common time range selector",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Start timestamp in ISO 8601"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time",
+          "description": "End timestamp in ISO 8601"
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone name (e.g., Europe/Berlin)"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "kpi_selector": {
+      "type": "object",
+      "description": "Selector for KPIs to analyze",
+      "properties": {
+        "kpi_names": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Explicit KPI names to include"
+        },
+        "kpi_groups": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "radio_access",
+              "core_signaling",
+              "throughput",
+              "latency",
+              "packet_loss",
+              "availability",
+              "5g_sa",
+              "volte",
+              "transport"
+            ]
+          },
+          "description": "Logical KPI groups"
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "name": "discover_topology_and_metrics",
+      "description": "Discover network topology, available KPIs, and metric sources for a given tenant and domain.",
+      "stage": "inventory",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant identifier to scope discovery"
+          },
+          "domain_filter": {
+            "type": "array",
+            "description": "Optional filter for network domains to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "RAN",
+                "Core",
+                "Transport",
+                "IMS",
+                "Edge"
+              ]
+            }
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional information to include in discovery result",
+            "items": {
+              "type": "string",
+              "enum": [
+                "topology",
+                "kpi_catalog",
+                "data_sources",
+                "aggregation_levels"
+              ]
+            }
+          },
+          "topology_depth": {
+            "type": "string",
+            "description": "Level of topology detail to return",
+            "enum": [
+              "domain_only",
+              "sites",
+              "sites_and_cells",
+              "full"
+            ],
+            "default": "sites_and_cells"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ]
+      },
+      "returns": "Discovered topology tree, supported KPIs per domain, and data source metadata."
+    },
+    {
+      "name": "create_kpi_profile",
+      "description": "Create or update a KPI monitoring profile defining which KPIs to track, aggregation levels, and alert thresholds.",
+      "stage": "configuration",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "domain_id": {
+            "type": "string"
+          },
+          "kpi_profile_id": {
+            "type": "string",
+            "description": "Existing profile ID to update; if omitted, a new profile is created."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable profile name"
+          },
+          "description": {
+            "type": "string"
+          },
+          "kpi_selector": {
+            "$ref": "#/shared_entities/kpi_selector"
+          },
+          "aggregation": {
+            "type": "object",
+            "description": "KPI aggregation configuration",
+            "properties": {
+              "granularity": {
+                "type": "string",
+                "enum": [
+                  "1min",
+                  "5min",
+                  "15min",
+                  "1h",
+                  "24h"
+                ]
+              },
+              "levels": {
+                "type": "array",
+                "description": "Aggregation levels in the topology hierarchy",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "cell",
+                    "sector",
+                    "site",
+                    "cluster",
+                    "region",
+                    "tenant"
+                  ]
+                }
+              },
+              "rollup_functions": {
+                "type": "object",
+                "description": "Per-KPI rollup function overrides",
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": [
+                    "avg",
+                    "p95",
+                    "p99",
+                    "max",
+                    "min",
+                    "sum",
+                    "weighted_avg"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "granularity",
+              "levels"
+            ]
+          },
+          "alert_policies": {
+            "type": "array",
+            "description": "Per-KPI alerting policies",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kpi_name": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warning",
+                    "minor",
+                    "major",
+                    "critical"
+                  ]
+                },
+                "threshold_type": {
+                  "type": "string",
+                  "enum": [
+                    "static",
+                    "baseline_deviation",
+                    "rate_of_change"
+                  ]
+                },
+                "static_thresholds": {
+                  "type": "object",
+                  "description": "Used when threshold_type is static",
+                  "properties": {
+                    "upper": {
+                      "type": "number"
+                    },
+                    "lower": {
+                      "type": "number"
+                    },
+                    "direction": {
+                      "type": "string",
+                      "enum": [
+                        "above",
+                        "below",
+                        "outside_range"
+                      ]
+                    }
+                  }
+                },
+                "deviation_settings": {
+                  "type": "object",
+                  "description": "Used when threshold_type is baseline_deviation",
+                  "properties": {
+                    "sigma": {
+                      "type": "number",
+                      "description": "Number of standard deviations from baseline"
+                    },
+                    "min_duration": {
+                      "type": "string",
+                      "description": "Minimum duration the deviation must persist (e.g., 15m, 1h)"
+                    }
+                  }
+                },
+                "roc_settings": {
+                  "type": "object",
+                  "description": "Used when threshold_type is rate_of_change",
+                  "properties": {
+                    "window": {
+                      "type": "string",
+                      "description": "Lookback window for rate of change (e.g., 5m)"
+                    },
+                    "delta_percent": {
+                      "type": "number",
+                      "description": "Percentage change threshold"
+                    }
+                  }
+                },
+                "suppress_during_maintenance": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "kpi_name",
+                "severity",
+                "threshold_type"
+              ]
+            }
+          },
+          "tags": {
+            "type": "object",
+            "description": "Free-form key-value tags",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "tenant_id",
+          "domain_id",
+          "name",
+          "aggregation"
+        ]
+      },
+      "returns": "KPI profile ID, version, and summary of configured KPIs and alert policies."
+    },
+    {
+      "name": "train_performance_baseline",
+      "description": "Train or retrain a baseline model for selected KPIs over a historical period.",
+      "stage": "baseline_training",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "domain_id": {
+            "type": "string"
+          },
+          "kpi_profile_id": {
+            "type": "string",
+            "description": "KPI profile whose KPIs will be used for baseline training"
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "topology_scope": {
+            "type": "object",
+            "description": "Scope of nodes on which to train baselines",
+            "properties": {
+              "topology_node_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Explicit list of topology node IDs"
+              },
+              "filters": {
+                "type": "object",
+                "description": "Dynamic filters for selecting nodes",
+                "properties": {
+                  "region_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "technology": {
+                    "type": "string",
+                    "enum": [
+                      "2G",
+                      "3G",
+                      "4G",
+                      "5GNSA",
+                      "5GSA"
+                    ]
+                  },
+                  "vendor": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "modeling_options": {
+            "type": "object",
+            "description": "Baseline modeling configuration",
+            "properties": {
+              "algorithm": {
+                "type": "string",
+                "enum": [
+                  "seasonal_arima",
+                  "prophet",
+                  "lstm",
+                  "isolation_forest"
+                ],
+                "default": "prophet"
+              },
+              "seasonality": {
+                "type": "object",
+                "properties": {
+                  "daily": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "weekly": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "yearly": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              },
+              "exclude_maintenance_windows": {
+                "type": "boolean",
+                "default": true
+              },
+              "train_test_split_ratio": {
+                "type": "number",
+                "minimum": 0.1,
+                "maximum": 0.9,
+                "default": 0.8
+              }
+            }
+          },
+          "retrain_existing": {
+            "type": "boolean",
+            "description": "If true, retrain and replace existing baselines for the same profile and scope",
+            "default": false
+          }
+        },
+        "required": [
+          "tenant_id",
+          "domain_id",
+          "kpi_profile_id",
+          "time_range"
+        ]
+      },
+      "returns": "Baseline ID, training job status, and quality metrics per KPI/topology segment."
+    },
+    {
+      "name": "create_monitoring_job",
+      "description": "Create a continuous monitoring job that applies a KPI profile and baseline to live data for anomaly detection.",
+      "stage": "monitoring_setup",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "domain_id": {
+            "type": "string"
+          },
+          "kpi_profile_id": {
+            "type": "string"
+          },
+          "baseline_id": {
+            "type": "string",
+            "description": "Optional baseline model ID; if omitted, system selects the latest compatible baseline."
+          },
+          "monitoring_job_name": {
+            "type": "string"
+          },
+          "stream_source": {
+            "type": "object",
+            "description": "Streaming metrics source configuration",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "kafka",
+                  "kinesis",
+                  "grpc",
+                  "http_pull"
+                ]
+              },
+              "endpoint": {
+                "type": "string",
+                "description": "Broker or endpoint URL"
+              },
+              "topics_or_streams": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "auth": {
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "basic",
+                      "oauth2",
+                      "mtls"
+                    ]
+                  },
+                  "credentials_ref": {
+                    "type": "string",
+                    "description": "Reference to stored credentials/secret"
+                  }
+                }
+              }
+            },
+            "required": [
+              "type",
+              "endpoint"
+            ]
+          },
+          "scheduling": {
+            "type": "object",
+            "description": "Job scheduling and evaluation policy",
+            "properties": {
+              "evaluation_interval": {
+                "type": "string",
+                "description": "How often to evaluate anomalies (e.g., 1m, 5m)"
+              },
+              "backfill_on_start": {
+                "type": "boolean",
+                "default": false
+              },
+              "max_lag_tolerance": {
+                "type": "string",
+                "description": "Maximum allowed ingestion lag before marking data as stale"
+              }
+            },
+            "required": [
+              "evaluation_interval"
+            ]
+          },
+          "topology_scope": {
+            "type": "object",
+            "description": "Scope of nodes to monitor, similar to baseline training scope",
+            "properties": {
+              "topology_node_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "filters": {
+                "type": "object",
+                "properties": {
+                  "region_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "technology": {
+                    "type": "string",
+                    "enum": [
+                      "2G",
+                      "3G",
+                      "4G",
+                      "5GNSA",
+                      "5GSA"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "auto_incident_creation": {
+            "type": "object",
+            "description": "Rules for auto-creating incidents from anomalies",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warning",
+                  "minor",
+                  "major",
+                  "critical"
+                ],
+                "default": "major"
+              },
+              "min_duration": {
+                "type": "string",
+                "description": "Minimum continuous duration for anomaly before incident creation"
+              },
+              "grouping_strategy": {
+                "type": "string",
+                "enum": [
+                  "by_node",
+                  "by_region",
+                  "by_kpi",
+                  "correlated_cluster"
+                ],
+                "default": "correlated_cluster"
+              }
+            }
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "tenant_id",
+          "domain_id",
+          "kpi_profile_id",
+          "monitoring_job_name",
+          "stream_source",
+          "scheduling"
+        ]
+      },
+      "returns": "Monitoring job ID, initial status, and effective monitoring scope."
+    },
+    {
+      "name": "get_monitoring_job_status",
+      "description": "Get status, health, and recent anomaly statistics for a monitoring job.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "monitoring_job_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "config",
+                "recent_anomalies",
+                "ingestion_health",
+                "resource_usage",
+                "logs"
+              ]
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          }
+        },
+        "required": [
+          "monitoring_job_id"
+        ]
+      },
+      "returns": "Monitoring job lifecycle state, configuration summary, ingestion health, and anomaly statistics."
+    },
+    {
+      "name": "list_kpi_anomalies",
+      "description": "List anomalies detected for given KPIs, time range, and topology scope.",
+      "stage": "analytics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "domain_id": {
+            "type": "string"
+          },
+          "monitoring_job_id": {
+            "type": "string",
+            "description": "Optional filter for anomalies from a specific monitoring job"
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "kpi_selector": {
+            "$ref": "#/shared_entities/kpi_selector"
+          },
+          "severity_filter": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "info",
+                "warning",
+                "minor",
+                "major",
+                "critical"
+              ]
+            }
+          },
+          "topology_node_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "description": "Fields to group anomalies by for aggregation",
+            "items": {
+              "type": "string",
+              "enum": [
+                "topology_node_id",
+                "kpi_name",
+                "region",
+                "technology",
+                "severity"
+              ]
+            }
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50,
+            "maximum": 500
+          }
+        },
+        "required": [
+          "tenant_id",
+          "domain_id",
+          "time_range"
+        ]
+      },
+      "returns": "Paginated list or aggregated view of anomalies with scores, severities, and correlation keys."
+    },
+    {
+      "name": "create_performance_incident",
+      "description": "Create an incident from one or more anomalies, or manually, to track performance degradation.",
+      "stage": "incident_management",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "domain_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "auto_detection",
+              "manual",
+              "external_ticket"
+            ],
+            "description": "Origin of the incident creation"
+          },
+          "linked_anomaly_ids": {
+            "type": "array",
+            "description": "IDs of anomalies being grouped into this incident",
+            "items": {
+              "type": "string"
+            }
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "P1",
+              "P2",
+              "P3",
+              "P4"
+            ],
+            "default": "P3"
+          },
+          "impact_assessment": {
+            "type": "object",
+            "description": "Initial impact assessment",
+            "properties": {
+              "affected_subscribers_estimate": {
+                "type": "integer"
+              },
+              "affected_services": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "voice",
+                    "data",
+                    "sms",
+                    "iot",
+                    "mec",
+                    "enterprise_vpn"
+                  ]
+                }
+              },
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "topology_impact": {
+            "type": "array",
+            "description": "List of impacted topology nodes and roles",
+            "items": {
+              "type": "object",
+              "properties": {
+                "topology_node_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "primary_suspect",
+                    "impacted_only",
+                    "unknown"
+                  ]
+                }
+              },
+              "required": [
+                "topology_node_id"
+              ]
+            }
+          },
+          "external_references": {
+            "type": "array",
+            "description": "References to external systems (e.g., ticket IDs)",
+            "items": {
+              "type": "object",
+              "properties": {
+                "system": {
+                  "type": "string"
+                },
+                "reference_id": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "system",
+                "reference_id"
+              ]
+            }
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "domain_id",
+          "source",
+          "title"
+        ]
+      },
+      "returns": "Incident ID, initial state, and derived correlation context."
+    },
+    {
+      "name": "get_incident_details",
+      "description": "Retrieve full details, timeline, and diagnostics for a performance incident.",
+      "stage": "incident_management",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "timeline",
+                "linked_anomalies",
+                "topology_context",
+                "impact_history",
+                "remediation_actions",
+                "attachments"
+              ]
+            }
+          }
+        },
+        "required": [
+          "incident_id"
+        ]
+      },
+      "returns": "Incident metadata, current status, correlation graph, impact, and remediation history."
+    },
+    {
+      "name": "update_incident_state",
+      "description": "Update the lifecycle state, ownership, or impact assessment of an incident.",
+      "stage": "incident_management",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "new_state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in_progress",
+              "monitoring",
+              "resolved",
+              "closed",
+              "cancelled"
+            ]
+          },
+          "assignee": {
+            "type": "object",
+            "description": "New owner of the incident",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "group",
+                  "automation"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "display_name": {
+                "type": "string"
+              }
+            }
+          },
+          "impact_update": {
+            "type": "object",
+            "description": "Updated impact information",
+            "properties": {
+              "affected_subscribers_estimate": {
+                "type": "integer"
+              },
+              "affected_services": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "resolution_summary": {
+            "type": "string",
+            "description": "Short text describing the resolution or reason for state change"
+          },
+          "custom_fields": {
+            "type": "object",
+            "description": "Additional custom fields to update",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        },
+        "required": [
+          "incident_id",
+          "new_state"
+        ]
+      },
+      "returns": "Updated incident record with new state and audit log entry."
+    },
+    {
+      "name": "define_remediation_plan",
+      "description": "Define or update an automated remediation plan for specific KPI degradation or incident patterns.",
+      "stage": "remediation_design",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "domain_id": {
+            "type": "string"
+          },
+          "remediation_plan_id": {
+            "type": "string",
+            "description": "Existing plan ID to update; if omitted, a new plan is created."
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "trigger_conditions": {
+            "type": "object",
+            "description": "Conditions that trigger the remediation plan",
+            "properties": {
+              "kpi_selector": {
+                "$ref": "#/shared_entities/kpi_selector"
+              },
+              "severity_at_least": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warning",
+                  "minor",
+                  "major",
+                  "critical"
+                ]
+              },
+              "incident_required": {
+                "type": "boolean",
+                "default": true
+              },
+              "pattern": {
+                "type": "object",
+                "description": "Pattern of anomalies or topology to match",
+                "properties": {
+                  "topology_role": {
+                    "type": "string",
+                    "enum": [
+                      "cell_cluster",
+                      "single_site",
+                      "multi_region",
+                      "core_only",
+                      "transport_only"
+                    ]
+                  },
+                  "duration_at_least": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "actions": {
+            "type": "array",
+            "description": "Ordered list of remediation actions",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action_id": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "run_playbook",
+                    "adjust_parameter",
+                    "trigger_scale_out",
+                    "reroute_traffic",
+                    "collect_additional_metrics",
+                    "notify_external_system"
+                  ]
+                },
+                "parameters": {
+                  "type": "object",
+                  "description": "Action-specific parameters (polymorphic)",
+                  "properties": {
+                    "playbook_ref": {
+                      "type": "string",
+                      "description": "Reference for run_playbook"
+                    },
+                    "parameter_changes": {
+                      "type": "array",
+                      "description": "List of network parameter changes for adjust_parameter",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "parameter_name": {
+                            "type": "string"
+                          },
+                          "scope": {
+                            "type": "string",
+                            "enum": [
+                              "cell",
+                              "site",
+                              "region",
+                              "global"
+                            ]
+                          },
+                          "delta": {
+                            "type": "number"
+                          },
+                          "absolute_value": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    "scale_target": {
+                      "type": "object",
+                      "description": "Target scaling configuration for trigger_scale_out",
+                      "properties": {
+                        "resource_type": {
+                          "type": "string",
+                          "enum": [
+                            "upf_instance",
+                            "amf_instance",
+                            "edge_cluster"
+                          ]
+                        },
+                        "min_instances": {
+                          "type": "integer"
+                        },
+                        "max_instances": {
+                          "type": "integer"
+                        }
+                      }
+                    },
+                    "notification": {
+                      "type": "object",
+                      "description": "Notification parameters for notify_external_system",
+                      "properties": {
+                        "system": {
+                          "type": "string",
+                          "enum": [
+                            "ITSM",
+                            "NOC_CHAT",
+                            "PAGER",
+                            "CUSTOM_WEBHOOK"
+                          ]
+                        },
+                        "endpoint": {
+                          "type": "string"
+                        },
+                        "template_id": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                "rollback_on_failure": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "max_retries": {
+                  "type": "integer",
+                  "default": 1
+                }
+              },
+              "required": [
+                "action_id",
+                "type"
+              ]
+            }
+          },
+          "approval_policy": {
+            "type": "object",
+            "description": "Human approval requirements before executing",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "manual",
+                  "auto_during_offpeak"
+                ],
+                "default": "manual"
+              },
+              "offpeak_window": {
+                "type": "object",
+                "description": "Used when mode is auto_during_offpeak",
+                "properties": {
+                  "start_hour": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 23
+                  },
+                  "end_hour": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 23
+                  },
+                  "timezone": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "tags": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "domain_id",
+          "name",
+          "trigger_conditions",
+          "actions"
+        ]
+      },
+      "returns": "Remediation plan ID, version, validation results, and effective trigger summary."
+    },
+    {
+      "name": "execute_remediation_plan",
+      "description": "Execute a remediation plan in the context of a specific incident or topology scope, with support for dry-run and rollback.",
+      "stage": "remediation_execution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "remediation_plan_id": {
+            "type": "string"
+          },
+          "incident_id": {
+            "type": "string",
+            "description": "Incident context; required when executing in response to an incident"
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "dry_run",
+              "enforce",
+              "rollback"
+            ],
+            "default": "enforce"
+          },
+          "topology_scope_override": {
+            "type": "object",
+            "description": "Override the topology scope inferred from the incident or plan",
+            "properties": {
+              "topology_node_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "approval_token": {
+            "type": "string",
+            "description": "Token proving human approval when required by plan policy"
+          },
+          "step_control": {
+            "type": "object",
+            "description": "Control execution of actions",
+            "properties": {
+              "start_from_action_id": {
+                "type": "string"
+              },
+              "stop_after_action_id": {
+                "type": "string"
+              },
+              "skip_action_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "remediation_plan_id"
+        ]
+      },
+      "returns": "Remediation execution ID, per-action status, any partial changes applied, and rollback token if applicable."
+    },
+    {
+      "name": "retry_or_rollback_remediation",
+      "description": "Retry failed remediation actions or rollback previously applied changes for a remediation execution.",
+      "stage": "remediation_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "remediation_execution_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "retry_failed",
+              "retry_all",
+              "rollback_all",
+              "rollback_to_checkpoint"
+            ]
+          },
+          "checkpoint_action_id": {
+            "type": "string",
+            "description": "Target action ID to rollback to when mode is rollback_to_checkpoint"
+          },
+          "max_retries": {
+            "type": "integer",
+            "default": 1
+          },
+          "approval_token": {
+            "type": "string",
+            "description": "Approval token if additional approval is needed for rollback"
+          }
+        },
+        "required": [
+          "remediation_execution_id",
+          "mode"
+        ]
+      },
+      "returns": "Updated remediation execution status, rollback summary, and any remaining actions requiring manual intervention."
+    },
+    {
+      "name": "generate_performance_report",
+      "description": "Generate a performance report summarizing KPIs, anomalies, and incidents over a period for given scopes.",
+      "stage": "reporting",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "domain_id": {
+            "type": "string"
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "granularity": {
+            "type": "string",
+            "enum": [
+              "15min",
+              "1h",
+              "24h"
+            ]
+          },
+          "kpi_selector": {
+            "$ref": "#/shared_entities/kpi_selector"
+          },
+          "topology_scope": {
+            "type": "object",
+            "properties": {
+              "topology_node_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "aggregate_by": {
+                "type": "string",
+                "enum": [
+                  "cell",
+                  "site",
+                  "cluster",
+                  "region",
+                  "tenant"
+                ]
+              }
+            }
+          },
+          "include_sections": {
+            "type": "array",
+            "description": "Sections to include in the report",
+            "items": {
+              "type": "string",
+              "enum": [
+                "kpi_trends",
+                "top_anomalies",
+                "incident_summary",
+                "remediation_effectiveness",
+                "sla_violations"
+              ]
+            }
+          },
+          "output_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "pdf",
+              "csv_bundle"
+            ],
+            "default": "json"
+          },
+          "delivery": {
+            "type": "object",
+            "description": "Optional delivery configuration",
+            "properties": {
+              "email_recipients": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "email"
+                }
+              },
+              "webhook_url": {
+                "type": "string"
+              },
+              "store_in_bucket": {
+                "type": "object",
+                "properties": {
+                  "provider": {
+                    "type": "string",
+                    "enum": [
+                      "s3",
+                      "gcs",
+                      "azure_blob"
+                    ]
+                  },
+                  "bucket": {
+                    "type": "string"
+                  },
+                  "path_prefix": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "domain_id",
+          "time_range",
+          "granularity"
+        ]
+      },
+      "returns": "Report ID, summary metadata, and URL or inline content reference for the generated report."
+    }
+  ]
+}

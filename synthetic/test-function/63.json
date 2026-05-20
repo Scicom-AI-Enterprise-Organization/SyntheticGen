@@ -1,0 +1,3094 @@
+{
+  "workflow_name": "udm_subscriber_lifecycle_management",
+  "description": "End-to-end 5G UDM/UDR subscriber profile lifecycle management, including provisioning, querying, updating, policy changes, rollback, and audit.",
+  "domain": "telco_5g_deep/udm_management",
+  "shared_entities": {
+    "subscriber_id": {
+      "type": "string",
+      "description": "Internal unique subscriber identifier in the UDM domain (e.g., CRM ID or IMSI surrogate)."
+    },
+    "imsi": {
+      "type": "string",
+      "description": "International Mobile Subscriber Identity associated with the subscriber."
+    },
+    "profile_id": {
+      "type": "string",
+      "description": "Identifier for a specific subscriber profile version stored in UDR."
+    },
+    "transaction_id": {
+      "type": "string",
+      "description": "Identifier for multi-step provisioning or rollback transactions."
+    },
+    "network_slice_id": {
+      "type": "string",
+      "description": "Identifier of a 5G network slice (S-NSSAI) associated with the subscriber."
+    },
+    "policy_profile_id": {
+      "type": "string",
+      "description": "Identifier for a subscriber policy profile used by PCF/UDM."
+    },
+    "udm_node_id": {
+      "type": "string",
+      "description": "Identifier of a specific UDM instance or cluster."
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "initiate_subscriber_provisioning",
+      "description": "Initiate a new subscriber provisioning transaction, reserving identifiers and validating basic data before committing into UDM/UDR.",
+      "stage": "provision_init",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_basic": {
+            "type": "object",
+            "description": "Basic subscriber attributes required for provisioning.",
+            "properties": {
+              "external_customer_id": {
+                "type": "string",
+                "description": "External customer identifier from CRM/BSS."
+              },
+              "imsi": {
+                "type": "string",
+                "description": "Requested IMSI value; may be auto-assigned if omitted."
+              },
+              "msisdn": {
+                "type": "string",
+                "description": "Primary phone number associated with the subscriber."
+              },
+              "service_type": {
+                "type": "string",
+                "enum": [
+                  "consumer_mobile",
+                  "enterprise_mobile",
+                  "iot",
+                  "fixed_wireless",
+                  "private_5g"
+                ],
+                "description": "High-level type of service the subscriber is provisioned for."
+              },
+              "home_plmn": {
+                "type": "object",
+                "description": "Home PLMN details.",
+                "properties": {
+                  "mcc": {
+                    "type": "string",
+                    "description": "Mobile Country Code."
+                  },
+                  "mnc": {
+                    "type": "string",
+                    "description": "Mobile Network Code."
+                  }
+                },
+                "required": [
+                  "mcc",
+                  "mnc"
+                ]
+              }
+            },
+            "required": [
+              "external_customer_id",
+              "service_type",
+              "home_plmn"
+            ]
+          },
+          "initial_subscription_data": {
+            "type": "object",
+            "description": "Initial subscription data to be stored in UDR/UDM.",
+            "properties": {
+              "access_restrictions": {
+                "type": "array",
+                "description": "Access restriction categories applied to the subscriber.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "roaming_barred",
+                    "data_barred",
+                    "voice_barred",
+                    "sms_barred",
+                    "emergency_only"
+                  ]
+                }
+              },
+              "default_network_slices": {
+                "type": "array",
+                "description": "Default network slices to which the subscriber will be attached.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "network_slice_id": {
+                      "type": "string",
+                      "description": "S-NSSAI composite identifier."
+                    },
+                    "sst": {
+                      "type": "integer",
+                      "description": "Slice/Service type."
+                    },
+                    "sd": {
+                      "type": "string",
+                      "description": "Slice differentiator (hex)."
+                    },
+                    "priority": {
+                      "type": "integer",
+                      "description": "Priority of this slice for the subscriber."
+                    }
+                  },
+                  "required": [
+                    "network_slice_id",
+                    "sst"
+                  ]
+                }
+              },
+              "amf_registration_allowed": {
+                "type": "boolean",
+                "description": "Whether the subscriber is allowed to register to AMF by default."
+              }
+            }
+          },
+          "policy_binding": {
+            "type": "object",
+            "description": "Initial policy profile bindings for PCF/UDM.",
+            "properties": {
+              "policy_profile_id": {
+                "type": "string",
+                "description": "Base policy profile identifier."
+              },
+              "override_parameters": {
+                "type": "object",
+                "description": "Optional per-subscriber policy overrides.",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "validation_options": {
+            "type": "object",
+            "description": "Options that influence how validation is performed.",
+            "properties": {
+              "validate_imsi_uniqueness": {
+                "type": "boolean",
+                "default": true,
+                "description": "Whether to verify IMSI is not already assigned."
+              },
+              "allow_reserved_msisdn_ranges": {
+                "type": "boolean",
+                "default": false,
+                "description": "If true, permits MSISDNs in reserved ranges."
+              },
+              "strict_schema_validation": {
+                "type": "boolean",
+                "default": true,
+                "description": "If true, reject unknown fields or invalid enums."
+              }
+            }
+          },
+          "requested_by": {
+            "type": "object",
+            "description": "Context of the system or operator initiating provisioning.",
+            "properties": {
+              "system_id": {
+                "type": "string",
+                "description": "Calling system identifier (e.g. 'CRM', 'SelfCare')."
+              },
+              "operator_id": {
+                "type": "string",
+                "description": "Human operator ID performing the action, if applicable."
+              },
+              "reason": {
+                "type": "string",
+                "description": "Business reason for provisioning (e.g., 'new_activation')."
+              }
+            },
+            "required": [
+              "system_id"
+            ]
+          }
+        },
+        "required": [
+          "subscriber_basic",
+          "requested_by"
+        ]
+      },
+      "returns": "Transaction ID, preliminary subscriber_id and imsi (if reserved), and validation status with any warnings or errors."
+    },
+    {
+      "name": "check_subscriber_conflicts",
+      "description": "Check for conflicts in identifiers and subscription data before committing provisioning changes into UDM.",
+      "stage": "pre_commit_validation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "type": "string",
+            "description": "Provisioning transaction ID returned by initiate_subscriber_provisioning."
+          },
+          "checks": {
+            "type": "object",
+            "description": "Set of conflict checks to execute.",
+            "properties": {
+              "identifier_conflicts": {
+                "type": "boolean",
+                "default": true,
+                "description": "Check for existing subscribers with same IMSI/MSISDN."
+              },
+              "slice_conflicts": {
+                "type": "boolean",
+                "default": false,
+                "description": "Verify that requested slices are available and not restricted."
+              },
+              "policy_conflicts": {
+                "type": "boolean",
+                "default": false,
+                "description": "Validate policy profile compatibility with service type and region."
+              }
+            }
+          },
+          "conflict_resolution_strategy": {
+            "type": "string",
+            "description": "Strategy to apply when conflicts are detected.",
+            "enum": [
+              "fail_fast",
+              "auto_resolve_if_possible",
+              "record_only"
+            ]
+          }
+        },
+        "required": [
+          "transaction_id"
+        ]
+      },
+      "returns": "Conflict analysis including lists of blocking and non-blocking conflicts, suggested resolutions, and updated transaction status."
+    },
+    {
+      "name": "commit_subscriber_profile",
+      "description": "Commit a validated subscriber profile and subscription data into UDM/UDR, making it active.",
+      "stage": "provision_commit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "type": "string",
+            "description": "Provisioning transaction ID to commit."
+          },
+          "activation_mode": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "scheduled"
+            ],
+            "description": "Whether the subscriber should be activated now or at a scheduled time."
+          },
+          "scheduled_activation_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Activation time when activation_mode is 'scheduled'."
+          },
+          "udm_node_preference": {
+            "type": "object",
+            "description": "Preferences for which UDM cluster or node will host the profile.",
+            "properties": {
+              "preferred_region": {
+                "type": "string",
+                "description": "Logical region for UDM placement (e.g., 'eu-west-1')."
+              },
+              "udm_node_id": {
+                "type": "string",
+                "description": "Explicit UDM node to target; overrides preferred_region."
+              },
+              "allow_cross_region_fallback": {
+                "type": "boolean",
+                "default": true,
+                "description": "Allow fallback to a different region if preferred is unavailable."
+              }
+            }
+          },
+          "audit_context": {
+            "type": "object",
+            "description": "Audit metadata for traceability.",
+            "properties": {
+              "initiator_type": {
+                "type": "string",
+                "enum": [
+                  "system",
+                  "operator",
+                  "api_client"
+                ]
+              },
+              "initiator_id": {
+                "type": "string"
+              },
+              "change_ticket": {
+                "type": "string",
+                "description": "External change ticket or order ID."
+              }
+            }
+          }
+        },
+        "required": [
+          "transaction_id",
+          "activation_mode"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "activation_mode": {
+                  "const": "scheduled"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "scheduled_activation_time"
+              ]
+            }
+          }
+        ]
+      },
+      "returns": "Final subscriber_id, profile_id, effective activation time, and UDM node assignment."
+    },
+    {
+      "name": "get_subscriber_profile",
+      "description": "Retrieve a subscriber profile from UDM/UDR with optional filtering of data domains and versions.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_ref": {
+            "type": "object",
+            "description": "Reference to the subscriber, using either subscriber_id or IMSI.",
+            "properties": {
+              "subscriber_id": {
+                "type": "string"
+              },
+              "imsi": {
+                "type": "string"
+              }
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "subscriber_id"
+                ]
+              },
+              {
+                "required": [
+                  "imsi"
+                ]
+              }
+            ]
+          },
+          "profile_version": {
+            "type": "string",
+            "description": "Specific profile version ID; if omitted, the latest active version is returned."
+          },
+          "include_sections": {
+            "type": "array",
+            "description": "Profile sections to include in response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "identifiers",
+                "subscription_data",
+                "policy_data",
+                "slice_assignments",
+                "access_restrictions",
+                "audit_metadata"
+              ]
+            }
+          },
+          "mask_sensitive_fields": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, sensitive fields such as authentication data are masked."
+          }
+        },
+        "required": [
+          "subscriber_ref"
+        ]
+      },
+      "returns": "Complete or partial subscriber profile, including identifiers, subscription details, policy bindings, slices, and metadata."
+    },
+    {
+      "name": "search_subscribers",
+      "description": "Search for subscribers based on identifiers, slice memberships, policy profiles, and status.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "description": "Filter criteria for subscriber search.",
+            "properties": {
+              "imsi_prefix": {
+                "type": "string",
+                "description": "Match subscribers whose IMSI starts with this prefix."
+              },
+              "msisdn": {
+                "type": "string",
+                "description": "Exact MSISDN match."
+              },
+              "service_type": {
+                "type": "array",
+                "description": "Filter by one or more service types.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "consumer_mobile",
+                    "enterprise_mobile",
+                    "iot",
+                    "fixed_wireless",
+                    "private_5g"
+                  ]
+                }
+              },
+              "network_slice_ids": {
+                "type": "array",
+                "description": "Match subscribers attached to any of the specified network slices.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "policy_profile_ids": {
+                "type": "array",
+                "description": "Filter by policy profiles assigned to the subscriber.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status": {
+                "type": "array",
+                "description": "Filter by subscriber status.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending_activation",
+                    "active",
+                    "suspended",
+                    "deactivated"
+                  ]
+                }
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Filter by profile creation timestamp range.",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "home_plmn": {
+                "type": "object",
+                "description": "Filter by home PLMN.",
+                "properties": {
+                  "mcc": {
+                    "type": "string"
+                  },
+                  "mnc": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination options for large result sets.",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              }
+            }
+          },
+          "sort": {
+            "type": "object",
+            "description": "Sorting options.",
+            "properties": {
+              "sort_by": {
+                "type": "string",
+                "enum": [
+                  "created_at",
+                  "updated_at",
+                  "imsi",
+                  "msisdn",
+                  "status"
+                ]
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "asc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of subscribers with lightweight profile summaries and total result count."
+    },
+    {
+      "name": "update_subscriber_policy",
+      "description": "Update subscriber-specific policy bindings and overrides for UDM/PCF.",
+      "stage": "update",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string",
+            "description": "Internal subscriber identifier."
+          },
+          "policy_changes": {
+            "type": "object",
+            "description": "Policy updates to apply.",
+            "properties": {
+              "base_policy_profile_id": {
+                "type": "string",
+                "description": "New base policy profile; if omitted, base profile remains unchanged."
+              },
+              "overrides_to_add_or_update": {
+                "type": "object",
+                "description": "Policy override key-value pairs to add or update.",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              },
+              "overrides_to_remove": {
+                "type": "array",
+                "description": "List of override keys to remove.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "effective_time": {
+            "type": "object",
+            "description": "Control when the policy changes should take effect.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "scheduled",
+                  "on_next_registration"
+                ],
+                "default": "immediate"
+              },
+              "scheduled_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Time at which changes should be applied if mode is 'scheduled'."
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Business or operational reason for policy change."
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "policy_changes"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "effective_time": {
+                  "properties": {
+                    "mode": {
+                      "const": "scheduled"
+                    }
+                  },
+                  "required": [
+                    "mode"
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "effective_time": {
+                  "required": [
+                    "scheduled_time"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "returns": "New policy_profile_id (if changed), updated override set, and effective_time_details."
+    },
+    {
+      "name": "modify_network_slice_assignments",
+      "description": "Add, update, or remove network slice assignments for a subscriber.",
+      "stage": "update",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string",
+            "description": "Subscriber identifier whose slice assignments are being modified."
+          },
+          "changes": {
+            "type": "object",
+            "description": "Slice assignment modifications.",
+            "properties": {
+              "slices_to_add_or_update": {
+                "type": "array",
+                "description": "Network slices to add or update.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "network_slice_id": {
+                      "type": "string",
+                      "description": "Identifier of the slice."
+                    },
+                    "sst": {
+                      "type": "integer",
+                      "description": "Slice/Service type."
+                    },
+                    "sd": {
+                      "type": "string",
+                      "description": "Slice differentiator."
+                    },
+                    "priority": {
+                      "type": "integer",
+                      "description": "Updated priority for this slice."
+                    },
+                    "allowed_dnn_list": {
+                      "type": "array",
+                      "description": "List of allowed DNNs (data network names) for this slice.",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "network_slice_id",
+                    "sst"
+                  ]
+                }
+              },
+              "slices_to_remove": {
+                "type": "array",
+                "description": "Network slice IDs to remove from subscriber assignments.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conflict_handling": {
+            "type": "string",
+            "enum": [
+              "fail_on_conflict",
+              "override_existing",
+              "skip_conflicting"
+            ],
+            "description": "Defines how to handle conflicts with existing assignments."
+          },
+          "audit_context": {
+            "type": "object",
+            "description": "Audit metadata for the change.",
+            "properties": {
+              "initiator_id": {
+                "type": "string"
+              },
+              "change_source": {
+                "type": "string",
+                "enum": [
+                  "policy_engine",
+                  "operator",
+                  "order_management"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "changes"
+        ]
+      },
+      "returns": "Updated list of network_slice_ids with their parameters and any conflicts that were skipped."
+    },
+    {
+      "name": "suspend_or_resume_subscriber",
+      "description": "Suspend or resume a subscriber in UDM, affecting registration and service availability.",
+      "stage": "lifecycle_control",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string",
+            "description": "Subscriber identifier whose lifecycle state is changing."
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "suspend",
+              "resume"
+            ],
+            "description": "Whether to suspend or resume the subscriber."
+          },
+          "suspension_details": {
+            "type": "object",
+            "description": "Details applicable when action is 'suspend'.",
+            "properties": {
+              "reason_code": {
+                "type": "string",
+                "enum": [
+                  "non_payment",
+                  "fraud_suspected",
+                  "customer_request",
+                  "regulatory",
+                  "other"
+                ]
+              },
+              "suspension_scope": {
+                "type": "string",
+                "enum": [
+                  "all_services",
+                  "data_only",
+                  "voice_only",
+                  "roaming_only"
+                ],
+                "description": "Scope of suspension."
+              },
+              "expected_resume_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Planned time to resume services, if known."
+              }
+            }
+          },
+          "resume_details": {
+            "type": "object",
+            "description": "Details applicable when action is 'resume'.",
+            "properties": {
+              "resume_reason": {
+                "type": "string",
+                "description": "Operator or system reason for resuming services."
+              },
+              "force_registration_refresh": {
+                "type": "boolean",
+                "default": false,
+                "description": "If true, triggers a network-wide registration refresh."
+              }
+            }
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "action"
+        ]
+      },
+      "returns": "Updated subscriber status, effective time of change, and any network actions triggered."
+    },
+    {
+      "name": "check_udm_node_health_and_capacity",
+      "description": "Check health and capacity of UDM nodes or clusters before placing or migrating subscriber profiles.",
+      "stage": "resource_check",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "description": "Target UDM node or region to evaluate.",
+            "properties": {
+              "udm_node_id": {
+                "type": "string",
+                "description": "Specific UDM node ID to check."
+              },
+              "region": {
+                "type": "string",
+                "description": "Region identifier to evaluate aggregated capacity."
+              }
+            }
+          },
+          "include_metrics": {
+            "type": "array",
+            "description": "Metrics to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "cpu_utilization",
+                "memory_utilization",
+                "storage_utilization",
+                "subscriber_count",
+                "registration_rate"
+              ]
+            }
+          },
+          "thresholds": {
+            "type": "object",
+            "description": "Optional capacity thresholds to evaluate.",
+            "properties": {
+              "max_cpu_utilization": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "max_memory_utilization": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "max_subscriber_count": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      },
+      "returns": "Health status (healthy/degraded/unavailable), current metrics, and whether capacity thresholds are exceeded."
+    },
+    {
+      "name": "migrate_subscriber_profile",
+      "description": "Migrate a subscriber profile between UDM nodes or regions for load balancing or resilience.",
+      "stage": "migration",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string",
+            "description": "Subscriber whose profile should be migrated."
+          },
+          "target_udm": {
+            "type": "object",
+            "description": "Target UDM location for the profile.",
+            "properties": {
+              "udm_node_id": {
+                "type": "string",
+                "description": "Explicit UDM node ID to migrate to."
+              },
+              "region": {
+                "type": "string",
+                "description": "Target region name if specific node is not provided."
+              },
+              "placement_strategy": {
+                "type": "string",
+                "enum": [
+                  "least_loaded",
+                  "geo_proximity",
+                  "manual"
+                ],
+                "default": "least_loaded"
+              }
+            }
+          },
+          "consistency_mode": {
+            "type": "string",
+            "enum": [
+              "strong",
+              "eventual"
+            ],
+            "description": "Consistency strategy during migration."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, only simulate migration and return impact analysis."
+          },
+          "audit_context": {
+            "type": "object",
+            "description": "Audit data for this migration.",
+            "properties": {
+              "initiator_type": {
+                "type": "string",
+                "enum": [
+                  "automation",
+                  "operator"
+                ]
+              },
+              "initiator_id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "target_udm"
+        ]
+      },
+      "returns": "Migration transaction_id, source and target UDM nodes, status (or simulation results if dry_run=true)."
+    },
+    {
+      "name": "rollback_subscriber_change",
+      "description": "Rollback subscriber-related changes using a prior transaction_id or profile_id snapshot.",
+      "stage": "error_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string",
+            "description": "Subscriber identifier whose changes should be rolled back."
+          },
+          "rollback_reference": {
+            "type": "object",
+            "description": "Reference identifying the change to rollback.",
+            "properties": {
+              "transaction_id": {
+                "type": "string",
+                "description": "Previous transaction ID to rollback."
+              },
+              "profile_id": {
+                "type": "string",
+                "description": "Profile snapshot identifier to restore."
+              }
+            },
+            "oneOf": [
+              {
+                "required": [
+                  "transaction_id"
+                ]
+              },
+              {
+                "required": [
+                  "profile_id"
+                ]
+              }
+            ]
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "policy_only",
+              "slices_only",
+              "full_profile"
+            ],
+            "description": "Defines which portions of the subscriber profile are rolled back."
+          },
+          "force": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, perform rollback even if intermediate changes exist, recording them as superseded."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for performing the rollback."
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "rollback_reference",
+          "scope"
+        ]
+      },
+      "returns": "New profile_id after rollback, details of reverted fields, and any conflicts that could not be reverted."
+    },
+    {
+      "name": "retry_failed_udm_operation",
+      "description": "Retry a previously failed UDM-related operation with optional parameter overrides.",
+      "stage": "error_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "type": "string",
+            "description": "Identifier of the failed transaction or operation."
+          },
+          "retry_strategy": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "backoff",
+              "manual_with_overrides"
+            ],
+            "description": "Retry strategy to apply."
+          },
+          "override_parameters": {
+            "type": "object",
+            "description": "Optional parameters to adjust behavior for the retry.",
+            "properties": {
+              "target_udm_node_id": {
+                "type": "string",
+                "description": "Override UDM node for the operation."
+              },
+              "max_retries": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "backoff": {
+                "type": "object",
+                "description": "Backoff configuration when retry_strategy is 'backoff'.",
+                "properties": {
+                  "initial_delay_ms": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "max_delay_ms": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "multiplier": {
+                    "type": "number",
+                    "minimum": 1
+                  }
+                }
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason or comment explaining why a retry is requested."
+          }
+        },
+        "required": [
+          "transaction_id",
+          "retry_strategy"
+        ]
+      },
+      "returns": "Updated transaction status, new attempt metadata, and final outcome of the retry if executed synchronously."
+    },
+    {
+      "name": "get_subscriber_audit_log",
+      "description": "Retrieve an audit trail of subscriber-related operations and changes in UDM/UDR.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string",
+            "description": "Subscriber identifier for which to retrieve audit logs."
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filter options for narrowing down the audit log.",
+            "properties": {
+              "time_range": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "operation_types": {
+                "type": "array",
+                "description": "Filter by operation type.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "provision",
+                    "update_policy",
+                    "update_slices",
+                    "suspend",
+                    "resume",
+                    "migrate",
+                    "rollback",
+                    "delete"
+                  ]
+                }
+              },
+              "initiator_types": {
+                "type": "array",
+                "description": "Filter by type of initiator.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "system",
+                    "operator",
+                    "api_client",
+                    "automation"
+                  ]
+                }
+              },
+              "include_failed_operations": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination configuration.",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200,
+                "default": 50
+              }
+            }
+          }
+        },
+        "required": [
+          "subscriber_id"
+        ]
+      },
+      "returns": "Paginated list of audit events including timestamps, operation types, initiators, and snapshots of changed fields."
+    },
+    {
+      "name": "search_udm_subscriber_entities",
+      "description": "Faceted search across udm_subscriber entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching udm_subscriber entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_udm_subscriber_records",
+      "description": "Bulk-create up to N udm_subscriber records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_udm_subscriber_records",
+      "description": "Apply a partial update patch to many udm_subscriber records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_udm_subscriber_records",
+      "description": "Delete or soft-delete many udm_subscriber records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_udm_subscriber_dataset",
+      "description": "Schedule or stream an export of udm_subscriber data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_udm_subscriber_dataset",
+      "description": "Validate and import a udm_subscriber dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_udm_subscriber_state",
+      "description": "Create a point-in-time snapshot of one or more udm_subscriber entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_udm_subscriber_snapshot",
+      "description": "Restore udm_subscriber state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_udm_subscriber_metrics",
+      "description": "Query aggregated metrics/KPIs for the udm_subscriber workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_udm_subscriber_dashboard",
+      "description": "Compose a dashboard view across udm_subscriber metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_udm_subscriber_audit_events",
+      "description": "Search the udm_subscriber audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_udm_subscriber_events",
+      "description": "Create a webhook subscription that delivers udm_subscriber workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_udm_subscriber_subscriptions",
+      "description": "List webhook subscriptions for udm_subscriber events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_udm_subscriber_subscription",
+      "description": "Remove a webhook subscription for udm_subscriber events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_udm_subscriber_job",
+      "description": "Schedule a recurring or one-off udm_subscriber job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_udm_subscriber_schedules",
+      "description": "List scheduled udm_subscriber jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_udm_subscriber_schedule",
+      "description": "Cancel or pause a scheduled udm_subscriber job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_udm_subscriber_operation",
+      "description": "Run a what-if simulation of a udm_subscriber operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_udm_subscriber_approval",
+      "description": "Open an approval request for a udm_subscriber action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_udm_subscriber_approval",
+      "description": "Record an approve/reject/abstain decision on a udm_subscriber approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_udm_subscriber_comment",
+      "description": "Add a threaded comment or annotation to any udm_subscriber entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_udm_subscriber_comments",
+      "description": "List comments/annotations attached to a udm_subscriber entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_udm_subscriber_policy",
+      "description": "Create or update a policy/rule controlling udm_subscriber behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_udm_subscriber_policies",
+      "description": "List udm_subscriber policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_udm_subscriber_entities",
+      "description": "Create a typed relationship between two udm_subscriber-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_udm_subscriber_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a udm_subscriber entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_udm_subscriber_entities",
+      "description": "Add, remove, or replace tags on one or many udm_subscriber entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}

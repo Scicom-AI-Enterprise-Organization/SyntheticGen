@@ -1,0 +1,201 @@
+{
+  "conversation_id": "myl-train-13",
+  "workflow_name": "api_monetization_incident_lifecycle",
+  "domain": "taas_deep/api_monetization",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hi, good morning. This is Lim Wei Jian from the finance ops team at Cyberjaya. Our weekly revenue reconciliation for the SMS Gateway API product flagged a sharp drop yesterday — about RM 18,000 short compared to last week. Tenant `tnt-acme-my-001` was the biggest swing. Boleh tolong run anomaly detection on revenue and request volume for the last 24 hours, focusing on that tenant and the SMS API product? Use ewma plus a rule-based check, sensitivity high. Don't dry-run — if it's real, just create the incident."
+    },
+    {
+      "role": "assistant",
+      "content": "Good morning, Sir. Thank you for reaching out. I will run an anomaly detection sweep across the last 24 hours focusing on tenant `tnt-acme-my-001` and the SMS Gateway API product, using EWMA plus a rule-based revenue-drop check at high sensitivity. Please hold on for a moment.",
+      "tool_calls": [
+        {
+          "id": "call-inc-001",
+          "type": "function",
+          "function": {
+            "name": "detect_monetization_anomalies",
+            "arguments": "{\"scope\": {\"tenant_ids\": [\"tnt-acme-my-001\"], \"api_product_ids\": [\"apipd-sms-gateway-v3\"], \"monetization_dimensions\": [\"revenue\", \"request_volume\"], \"time_window\": {\"from\": \"2026-05-20T08:00:00+08:00\", \"to\": \"2026-05-21T08:00:00+08:00\", \"timezone\": \"Asia/Kuala_Lumpur\"}}, \"detection_config\": {\"methods\": [\"ewma\", \"rule_based\"], \"sensitivity\": \"high\", \"min_anomaly_score\": 0.7, \"rules\": [{\"id\": \"rule-rev-drop-7d\", \"description\": \"Revenue decline >25% vs 7-day baseline for same hour\", \"dimension\": \"revenue\", \"operator\": \"pct_change_lt\", \"threshold\": -0.25, \"lookback_minutes\": 1440, \"group_by\": [\"tenant_id\", \"api_product_id\"]}]}, \"dry_run\": false}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-inc-001",
+      "name": "detect_monetization_anomalies",
+      "content": "{\"detection_run_id\": \"dr-20260521-0817\", \"completed_at\": \"2026-05-21T08:17:42+08:00\", \"candidates\": [{\"candidate_id\": \"cand-77821\", \"tenant_id\": \"tnt-acme-my-001\", \"api_product_id\": \"apipd-sms-gateway-v3\", \"dimension\": \"revenue\", \"anomaly_score\": 0.93, \"method\": \"rule_based+ewma\", \"observed_value\": 4120.50, \"baseline_value\": 22087.30, \"pct_change\": -0.813, \"linked_rule_id\": \"rule-rev-drop-7d\", \"created_incident_id\": \"inc-mon-20260521-0001\"}, {\"candidate_id\": \"cand-77822\", \"tenant_id\": \"tnt-acme-my-001\", \"api_product_id\": \"apipd-sms-gateway-v3\", \"dimension\": \"request_volume\", \"anomaly_score\": 0.81, \"method\": \"ewma\", \"observed_value\": 142880, \"baseline_value\": 798442, \"pct_change\": -0.821, \"linked_rule_id\": null, \"created_incident_id\": \"inc-mon-20260521-0001\"}], \"total_candidates\": 2}"
+    },
+    {
+      "role": "assistant",
+      "content": "The sweep confirms a real anomaly, Sir. Two candidates clustered on the same tenant and API product, and an incident has been auto-created:\n\n| Dimension | Observed | 7-day Baseline | Change | Score |\n|---|---|---|---|---|\n| Revenue | **RM 4,120.50** | RM 22,087.30 | **-81.3%** | 0.93 |\n| Request volume | 142,880 | 798,442 | -82.1% | 0.81 |\n\n- **Incident ID:** `inc-mon-20260521-0001`\n- **Source:** auto_detection (run `dr-20260521-0817`)\n- **Most likely root signal:** request volume collapsed in tandem with revenue — points to ingestion or rate-limit issue rather than pricing.\n\nWith your permission I will now triage this as **P1 / sev1** under category `quota_enforcement` (since aggressive rate-limit changes are the most common cause of this exact pattern), assigned to the `taas-monetization-oncall` team. Updated impact estimate will reflect the ~RM 17,966 gross revenue gap. Shall I proceed?"
+    },
+    {
+      "role": "user",
+      "content": "Yes proceed with triage. Then please pull the full incident record including timeline, audit log, and impact estimates so I can paste the link in our finance ops daily standup."
+    },
+    {
+      "role": "assistant",
+      "content": "Certainly, Sir. I will triage the incident and retrieve its full record in parallel. Please hold on for a moment.",
+      "tool_calls": [
+        {
+          "id": "call-inc-002",
+          "type": "function",
+          "function": {
+            "name": "triage_monetization_incident",
+            "arguments": "{\"incident_id\": \"inc-mon-20260521-0001\", \"classification\": {\"category\": \"quota_enforcement\", \"root_cause_type\": \"configuration\", \"trigger_channel\": \"finance_ops\"}, \"priority\": \"p1\", \"owner\": {\"type\": \"team\", \"id\": \"taas-monetization-oncall\", \"name\": \"TAAS Monetization On-Call\"}, \"updated_impact\": {\"severity\": \"sev1\", \"dimension\": \"revenue_loss\", \"estimated_revenue_impact\": -17966.80, \"affected_tenants\": [\"tnt-acme-my-001\"], \"affected_api_products\": [\"apipd-sms-gateway-v3\"]}, \"notes\": \"Revenue and request volume both dropped ~81% within last 24h; finance ops first reported via weekly reconciliation. Likely aggressive quota change.\"}"
+          }
+        },
+        {
+          "id": "call-inc-003",
+          "type": "function",
+          "function": {
+            "name": "get_monetization_incident",
+            "arguments": "{\"incident_id\": \"inc-mon-20260521-0001\", \"include\": [\"timeline\", \"audit_log\", \"impact_estimates\", \"linked_tickets\"]}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-inc-002",
+      "name": "triage_monetization_incident",
+      "content": "{\"incident_id\": \"inc-mon-20260521-0001\", \"status\": \"open\", \"triaged_at\": \"2026-05-21T08:21:09+08:00\", \"priority\": \"p1\", \"classification\": {\"category\": \"quota_enforcement\", \"root_cause_type\": \"configuration\", \"trigger_channel\": \"finance_ops\"}, \"owner\": {\"type\": \"team\", \"id\": \"taas-monetization-oncall\", \"name\": \"TAAS Monetization On-Call\"}, \"impact\": {\"severity\": \"sev1\", \"dimension\": \"revenue_loss\", \"estimated_revenue_impact\": -17966.80, \"affected_tenants\": [\"tnt-acme-my-001\"], \"affected_api_products\": [\"apipd-sms-gateway-v3\"]}}"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-inc-003",
+      "name": "get_monetization_incident",
+      "content": "{\"incident_id\": \"inc-mon-20260521-0001\", \"title\": \"Revenue drop on SMS Gateway API for tenant tnt-acme-my-001\", \"status\": \"open\", \"priority\": \"p1\", \"created_at\": \"2026-05-21T08:17:42+08:00\", \"updated_at\": \"2026-05-21T08:21:09+08:00\", \"source\": \"auto_detection\", \"timeline\": [{\"at\": \"2026-05-21T08:17:42+08:00\", \"event\": \"incident_created\", \"by\": \"system\"}, {\"at\": \"2026-05-21T08:21:09+08:00\", \"event\": \"triaged_p1\", \"by\": \"agent-fin-lim\"}], \"audit_log\": [{\"at\": \"2026-05-21T08:17:42+08:00\", \"actor\": \"system\", \"action\": \"create_from_detection_run\", \"reference\": \"dr-20260521-0817\"}, {\"at\": \"2026-05-21T08:21:09+08:00\", \"actor\": \"agent-fin-lim\", \"action\": \"triage_update\"}], \"impact_estimates\": [{\"dimension\": \"gross_revenue_delta\", \"value\": -17966.80, \"currency\": \"MYR\"}, {\"dimension\": \"net_revenue_delta\", \"value\": -16170.12, \"currency\": \"MYR\"}], \"linked_tickets\": [{\"system\": \"jira\", \"id\": \"FINOPS-3318\", \"url\": \"https://jira.example.my/browse/FINOPS-3318\"}], \"portal_url\": \"https://taas-deep.example.my/incidents/inc-mon-20260521-0001\"}"
+    },
+    {
+      "role": "assistant",
+      "content": "Triage complete, Sir. Here is the consolidated record for your standup:\n\n- **Title:** Revenue drop on SMS Gateway API for tenant `tnt-acme-my-001`\n- **Incident:** `inc-mon-20260521-0001` — **P1 / sev1**\n- **Category:** `quota_enforcement` (root-cause type: `configuration`)\n- **Owner:** team `taas-monetization-oncall`\n- **Portal:** https://taas-deep.example.my/incidents/inc-mon-20260521-0001\n- **Linked ticket:** Jira `FINOPS-3318`\n\n**Impact estimates**\n| Dimension | Value |\n|---|---|\n| Gross revenue delta | **-RM 17,966.80** |\n| Net revenue delta | -RM 16,170.12 |\n\n**Timeline**\n- 08:17 MYT — incident created from detection run `dr-20260521-0817`\n- 08:21 MYT — triaged to P1 by `agent-fin-lim`\n\nWith your authorisation I will now run a more rigorous impact assessment over the past 24h vs the same period last week, then propose a mitigation plan with a goal of stopping further revenue leakage. Shall I proceed?"
+    },
+    {
+      "role": "user",
+      "content": "Please proceed. Run impact assessment grouped by subscription too — Acme has three subs on this product, we should know which one bleeds the most. Then plan mitigation with goals stop_revenue_leakage plus rollback_deployment, max additional revenue impact RM 5,000. Don't auto-approve; I want to see the plan first."
+    },
+    {
+      "role": "assistant",
+      "content": "Understood, Sir. Running the impact assessment and drafting the mitigation plan in parallel now. Please hold on for a moment.",
+      "tool_calls": [
+        {
+          "id": "call-inc-004",
+          "type": "function",
+          "function": {
+            "name": "assess_monetization_impact",
+            "arguments": "{\"incident_id\": \"inc-mon-20260521-0001\", \"analysis_window\": {\"from\": \"2026-05-20T08:00:00+08:00\", \"to\": \"2026-05-21T08:00:00+08:00\", \"timezone\": \"Asia/Kuala_Lumpur\"}, \"dimensions\": [\"gross_revenue_delta\", \"net_revenue_delta\", \"overage_fees\", \"quota_miscount\"], \"baseline_strategy\": {\"type\": \"same_period_prev_week\", \"adjust_for_growth_rate\": true}, \"group_by\": [\"subscription_id\", \"api_product_id\"], \"recalculate_and_persist\": true}"
+          }
+        },
+        {
+          "id": "call-inc-005",
+          "type": "function",
+          "function": {
+            "name": "plan_monetization_mitigation",
+            "arguments": "{\"incident_id\": \"inc-mon-20260521-0001\", \"strategy\": {\"goals\": [\"stop_revenue_leakage\", \"rollback_deployment\"], \"risk_tolerance\": \"medium\", \"max_allowed_revenue_impact\": 5000}, \"actions\": [{\"type\": \"disable_feature_flag\", \"target\": {\"api_product_ids\": [\"apipd-sms-gateway-v3\"]}, \"parameters\": {\"feature_flag_key\": \"sms_v3_quota_strict_mode\"}, \"estimated_effect\": {\"revenue_delta\": 14500, \"duration_minutes\": 1440}}, {\"type\": \"freeze_quota_updates\", \"target\": {\"tenant_ids\": [\"tnt-acme-my-001\"], \"api_product_ids\": [\"apipd-sms-gateway-v3\"]}, \"parameters\": {\"quota_multiplier\": 1.0}, \"estimated_effect\": {\"revenue_delta\": 0, \"duration_minutes\": 2880}}], \"auto_approve\": false}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-inc-004",
+      "name": "assess_monetization_impact",
+      "content": "{\"incident_id\": \"inc-mon-20260521-0001\", \"assessment_id\": \"impact-asmt-991\", \"computed_at\": \"2026-05-21T08:25:30+08:00\", \"baseline_strategy\": \"same_period_prev_week\", \"groups\": [{\"subscription_id\": \"sub-acme-sms-prod\", \"api_product_id\": \"apipd-sms-gateway-v3\", \"gross_revenue_delta\": -13420.50, \"net_revenue_delta\": -12078.45, \"overage_fees\": 0, \"quota_miscount\": 614200}, {\"subscription_id\": \"sub-acme-sms-stg\", \"api_product_id\": \"apipd-sms-gateway-v3\", \"gross_revenue_delta\": -2810.20, \"net_revenue_delta\": -2529.18, \"overage_fees\": 0, \"quota_miscount\": 121040}, {\"subscription_id\": \"sub-acme-sms-otp\", \"api_product_id\": \"apipd-sms-gateway-v3\", \"gross_revenue_delta\": -1736.10, \"net_revenue_delta\": -1562.49, \"overage_fees\": 0, \"quota_miscount\": 79008}], \"totals\": {\"gross_revenue_delta\": -17966.80, \"net_revenue_delta\": -16170.12, \"quota_miscount\": 814248}, \"persisted_to_incident\": true}"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-inc-005",
+      "name": "plan_monetization_mitigation",
+      "content": "{\"incident_id\": \"inc-mon-20260521-0001\", \"mitigation_id\": \"mit-20260521-001\", \"status\": \"draft\", \"created_at\": \"2026-05-21T08:25:32+08:00\", \"requires_approval\": true, \"actions\": [{\"action_id\": \"act-001\", \"type\": \"disable_feature_flag\", \"target\": {\"api_product_ids\": [\"apipd-sms-gateway-v3\"]}, \"parameters\": {\"feature_flag_key\": \"sms_v3_quota_strict_mode\"}, \"status\": \"pending_approval\", \"estimated_effect\": {\"revenue_delta\": 14500, \"duration_minutes\": 1440}}, {\"action_id\": \"act-002\", \"type\": \"freeze_quota_updates\", \"target\": {\"tenant_ids\": [\"tnt-acme-my-001\"], \"api_product_ids\": [\"apipd-sms-gateway-v3\"]}, \"parameters\": {\"quota_multiplier\": 1.0}, \"status\": \"pending_approval\", \"estimated_effect\": {\"revenue_delta\": 0, \"duration_minutes\": 2880}}], \"estimated_max_revenue_impact\": -2800, \"within_max_allowed_revenue_impact\": true}"
+    },
+    {
+      "role": "assistant",
+      "content": "Impact assessment and draft mitigation plan are both ready, Sir.\n\n**Impact breakdown by subscription**\n| Subscription | Gross Δ | Net Δ | Quota Miscount |\n|---|---|---|---|\n| `sub-acme-sms-prod` | **-RM 13,420.50** | -RM 12,078.45 | 614,200 |\n| `sub-acme-sms-stg` | -RM 2,810.20 | -RM 2,529.18 | 121,040 |\n| `sub-acme-sms-otp` | -RM 1,736.10 | -RM 1,562.49 | 79,008 |\n| **Total** | **-RM 17,966.80** | -RM 16,170.12 | 814,248 |\n\nThe prod subscription accounts for ~75% of the bleed; OTP and staging are spillover. Quota miscount totals 814k requests under-counted — a strong signal that strict-mode quota enforcement rejected legitimate traffic.\n\n**Mitigation plan `mit-20260521-001` (draft, awaiting your approval)**\n| Action ID | Type | Target | Expected Effect |\n|---|---|---|---|\n| `act-001` | disable_feature_flag (`sms_v3_quota_strict_mode`) | API product `apipd-sms-gateway-v3` | +RM 14,500 over 24h |\n| `act-002` | freeze_quota_updates (multiplier 1.0) | Tenant `tnt-acme-my-001` on that API | 0 revenue effect over 48h |\n\n- **Estimated max additional revenue impact:** -RM 2,800 (within your -RM 5,000 ceiling)\n\nIf this looks acceptable, give me the go-ahead and I will execute the plan in `staged` mode and dispatch a notification to internal on-call and Acme's tenant admins."
+    },
+    {
+      "role": "user",
+      "content": "Approved. Execute the plan staged, then notify internal on-call plus the affected tenant admins via email and Slack with the mitigation_applied template, locale en-US. Include compensation details false for now — we'll talk compensation separately."
+    },
+    {
+      "role": "assistant",
+      "content": "Acknowledged, Sir. Executing the mitigation in staged mode and dispatching the stakeholder notification in parallel.",
+      "tool_calls": [
+        {
+          "id": "call-inc-006",
+          "type": "function",
+          "function": {
+            "name": "execute_monetization_mitigation",
+            "arguments": "{\"incident_id\": \"inc-mon-20260521-0001\", \"mitigation_id\": \"mit-20260521-001\", \"execution_mode\": \"staged\", \"change_window\": {\"start_at\": \"2026-05-21T08:30:00+08:00\", \"end_at\": \"2026-05-21T09:30:00+08:00\", \"timezone\": \"Asia/Kuala_Lumpur\"}}"
+          }
+        },
+        {
+          "id": "call-inc-007",
+          "type": "function",
+          "function": {
+            "name": "notify_stakeholders_about_incident",
+            "arguments": "{\"incident_id\": \"inc-mon-20260521-0001\", \"audiences\": [\"internal_oncall\", \"affected_tenants_admins\"], \"channels\": [\"email\", \"slack\"], \"template\": {\"type\": \"mitigation_applied\", \"locale\": \"en-US\"}, \"delivery_options\": {\"batch_size\": 100, \"respect_opt_outs\": true, \"include_compensation_details\": false}}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-inc-006",
+      "name": "execute_monetization_mitigation",
+      "content": "{\"incident_id\": \"inc-mon-20260521-0001\", \"mitigation_id\": \"mit-20260521-001\", \"execution_mode\": \"staged\", \"started_at\": \"2026-05-21T08:30:11+08:00\", \"per_action_status\": [{\"action_id\": \"act-001\", \"status\": \"executed\", \"executed_at\": \"2026-05-21T08:30:42+08:00\", \"rollback_token\": \"rbt-act-001-aa9921\", \"snapshot_id\": \"snap-act-001-aa9921\"}, {\"action_id\": \"act-002\", \"status\": \"executed\", \"executed_at\": \"2026-05-21T08:31:05+08:00\", \"rollback_token\": \"rbt-act-002-bb7714\", \"snapshot_id\": \"snap-act-002-bb7714\"}], \"overall_status\": \"completed\"}"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-inc-007",
+      "name": "notify_stakeholders_about_incident",
+      "content": "{\"incident_id\": \"inc-mon-20260521-0001\", \"dispatch_id\": \"disp-44219\", \"per_channel\": [{\"channel\": \"email\", \"audience\": \"internal_oncall\", \"sent\": 6, \"failed\": 0, \"correlation_id\": \"em-ocl-44219-01\"}, {\"channel\": \"email\", \"audience\": \"affected_tenants_admins\", \"sent\": 3, \"failed\": 0, \"correlation_id\": \"em-tnt-44219-02\"}, {\"channel\": \"slack\", \"audience\": \"internal_oncall\", \"sent\": 1, \"failed\": 0, \"correlation_id\": \"sl-ocl-44219-03\"}, {\"channel\": \"slack\", \"audience\": \"affected_tenants_admins\", \"sent\": 1, \"failed\": 0, \"correlation_id\": \"sl-tnt-44219-04\"}], \"total_sent\": 11, \"total_failed\": 0}"
+    },
+    {
+      "role": "assistant",
+      "content": "Mitigation executed and stakeholders notified, Sir.\n\n**Mitigation execution**\n| Action | Status | Rollback Token |\n|---|---|---|\n| `act-001` (disable `sms_v3_quota_strict_mode`) | executed 08:30:42 | `rbt-act-001-aa9921` |\n| `act-002` (freeze quota updates for Acme) | executed 08:31:05 | `rbt-act-002-bb7714` |\n\n**Notifications dispatched (template `mitigation_applied`, en-US)**\n- Email: internal on-call (6), affected tenant admins (3) — 9 sent\n- Slack: internal on-call (1), affected tenant admins (1) — 2 sent\n- **Total:** 11 sent, 0 failed\n\nSnapshots and rollback tokens are stored against the incident in case we need to revert quickly.\n\nWith mitigation in place, would you like me to transition the incident state to `mitigated` so we can move into the monitoring phase? I will keep `taas-monetization-oncall` watching the revenue curve for the next 60 minutes before recommending closure."
+    },
+    {
+      "role": "user",
+      "content": "Yes, transition to mitigated please. Reason: 'Quota strict mode disabled and Acme tenant quota frozen. Awaiting revenue normalisation over the next hour.' That's all I need from this call — thank you."
+    },
+    {
+      "role": "assistant",
+      "content": "Of course, Sir. Transitioning the incident now.",
+      "tool_calls": [
+        {
+          "id": "call-inc-008",
+          "type": "function",
+          "function": {
+            "name": "transition_monetization_incident_state",
+            "arguments": "{\"incident_id\": \"inc-mon-20260521-0001\", \"target_state\": \"mitigated\", \"reason\": \"Quota strict mode disabled and Acme tenant quota frozen. Awaiting revenue normalisation over the next hour.\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-inc-008",
+      "name": "transition_monetization_incident_state",
+      "content": "{\"incident_id\": \"inc-mon-20260521-0001\", \"previous_state\": \"open\", \"new_state\": \"mitigated\", \"transitioned_at\": \"2026-05-21T08:33:48+08:00\", \"validation\": {\"mitigation_check\": \"pass\", \"impact_assessment_check\": \"pass\", \"compensation_check\": \"deferred\"}, \"follow_up_tasks\": [{\"task\": \"verify_revenue_normalisation\", \"due_at\": \"2026-05-21T09:33:48+08:00\"}, {\"task\": \"finalise_compensation_decision\", \"due_at\": \"2026-05-22T17:00:00+08:00\"}]}"
+    },
+    {
+      "role": "assistant",
+      "content": "Done, Sir.\n\n- **Incident state:** `open` → **`mitigated`** (at 08:33:48 MYT)\n- **Validation:** mitigation_check PASS, impact_assessment_check PASS, compensation_check deferred (as requested)\n- **Follow-up tasks queued:**\n  - `verify_revenue_normalisation` — due 09:33 MYT today\n  - `finalise_compensation_decision` — due 22 May 2026, 5:00 PM MYT\n\nLink for your standup: https://taas-deep.example.my/incidents/inc-mon-20260521-0001 (Jira: `FINOPS-3318`).\n\nThank you for your patience, Sir. Is there anything else I can help you with?"
+    }
+  ],
+  "metadata": {
+    "num_turns": 6,
+    "language_style": "user is a Malaysian finance ops engineer, primarily English with light Malay code-switch (boleh tolong); agent stays formal English using Sir; B2B/internal tooling tone",
+    "generated_at": "2026-05-21T08:35:00+08:00",
+    "turn_details": [
+      {"turn": 1, "intent": "Finance ops runs anomaly detection on revenue drop for a specific tenant and product", "expected_functions": ["detect_monetization_anomalies"], "complexity": "moderate"},
+      {"turn": 2, "intent": "Agent triages the auto-created incident to P1 and pulls full record", "expected_functions": ["triage_monetization_incident", "get_monetization_incident"], "complexity": "complex"},
+      {"turn": 3, "intent": "Agent runs detailed impact assessment by subscription and drafts mitigation plan", "expected_functions": ["assess_monetization_impact", "plan_monetization_mitigation"], "complexity": "complex"},
+      {"turn": 4, "intent": "Execute approved mitigation staged and notify stakeholders in parallel", "expected_functions": ["execute_monetization_mitigation", "notify_stakeholders_about_incident"], "complexity": "complex"},
+      {"turn": 5, "intent": "Transition incident from open to mitigated", "expected_functions": ["transition_monetization_incident_state"], "complexity": "simple"}
+    ]
+  }
+}

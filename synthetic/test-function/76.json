@@ -1,0 +1,3214 @@
+{
+  "workflow_name": "telco_change_review_moderation",
+  "description": "End-to-end moderation and review workflow for telco network change calendar, from proposal submission through risk evaluation, approvals, scheduling, execution monitoring, and rollback/cancellation.",
+  "domain": "telco_netops/change_calendar",
+  "shared_entities": {
+    "change_id": {
+      "type": "string",
+      "description": "Unique identifier for a specific change request in the telco change calendar."
+    },
+    "change_window_id": {
+      "type": "string",
+      "description": "Identifier for a proposed or approved change window/time slot."
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Identifier for an individual implementation or validation task within a change."
+    },
+    "approval_id": {
+      "type": "string",
+      "description": "Identifier for a specific approval decision or approval workflow instance."
+    },
+    "user_ref": {
+      "type": "object",
+      "description": "Reference to a user or automation actor.",
+      "properties": {
+        "user_id": {
+          "type": "string",
+          "description": "Unique user identifier from IAM/SSO."
+        },
+        "display_name": {
+          "type": "string",
+          "description": "Human readable display name."
+        },
+        "role": {
+          "type": "string",
+          "description": "Primary role or function of the user in NetOps."
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "human",
+            "system",
+            "bot"
+          ],
+          "description": "Actor type."
+        }
+      },
+      "required": [
+        "user_id",
+        "type"
+      ]
+    },
+    "network_scope": {
+      "type": "object",
+      "description": "Scope of network elements and services impacted by the change.",
+      "properties": {
+        "domains": {
+          "type": "array",
+          "description": "High-level network domains affected.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "core",
+              "transport",
+              "access_mobile",
+              "access_fixed",
+              "datacenter",
+              "cloud_edge",
+              "oss_bss"
+            ]
+          }
+        },
+        "regions": {
+          "type": "array",
+          "description": "Geographic or logical regions.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "sites": {
+          "type": "array",
+          "description": "Site or POP identifiers impacted.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "elements": {
+          "type": "array",
+          "description": "Specific network elements or clusters.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "element_id": {
+                "type": "string"
+              },
+              "element_type": {
+                "type": "string",
+                "enum": [
+                  "router",
+                  "switch",
+                  "bng",
+                  "epc_5gc",
+                  "olt",
+                  "onu",
+                  "firewall",
+                  "load_balancer",
+                  "server",
+                  "virtual_function"
+                ]
+              },
+              "vendor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "element_id",
+              "element_type"
+            ]
+          }
+        },
+        "customer_segments": {
+          "type": "array",
+          "description": "Customer segments potentially impacted.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "consumer",
+              "smb",
+              "enterprise",
+              "wholesale",
+              "internal"
+            ]
+          }
+        }
+      }
+    },
+    "risk_assessment": {
+      "type": "object",
+      "description": "Structured risk assessment for a change.",
+      "properties": {
+        "overall_risk_level": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "impact_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Estimated business/technical impact score."
+        },
+        "likelihood_score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 10,
+          "description": "Likelihood of incident or degradation."
+        },
+        "constraints": {
+          "type": "array",
+          "description": "Operational constraints identified during assessment.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "constraint_type": {
+                "type": "string",
+                "enum": [
+                  "blackout_window",
+                  "capacity_threshold",
+                  "regulatory",
+                  "maintenance_overlap",
+                  "vendor_restriction",
+                  "other"
+                ]
+              },
+              "description": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "constraint_type"
+            ]
+          }
+        },
+        "dependencies": {
+          "type": "array",
+          "description": "Other changes or systems this change depends on.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "dependency_type": {
+                "type": "string",
+                "enum": [
+                  "change",
+                  "system",
+                  "vendor",
+                  "resource"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "not_started",
+                  "in_progress",
+                  "completed",
+                  "blocked"
+                ]
+              }
+            },
+            "required": [
+              "dependency_type",
+              "id"
+            ]
+          }
+        },
+        "recommended_mitigation": {
+          "type": "array",
+          "description": "Recommended mitigations to reduce risk.",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "approval_decision": {
+      "type": "object",
+      "description": "Approval decision, used in multiple approval-related functions.",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "rejected",
+            "needs_changes",
+            "conditionally_approved"
+          ]
+        },
+        "approver": {
+          "$ref": "#/shared_entities/user_ref"
+        },
+        "comments": {
+          "type": "string"
+        },
+        "conditions": {
+          "type": "array",
+          "description": "Conditions attached to conditional approval, if any.",
+          "items": {
+            "type": "string"
+          }
+        },
+        "effective_until": {
+          "type": "string",
+          "format": "date-time",
+          "description": "If set, approval expires after this time."
+        }
+      },
+      "required": [
+        "decision",
+        "approver"
+      ]
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "submit_change_proposal",
+      "description": "Submit a new change proposal to the telco change calendar for moderation and review.",
+      "stage": "proposal",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "description": "Short summary of the change."
+          },
+          "description": {
+            "type": "string",
+            "description": "Detailed description including business justification and technical context."
+          },
+          "change_type": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "normal",
+              "emergency",
+              "expedited",
+              "maintenance"
+            ]
+          },
+          "requested_by": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "network_scope": {
+            "$ref": "#/shared_entities/network_scope"
+          },
+          "requested_window": {
+            "type": "object",
+            "description": "Requested implementation window.",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone identifier."
+              },
+              "flexibility": {
+                "type": "string",
+                "enum": [
+                  "fixed",
+                  "flexible_2h",
+                  "flexible_4h",
+                  "flexible_24h"
+                ],
+                "description": "How flexible the requested timing is."
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          },
+          "implementation_plan": {
+            "type": "object",
+            "description": "High-level implementation and validation plan.",
+            "properties": {
+              "steps": {
+                "type": "array",
+                "description": "Step-by-step procedure.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "step_order": {
+                      "type": "integer"
+                    },
+                    "summary": {
+                      "type": "string"
+                    },
+                    "commands": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "estimated_duration_minutes": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "step_order",
+                    "summary"
+                  ]
+                }
+              },
+              "validation_checks": {
+                "type": "array",
+                "description": "Key validation checks post-change.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "check_name": {
+                      "type": "string"
+                    },
+                    "metric_or_kpi": {
+                      "type": "string"
+                    },
+                    "expected_threshold": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "check_name"
+                  ]
+                }
+              },
+              "rollback_plan": {
+                "type": "object",
+                "description": "High-level rollback steps.",
+                "properties": {
+                  "summary": {
+                    "type": "string"
+                  },
+                  "steps": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "max_rollback_window_minutes": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "description": "Optional design documents or diagrams linked by URL.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "design_doc",
+                    "risk_register",
+                    "vendor_advisory",
+                    "topology_diagram",
+                    "other"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "url"
+              ]
+            }
+          }
+        },
+        "required": [
+          "title",
+          "description",
+          "change_type",
+          "requested_by",
+          "network_scope",
+          "requested_window"
+        ]
+      },
+      "returns": "Newly created change proposal including generated change_id and initial moderation status."
+    },
+    {
+      "name": "auto_moderate_change",
+      "description": "Run automated moderation and policy checks on a submitted change proposal.",
+      "stage": "moderation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_id": {
+            "$ref": "#/shared_entities/change_id"
+          },
+          "policy_profiles": {
+            "type": "array",
+            "description": "Named policy profiles to evaluate (e.g., 'weekend_only', 'no_peak_hours').",
+            "items": {
+              "type": "string"
+            }
+          },
+          "run_static_analysis": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, analyze implementation commands for known risks."
+          },
+          "run_historical_analysis": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, correlate with historical incident/change data."
+          }
+        },
+        "required": [
+          "change_id"
+        ]
+      },
+      "returns": "Automated moderation result including policy violations, risk flags, and recommended next actions."
+    },
+    {
+      "name": "evaluate_change_risk",
+      "description": "Compute detailed risk assessment for a change proposal, combining automated signals and optional human input.",
+      "stage": "risk_assessment",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_id": {
+            "$ref": "#/shared_entities/change_id"
+          },
+          "override_network_scope": {
+            "$ref": "#/shared_entities/network_scope"
+          },
+          "business_impact_input": {
+            "type": "object",
+            "description": "Optional business impact notes from requestor or product owner.",
+            "properties": {
+              "provided_by": {
+                "$ref": "#/shared_entities/user_ref"
+              },
+              "impact_description": {
+                "type": "string"
+              },
+              "critical_services": {
+                "type": "array",
+                "description": "Names or IDs of critical services impacted.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "risk_model": {
+            "type": "string",
+            "enum": [
+              "standard_model_v1",
+              "capacity_focused_v2",
+              "latency_sensitive_v1"
+            ],
+            "description": "Which risk model configuration to use."
+          }
+        },
+        "required": [
+          "change_id"
+        ]
+      },
+      "returns": "Computed risk_assessment object, including overall_risk_level, scores, constraints, dependencies, and mitigation recommendations."
+    },
+    {
+      "name": "suggest_change_window",
+      "description": "Suggest one or more feasible change windows based on blackout periods, risk level, and existing calendar load.",
+      "stage": "scheduling",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_id": {
+            "$ref": "#/shared_entities/change_id"
+          },
+          "time_preferences": {
+            "type": "object",
+            "description": "Preferences for timing of the change.",
+            "properties": {
+              "allowed_days_of_week": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "mon",
+                    "tue",
+                    "wed",
+                    "thu",
+                    "fri",
+                    "sat",
+                    "sun"
+                  ]
+                }
+              },
+              "preferred_start_time_local": {
+                "type": "string",
+                "format": "time",
+                "description": "Preferred local start time, e.g. '01:00:00'."
+              },
+              "avoid_peak_hours": {
+                "type": "boolean",
+                "default": true
+              },
+              "max_duration_minutes": {
+                "type": "integer"
+              }
+            }
+          },
+          "lookahead_days": {
+            "type": "integer",
+            "default": 30,
+            "description": "How far into the future to search for windows."
+          },
+          "max_suggestions": {
+            "type": "integer",
+            "default": 5,
+            "maximum": 20
+          }
+        },
+        "required": [
+          "change_id"
+        ]
+      },
+      "returns": "List of suggested change windows with change_window_id, start/end, conflict score, and justification."
+    },
+    {
+      "name": "create_change_approval_request",
+      "description": "Create a structured approval workflow for a change, targeting the right approvers based on risk and scope.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_id": {
+            "$ref": "#/shared_entities/change_id"
+          },
+          "change_window_id": {
+            "$ref": "#/shared_entities/change_window_id"
+          },
+          "approval_template": {
+            "type": "string",
+            "enum": [
+              "standard_low_risk",
+              "standard_high_risk",
+              "emergency",
+              "vendor_led"
+            ]
+          },
+          "approver_groups": {
+            "type": "array",
+            "description": "Explicit list of approver groups or roles to involve.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "group_name": {
+                  "type": "string"
+                },
+                "required_role": {
+                  "type": "string",
+                  "enum": [
+                    "noc_manager",
+                    "change_manager",
+                    "security_officer",
+                    "product_owner",
+                    "capacity_planner"
+                  ]
+                },
+                "min_approvals": {
+                  "type": "integer",
+                  "default": 1
+                }
+              },
+              "required": [
+                "group_name",
+                "required_role"
+              ]
+            }
+          },
+          "sla": {
+            "type": "object",
+            "description": "Approval SLA configuration.",
+            "properties": {
+              "response_required_within_minutes": {
+                "type": "integer"
+              },
+              "escalation_chain": {
+                "type": "array",
+                "description": "Escalation targets if SLA breached.",
+                "items": {
+                  "$ref": "#/shared_entities/user_ref"
+                }
+              }
+            }
+          },
+          "requested_by": {
+            "$ref": "#/shared_entities/user_ref"
+          }
+        },
+        "required": [
+          "change_id",
+          "change_window_id",
+          "requested_by"
+        ]
+      },
+      "returns": "Created approval workflow including approval_id, required approvers, and current approval status."
+    },
+    {
+      "name": "record_approval_decision",
+      "description": "Record an individual approval decision (human or automated) for a change approval workflow.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "$ref": "#/shared_entities/approval_id"
+          },
+          "change_id": {
+            "$ref": "#/shared_entities/change_id"
+          },
+          "decision": {
+            "$ref": "#/shared_entities/approval_decision"
+          },
+          "decision_scope": {
+            "type": "object",
+            "description": "Scope of what this decision applies to.",
+            "properties": {
+              "applies_to_window": {
+                "type": "boolean",
+                "default": true
+              },
+              "applies_to_plan": {
+                "type": "boolean",
+                "default": true
+              },
+              "applies_to_risk_profile": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "evidence_links": {
+            "type": "array",
+            "description": "Optional links to evidence (test results, simulations).",
+            "items": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        },
+        "required": [
+          "approval_id",
+          "change_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval workflow status, including aggregated approval outcome and any newly applied conditions."
+    },
+    {
+      "name": "get_change_details",
+      "description": "Retrieve full details and current status for a change, including moderation, risk, approvals, and schedule.",
+      "stage": "review",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_id": {
+            "$ref": "#/shared_entities/change_id"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional related data to include.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "moderation",
+                "risk",
+                "approvals",
+                "calendar_conflicts",
+                "execution_history",
+                "tasks",
+                "attachments"
+              ]
+            }
+          },
+          "redact_sensitive": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, hide sensitive command or credential details."
+          }
+        },
+        "required": [
+          "change_id"
+        ]
+      },
+      "returns": "Comprehensive change object including metadata, scope, risk, approvals, schedule, and execution state."
+    },
+    {
+      "name": "list_calendar_changes",
+      "description": "List and filter changes in the calendar for a given time range, with moderation and status filters.",
+      "stage": "review",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "time_range": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "draft",
+                    "under_moderation",
+                    "awaiting_approval",
+                    "approved_scheduled",
+                    "rejected",
+                    "cancelled",
+                    "in_progress",
+                    "completed",
+                    "failed",
+                    "rolled_back"
+                  ]
+                }
+              },
+              "change_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "standard",
+                    "normal",
+                    "emergency",
+                    "expedited",
+                    "maintenance"
+                  ]
+                }
+              },
+              "risk_levels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                }
+              },
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requested_by_user_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50,
+            "maximum": 200
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "start_time",
+              "end_time",
+              "created_at",
+              "risk_level",
+              "status"
+            ],
+            "default": "start_time"
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "asc"
+          }
+        },
+        "required": [
+          "time_range"
+        ]
+      },
+      "returns": "Paginated list of calendar changes with summary fields and basic status/moderation info."
+    },
+    {
+      "name": "check_execution_readiness",
+      "description": "Pre-execution readiness check to ensure all preconditions (approvals, dependencies, monitoring, backups) are satisfied.",
+      "stage": "pre_execution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_id": {
+            "$ref": "#/shared_entities/change_id"
+          },
+          "override_execution_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "If provided, check readiness as of this time instead of current time."
+          },
+          "checks": {
+            "type": "object",
+            "description": "Which readiness checks to run.",
+            "properties": {
+              "approvals": {
+                "type": "boolean",
+                "default": true
+              },
+              "dependency_status": {
+                "type": "boolean",
+                "default": true
+              },
+              "capacity_and_alarms": {
+                "type": "boolean",
+                "default": true
+              },
+              "backup_and_snapshot": {
+                "type": "boolean",
+                "default": true
+              },
+              "maintenance_overlaps": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "required": [
+          "change_id"
+        ]
+      },
+      "returns": "Readiness report with pass/fail per check, blocking issues, and recommended mitigations or rescheduling advice."
+    },
+    {
+      "name": "update_change_tasks",
+      "description": "Create or update detailed implementation and validation tasks for a change, used for execution tracking.",
+      "stage": "execution_planning",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_id": {
+            "$ref": "#/shared_entities/change_id"
+          },
+          "tasks": {
+            "type": "array",
+            "description": "Full task definitions to upsert for this change.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "$ref": "#/shared_entities/task_id"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "implementation",
+                    "validation",
+                    "monitoring",
+                    "communication",
+                    "rollback"
+                  ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "owner": {
+                  "$ref": "#/shared_entities/user_ref"
+                },
+                "sequence": {
+                  "type": "integer",
+                  "description": "Execution sequence number; lower executes earlier."
+                },
+                "depends_on_task_ids": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/shared_entities/task_id"
+                  }
+                },
+                "estimated_duration_minutes": {
+                  "type": "integer"
+                },
+                "automation": {
+                  "type": "object",
+                  "description": "Automation job or playbook details, if task is automated.",
+                  "properties": {
+                    "automation_type": {
+                      "type": "string",
+                      "enum": [
+                        "ansible_playbook",
+                        "script",
+                        "workflow_engine",
+                        "vendor_orchestrator"
+                      ]
+                    },
+                    "reference_id": {
+                      "type": "string",
+                      "description": "Reference to automation artifact (e.g., playbook name, workflow ID)."
+                    },
+                    "run_as": {
+                      "type": "string",
+                      "description": "Automation credential or run-as profile."
+                    },
+                    "parameters": {
+                      "type": "object",
+                      "description": "Key/value parameters for the automation.",
+                      "additionalProperties": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean"
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "type",
+                "title",
+                "owner",
+                "sequence"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "replace",
+              "merge"
+            ],
+            "default": "merge",
+            "description": "Replace existing tasks or merge with them."
+          }
+        },
+        "required": [
+          "change_id",
+          "tasks"
+        ]
+      },
+      "returns": "Updated list of tasks for the change including assigned task_ids and any validation warnings."
+    },
+    {
+      "name": "update_execution_status",
+      "description": "Update execution status of a change and its tasks during or after implementation, including incident linkage.",
+      "stage": "execution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_id": {
+            "$ref": "#/shared_entities/change_id"
+          },
+          "overall_status": {
+            "type": "string",
+            "enum": [
+              "not_started",
+              "in_progress",
+              "paused",
+              "completed_success",
+              "completed_with_issues",
+              "failed",
+              "rolled_back"
+            ]
+          },
+          "status_reason": {
+            "type": "string",
+            "description": "Free-text reason or summary for the new status."
+          },
+          "updated_by": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "task_updates": {
+            "type": "array",
+            "description": "Optional granular task status updates.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "$ref": "#/shared_entities/task_id"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "not_started",
+                    "in_progress",
+                    "blocked",
+                    "completed",
+                    "skipped",
+                    "failed"
+                  ]
+                },
+                "notes": {
+                  "type": "string"
+                },
+                "started_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "completed_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "task_id",
+                "status"
+              ]
+            }
+          },
+          "linked_incidents": {
+            "type": "array",
+            "description": "List of incident IDs in external systems associated with this change status update.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "system": {
+                  "type": "string",
+                  "enum": [
+                    "itsm",
+                    "monitoring",
+                    "ticketing",
+                    "other"
+                  ]
+                },
+                "incident_id": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              },
+              "required": [
+                "system",
+                "incident_id"
+              ]
+            }
+          }
+        },
+        "required": [
+          "change_id",
+          "overall_status",
+          "updated_by"
+        ]
+      },
+      "returns": "Updated execution state of the change including current status, timeline, and task states."
+    },
+    {
+      "name": "request_change_rollback",
+      "description": "Request a rollback for an in-progress or recently completed change, with automated and manual moderation.",
+      "stage": "rollback",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_id": {
+            "$ref": "#/shared_entities/change_id"
+          },
+          "requested_by": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "service_degradation",
+              "hard_outage",
+              "unexpected_behavior",
+              "kpi_violation",
+              "customer_impact",
+              "other"
+            ]
+          },
+          "reason_details": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "sev1",
+              "sev2",
+              "sev3",
+              "sev4"
+            ]
+          },
+          "auto_execute": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true and allowed by policy, automatically trigger rollback implementation tasks."
+          }
+        },
+        "required": [
+          "change_id",
+          "requested_by",
+          "reason",
+          "severity"
+        ]
+      },
+      "returns": "Rollback request record including moderation outcome, whether rollback is approved, and any triggered rollback tasks."
+    },
+    {
+      "name": "cancel_or_reschedule_change",
+      "description": "Cancel a pending change or reschedule it to a new window, enforcing policy and moderation rules.",
+      "stage": "post_decision",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_id": {
+            "$ref": "#/shared_entities/change_id"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "cancel",
+              "reschedule"
+            ]
+          },
+          "requested_by": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "resource_unavailable",
+              "vendor_change",
+              "business_request",
+              "conflicting_change",
+              "risk_too_high",
+              "insufficient_approvals",
+              "other"
+            ]
+          },
+          "reason_details": {
+            "type": "string"
+          },
+          "new_window": {
+            "type": "object",
+            "description": "Required if action is reschedule.",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "from_suggestion_id": {
+                "type": "string",
+                "description": "Optional reference to a previously suggested window."
+              }
+            }
+          },
+          "notify_parties": {
+            "type": "array",
+            "description": "List of stakeholders to notify about cancellation/reschedule.",
+            "items": {
+              "$ref": "#/shared_entities/user_ref"
+            }
+          },
+          "force": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, override some non-critical policy checks (e.g., last-minute reschedules) if caller has privilege."
+          }
+        },
+        "required": [
+          "change_id",
+          "action",
+          "requested_by",
+          "reason"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "action": {
+                  "const": "reschedule"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "new_window"
+              ]
+            }
+          }
+        ]
+      },
+      "returns": "Updated change schedule or cancellation confirmation, including new change_window_id if rescheduled and notification summary."
+    },
+    {
+      "name": "search_change_review_entities",
+      "description": "Faceted search across change_review entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching change_review entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_change_review_records",
+      "description": "Bulk-create up to N change_review records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_change_review_records",
+      "description": "Apply a partial update patch to many change_review records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_change_review_records",
+      "description": "Delete or soft-delete many change_review records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_change_review_dataset",
+      "description": "Schedule or stream an export of change_review data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_change_review_dataset",
+      "description": "Validate and import a change_review dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_change_review_state",
+      "description": "Create a point-in-time snapshot of one or more change_review entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_change_review_snapshot",
+      "description": "Restore change_review state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_change_review_metrics",
+      "description": "Query aggregated metrics/KPIs for the change_review workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_change_review_dashboard",
+      "description": "Compose a dashboard view across change_review metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_change_review_audit_events",
+      "description": "Search the change_review audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_change_review_events",
+      "description": "Create a webhook subscription that delivers change_review workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_change_review_subscriptions",
+      "description": "List webhook subscriptions for change_review events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_change_review_subscription",
+      "description": "Remove a webhook subscription for change_review events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_change_review_job",
+      "description": "Schedule a recurring or one-off change_review job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_change_review_schedules",
+      "description": "List scheduled change_review jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_change_review_schedule",
+      "description": "Cancel or pause a scheduled change_review job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_change_review_operation",
+      "description": "Run a what-if simulation of a change_review operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_change_review_approval",
+      "description": "Open an approval request for a change_review action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_change_review_approval",
+      "description": "Record an approve/reject/abstain decision on a change_review approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_change_review_comment",
+      "description": "Add a threaded comment or annotation to any change_review entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_change_review_comments",
+      "description": "List comments/annotations attached to a change_review entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_change_review_policy",
+      "description": "Create or update a policy/rule controlling change_review behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_change_review_policies",
+      "description": "List change_review policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_change_review_entities",
+      "description": "Create a typed relationship between two change_review-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_change_review_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a change_review entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_change_review_entities",
+      "description": "Add, remove, or replace tags on one or many change_review entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}

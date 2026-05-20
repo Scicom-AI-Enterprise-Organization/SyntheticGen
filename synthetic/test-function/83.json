@@ -1,0 +1,3168 @@
+{
+  "workflow_name": "telco_alarm_lifecycle_management",
+  "description": "End-to-end lifecycle management of network alarms in a telecom assurance system, including detection, correlation, assignment, suppression, resolution, and audit.",
+  "domain": "telco_assurance/alarm_management",
+  "shared_entities": {
+    "alarm_id": {
+      "type": "string",
+      "description": "Unique identifier of a single alarm instance"
+    },
+    "alarm_group_id": {
+      "type": "string",
+      "description": "Identifier for a correlated group of related alarms (incident/problem ticket)"
+    },
+    "suppression_rule_id": {
+      "type": "string",
+      "description": "Identifier of an alarm suppression rule"
+    },
+    "operator_id": {
+      "type": "string",
+      "description": "Identifier of an operator or automation bot handling alarms"
+    },
+    "alarm_status": {
+      "type": "string",
+      "description": "Lifecycle state of the alarm",
+      "enum": [
+        "raised",
+        "acknowledged",
+        "in_progress",
+        "resolved",
+        "closed",
+        "suppressed"
+      ]
+    },
+    "severity": {
+      "type": "string",
+      "description": "Alarm severity level",
+      "enum": [
+        "critical",
+        "major",
+        "minor",
+        "warning",
+        "info"
+      ]
+    },
+    "network_location": {
+      "type": "object",
+      "description": "Location of the network element raising the alarm",
+      "properties": {
+        "region": {
+          "type": "string"
+        },
+        "country": {
+          "type": "string"
+        },
+        "city": {
+          "type": "string"
+        },
+        "site_id": {
+          "type": "string",
+          "description": "Identifier of the physical site (e.g., cell site, data center)"
+        },
+        "rack": {
+          "type": "string"
+        },
+        "shelf": {
+          "type": "string"
+        }
+      }
+    },
+    "network_element": {
+      "type": "object",
+      "description": "Network element and resource details",
+      "properties": {
+        "ne_id": {
+          "type": "string",
+          "description": "Network element identifier"
+        },
+        "ne_type": {
+          "type": "string",
+          "enum": [
+            "router",
+            "switch",
+            "bts",
+            "rnc",
+            "enodeb",
+            "gnodeb",
+            "core_vnf",
+            "transport",
+            "oss",
+            "other"
+          ]
+        },
+        "vendor": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "software_version": {
+          "type": "string"
+        },
+        "location": {
+          "$ref": "#/shared_entities/network_location"
+        },
+        "interfaces": {
+          "type": "array",
+          "description": "Impacted interfaces or ports",
+          "items": {
+            "type": "object",
+            "properties": {
+              "if_name": {
+                "type": "string"
+              },
+              "if_type": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "uplink",
+                  "downlink",
+                  "internal",
+                  "unknown"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "ne_id",
+        "ne_type"
+      ]
+    },
+    "time_window": {
+      "type": "object",
+      "description": "Time window filter",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "time_zone": {
+          "type": "string",
+          "description": "IANA time zone name (e.g. 'UTC', 'Europe/Paris')"
+        }
+      }
+    },
+    "ack_info": {
+      "type": "object",
+      "description": "Alarm acknowledgement information",
+      "properties": {
+        "operator_id": {
+          "type": "string"
+        },
+        "ack_time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "note": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "manual",
+            "auto_policy",
+            "api"
+          ]
+        }
+      },
+      "required": [
+        "operator_id"
+      ]
+    },
+    "resolution_info": {
+      "type": "object",
+      "description": "Resolution and root cause details",
+      "properties": {
+        "operator_id": {
+          "type": "string"
+        },
+        "resolution_time": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "root_cause_category": {
+          "type": "string",
+          "enum": [
+            "power",
+            "transmission",
+            "hardware_failure",
+            "software_bug",
+            "configuration",
+            "capacity",
+            "environmental",
+            "planned_work",
+            "false_positive",
+            "unknown"
+          ]
+        },
+        "root_cause_details": {
+          "type": "string"
+        },
+        "actions_taken": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "customer_impact": {
+          "type": "string",
+          "enum": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "operator_id",
+        "root_cause_category"
+      ]
+    },
+    "actor_context": {
+      "type": "object",
+      "description": "Context about who is performing the action and from where.",
+      "properties": {
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "system",
+            "ops_admin",
+            "ops_engineer",
+            "support_agent",
+            "customer_admin",
+            "customer_user",
+            "partner_admin",
+            "automation"
+          ]
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "Identifier of the actor in the IAM system."
+        },
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant or organization scope, if applicable."
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Optional session/correlation id."
+        },
+        "ip_address": {
+          "type": "string",
+          "description": "Source IP of the request."
+        }
+      },
+      "required": [
+        "actor_type",
+        "actor_id"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Generic time range filter.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "time_zone": {
+          "type": "string",
+          "description": "IANA time zone (e.g. 'UTC', 'Asia/Kuala_Lumpur')."
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "notification_channel": {
+      "type": "object",
+      "description": "Notification channel descriptor.",
+      "properties": {
+        "channel": {
+          "type": "string",
+          "enum": [
+            "email",
+            "sms",
+            "webhook",
+            "slack",
+            "teams",
+            "pagerduty",
+            "in_app"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "description": "Channel-specific address (email, URL, phone, etc.)."
+        },
+        "secret_ref": {
+          "type": "string",
+          "description": "Optional secret reference for signed webhook delivery."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "channel",
+        "target"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Pointer to an uploaded attachment or document.",
+      "properties": {
+        "filename": {
+          "type": "string"
+        },
+        "content_type": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename",
+        "url"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination and sorting controls for list endpoints.",
+      "properties": {
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Optional opaque cursor for keyset pagination."
+        },
+        "sort_by": {
+          "type": "string"
+        },
+        "sort_order": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "default": "desc"
+        }
+      }
+    },
+    "approval_decision": {
+      "type": "object",
+      "description": "Approval/review decision record.",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "rejected",
+            "needs_changes",
+            "deferred"
+          ]
+        },
+        "approver_id": {
+          "type": "string"
+        },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "decision",
+        "approver_id"
+      ]
+    },
+    "tag_set": {
+      "type": "object",
+      "description": "Free-form key/value tags for categorization and search.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "once",
+            "cron",
+            "interval",
+            "calendar"
+          ]
+        },
+        "cron_expression": {
+          "type": "string",
+          "description": "Standard 5-field cron expression."
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "calendar": {
+          "type": "object",
+          "properties": {
+            "days_of_week": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "MON",
+                  "TUE",
+                  "WED",
+                  "THU",
+                  "FRI",
+                  "SAT",
+                  "SUN"
+                ]
+              }
+            },
+            "time_of_day": {
+              "type": "string",
+              "description": "HH:MM 24h local."
+            }
+          }
+        },
+        "time_zone": {
+          "type": "string",
+          "description": "IANA time zone."
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "max_runs": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    "policy_rule": {
+      "type": "object",
+      "description": "Generic policy rule with conditions and actions.",
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "operator": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "gt",
+                  "gte",
+                  "lt",
+                  "lte",
+                  "in",
+                  "nin",
+                  "contains",
+                  "regex"
+                ]
+              },
+              "value": {
+                "description": "Value to compare against. Type depends on operator."
+              }
+            },
+            "required": [
+              "field",
+              "operator"
+            ]
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "parameters": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "name",
+        "conditions",
+        "actions"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "ingest_alarm_event",
+      "description": "Ingest a raw alarm event from the network into the assurance system, performing normalization and deduplication.",
+      "stage": "ingest",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source_system": {
+            "type": "string",
+            "description": "Origin of the alarm (e.g., 'NMS-Huawei', 'EMS-Ericsson', 'syslog')"
+          },
+          "external_alarm_id": {
+            "type": "string",
+            "description": "Alarm identifier in the source system"
+          },
+          "event_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Timestamp when the alarm was generated by the network element"
+          },
+          "perceived_severity": {
+            "$ref": "#/shared_entities/severity"
+          },
+          "probable_cause": {
+            "type": "string",
+            "description": "Free-text cause from the NE, typically ITU-T X.733 probable cause"
+          },
+          "alarm_code": {
+            "type": "string",
+            "description": "Vendor specific alarm code or mnemonic"
+          },
+          "alarm_type": {
+            "type": "string",
+            "enum": [
+              "communication",
+              "quality_of_service",
+              "processing_error",
+              "equipment",
+              "environmental",
+              "integrity_violation",
+              "operational_violation",
+              "other"
+            ]
+          },
+          "network_element": {
+            "$ref": "#/shared_entities/network_element"
+          },
+          "additional_attributes": {
+            "type": "object",
+            "description": "Vendor-specific attributes",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "correlation_keys": {
+            "type": "object",
+            "description": "Keys used for deduplication and correlation",
+            "properties": {
+              "location_key": {
+                "type": "string"
+              },
+              "resource_key": {
+                "type": "string"
+              },
+              "service_impact_key": {
+                "type": "string"
+              }
+            }
+          },
+          "lifecycle_state": {
+            "type": "string",
+            "enum": [
+              "raise",
+              "clear"
+            ],
+            "description": "Whether this event is a raise or clear notification"
+          }
+        },
+        "required": [
+          "source_system",
+          "external_alarm_id",
+          "event_time",
+          "perceived_severity",
+          "alarm_code",
+          "alarm_type",
+          "network_element",
+          "lifecycle_state"
+        ]
+      },
+      "returns": "Created or updated alarm with internal alarm_id, deduplication info and current status."
+    },
+    {
+      "name": "get_alarm",
+      "description": "Retrieve detailed information for a single alarm by alarm_id, including history, correlations, and suppression state.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_id": {
+            "$ref": "#/shared_entities/alarm_id"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional sections to include in the response",
+            "items": {
+              "type": "string",
+              "enum": [
+                "history",
+                "correlation",
+                "suppression",
+                "audit",
+                "raw_events"
+              ]
+            }
+          }
+        },
+        "required": [
+          "alarm_id"
+        ]
+      },
+      "returns": "Complete alarm record including current attributes, status, correlation/group info, suppression info, and optionally history/audit."
+    },
+    {
+      "name": "search_alarms",
+      "description": "Search and list alarms with multi-dimensional filters for operations dashboards and bulk actions.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "time_window": {
+            "$ref": "#/shared_entities/time_window"
+          },
+          "status": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/alarm_status"
+            }
+          },
+          "severities": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/severity"
+            }
+          },
+          "ne_filters": {
+            "type": "object",
+            "description": "Filters on network elements",
+            "properties": {
+              "ne_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ne_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "vendors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sites": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "text_search": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "Free-text search on alarm code, probable cause, notes, etc."
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "alarm_code",
+                    "probable_cause",
+                    "notes",
+                    "external_alarm_id"
+                  ]
+                }
+              }
+            }
+          },
+          "grouping": {
+            "type": "string",
+            "enum": [
+              "none",
+              "by_ne",
+              "by_site",
+              "by_severity",
+              "by_alarm_code"
+            ],
+            "default": "none"
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000,
+                "default": 100
+              }
+            }
+          },
+          "sort": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string",
+                "enum": [
+                  "event_time",
+                  "last_update_time",
+                  "severity",
+                  "status",
+                  "site",
+                  "ne_id"
+                ]
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          },
+          "include_suppressed": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": []
+      },
+      "returns": "List of alarms matching the filters, with summary fields, total count, and paging information."
+    },
+    {
+      "name": "correlate_alarms",
+      "description": "Create or update a correlated alarm group (incident) based on correlation rules or manual grouping.",
+      "stage": "correlate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_ids": {
+            "type": "array",
+            "description": "Alarms to be considered for correlation",
+            "items": {
+              "$ref": "#/shared_entities/alarm_id"
+            }
+          },
+          "correlation_strategy": {
+            "type": "string",
+            "enum": [
+              "auto_rule",
+              "topology_based",
+              "service_impact",
+              "manual"
+            ]
+          },
+          "existing_alarm_group_id": {
+            "$ref": "#/shared_entities/alarm_group_id",
+            "description": "If provided, alarms will be added to/merged with this group"
+          },
+          "operator_id": {
+            "$ref": "#/shared_entities/operator_id",
+            "description": "Operator requesting manual correlation, if strategy is 'manual'"
+          },
+          "correlation_context": {
+            "type": "object",
+            "description": "Additional context for correlation engines",
+            "properties": {
+              "service_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "topology_snapshot_id": {
+                "type": "string"
+              },
+              "max_time_delta_minutes": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "required": [
+          "alarm_ids",
+          "correlation_strategy"
+        ]
+      },
+      "returns": "Alarm group with alarm_group_id, list of member alarms, group severity, and correlation rationale."
+    },
+    {
+      "name": "acknowledge_alarms",
+      "description": "Acknowledge one or more alarms or an entire alarm group, updating ownership and status.",
+      "stage": "update",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "alarms",
+              "alarm_group"
+            ],
+            "description": "Whether to acknowledge specific alarms or all alarms in a group"
+          },
+          "alarm_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/alarm_id"
+            }
+          },
+          "alarm_group_id": {
+            "$ref": "#/shared_entities/alarm_group_id"
+          },
+          "ack_info": {
+            "$ref": "#/shared_entities/ack_info"
+          },
+          "ownership": {
+            "type": "object",
+            "description": "Optional ownership info to assign along with acknowledgement",
+            "properties": {
+              "assigned_to": {
+                "type": "string",
+                "description": "Operator or team ID the alarms are assigned to"
+              },
+              "priority": {
+                "type": "string",
+                "enum": [
+                  "p1",
+                  "p2",
+                  "p3",
+                  "p4"
+                ]
+              },
+              "queue": {
+                "type": "string",
+                "description": "Operations queue or domain (e.g., RAN, Core, IP, Transmission)"
+              }
+            }
+          }
+        },
+        "required": [
+          "scope",
+          "ack_info"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "scope": {
+                  "const": "alarms"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "alarm_ids"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "scope": {
+                  "const": "alarm_group"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "alarm_group_id"
+              ]
+            }
+          }
+        ]
+      },
+      "returns": "Updated alarms with new status, acknowledgement timestamps, and ownership details."
+    },
+    {
+      "name": "update_alarm_status",
+      "description": "Transition alarms through their lifecycle (in_progress, resolved, closed) with resolution details when applicable.",
+      "stage": "update",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/alarm_id"
+            }
+          },
+          "target_status": {
+            "$ref": "#/shared_entities/alarm_status"
+          },
+          "operator_id": {
+            "$ref": "#/shared_entities/operator_id"
+          },
+          "resolution_info": {
+            "$ref": "#/shared_entities/resolution_info"
+          },
+          "closure_reason": {
+            "type": "string",
+            "description": "Free-text or coded closure reason for moving to closed state"
+          },
+          "customer_tickets": {
+            "type": "array",
+            "description": "Optional linkage to customer-facing trouble tickets",
+            "items": {
+              "type": "object",
+              "properties": {
+                "ticket_id": {
+                  "type": "string"
+                },
+                "ticket_system": {
+                  "type": "string"
+                },
+                "impact_level": {
+                  "type": "string",
+                  "enum": [
+                    "single_customer",
+                    "multiple_customers",
+                    "massive_outage",
+                    "unknown"
+                  ]
+                }
+              },
+              "required": [
+                "ticket_id",
+                "ticket_system"
+              ]
+            }
+          }
+        },
+        "required": [
+          "alarm_ids",
+          "target_status",
+          "operator_id"
+        ]
+      },
+      "returns": "Lifecycle transition result for each alarm, including any validation errors or conflicts."
+    },
+    {
+      "name": "create_suppression_rule",
+      "description": "Create a new suppression rule to automatically hide or de-prioritize alarms matching certain conditions.",
+      "stage": "configure",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human readable name of the suppression rule"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "single_ne",
+              "site",
+              "region",
+              "global"
+            ]
+          },
+          "conditions": {
+            "type": "object",
+            "description": "Matching conditions for suppression",
+            "properties": {
+              "severities": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/severity"
+                }
+              },
+              "alarm_codes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ne_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "vendors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "sites": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "time_of_day": {
+                "type": "object",
+                "description": "Optional time window during the day when rule is active",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "time"
+                  }
+                }
+              },
+              "days_of_week": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "mon",
+                    "tue",
+                    "wed",
+                    "thu",
+                    "fri",
+                    "sat",
+                    "sun"
+                  ]
+                }
+              }
+            }
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "suppress",
+              "downgrade_severity",
+              "auto_ack"
+            ]
+          },
+          "action_parameters": {
+            "type": "object",
+            "description": "Additional parameters depending on action",
+            "properties": {
+              "target_severity": {
+                "$ref": "#/shared_entities/severity"
+              },
+              "auto_ack_note": {
+                "type": "string"
+              }
+            }
+          },
+          "validity": {
+            "type": "object",
+            "description": "Optional validity period",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "created_by": {
+            "$ref": "#/shared_entities/operator_id"
+          }
+        },
+        "required": [
+          "name",
+          "scope",
+          "conditions",
+          "action",
+          "created_by"
+        ]
+      },
+      "returns": "Created suppression rule with suppression_rule_id, evaluation summary, and potential conflicts with existing rules."
+    },
+    {
+      "name": "list_suppression_rules",
+      "description": "List existing suppression rules with filtering, for audit and configuration management.",
+      "stage": "configure",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "enabled_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "scope": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "single_ne",
+                "site",
+                "region",
+                "global"
+              ]
+            }
+          },
+          "action": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "suppress",
+                "downgrade_severity",
+                "auto_ack"
+              ]
+            }
+          },
+          "created_by": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/operator_id"
+            }
+          },
+          "search_text": {
+            "type": "string",
+            "description": "Free-text search across rule name and description"
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 100
+              }
+            }
+          }
+        },
+        "required": []
+      },
+      "returns": "List of suppression rules with metadata, including suppression_rule_id, status, and summary of conditions."
+    },
+    {
+      "name": "update_suppression_rule",
+      "description": "Update or disable an existing suppression rule and optionally re-evaluate impacted alarms.",
+      "stage": "configure",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "suppression_rule_id": {
+            "$ref": "#/shared_entities/suppression_rule_id"
+          },
+          "updates": {
+            "type": "object",
+            "description": "Fields to update in the rule",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "single_ne",
+                  "site",
+                  "region",
+                  "global"
+                ]
+              },
+              "conditions": {
+                "type": "object"
+              },
+              "action": {
+                "type": "string",
+                "enum": [
+                  "suppress",
+                  "downgrade_severity",
+                  "auto_ack"
+                ]
+              },
+              "action_parameters": {
+                "type": "object"
+              },
+              "validity": {
+                "type": "object"
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            }
+          },
+          "modified_by": {
+            "$ref": "#/shared_entities/operator_id"
+          },
+          "re_evaluate_existing_alarms": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, re-applies the rule to currently active alarms"
+          },
+          "re_evaluation_scope": {
+            "type": "object",
+            "description": "Optional scope for re-evaluation if enabled",
+            "properties": {
+              "time_window": {
+                "$ref": "#/shared_entities/time_window"
+              },
+              "max_alarms": {
+                "type": "integer",
+                "default": 10000
+              }
+            }
+          }
+        },
+        "required": [
+          "suppression_rule_id",
+          "updates",
+          "modified_by"
+        ]
+      },
+      "returns": "Updated suppression rule, plus summary of re-evaluation impact if requested (number of alarms affected, errors)."
+    },
+    {
+      "name": "retry_alarm_action",
+      "description": "Retry an automated action previously attempted on an alarm (e.g., auto-clear, script execution) and handle failures.",
+      "stage": "recover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_id": {
+            "$ref": "#/shared_entities/alarm_id"
+          },
+          "action_id": {
+            "type": "string",
+            "description": "Identifier of the previously executed action to retry"
+          },
+          "retry_strategy": {
+            "type": "object",
+            "description": "Strategy for retrying the action",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "single",
+                  "until_success",
+                  "fixed_retries"
+                ],
+                "default": "single"
+              },
+              "max_retries": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 3
+              },
+              "backoff": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "linear",
+                      "exponential"
+                    ],
+                    "default": "exponential"
+                  },
+                  "base_delay_seconds": {
+                    "type": "integer",
+                    "default": 30
+                  },
+                  "max_delay_seconds": {
+                    "type": "integer",
+                    "default": 600
+                  }
+                }
+              }
+            }
+          },
+          "operator_id": {
+            "$ref": "#/shared_entities/operator_id"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for manual retry (e.g., 'script fixed', 'temporary network issue resolved')"
+          }
+        },
+        "required": [
+          "alarm_id",
+          "action_id",
+          "operator_id"
+        ]
+      },
+      "returns": "Retry execution status including success/failure, logs, number of attempts, and suggested next steps if still failing."
+    },
+    {
+      "name": "rollback_alarm_status",
+      "description": "Rollback an alarm status to a previous lifecycle state in case of erroneous resolution or closure, maintaining full audit.",
+      "stage": "recover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_id": {
+            "$ref": "#/shared_entities/alarm_id"
+          },
+          "target_status": {
+            "$ref": "#/shared_entities/alarm_status"
+          },
+          "operator_id": {
+            "$ref": "#/shared_entities/operator_id"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for rollback, including reference to any incorrect operations"
+          },
+          "restore_previous_resolution_info": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, restores previous resolution info associated with the target status"
+          }
+        },
+        "required": [
+          "alarm_id",
+          "target_status",
+          "operator_id",
+          "reason"
+        ]
+      },
+      "returns": "Updated alarm with rolled back status, and an audit entry describing the rollback operation."
+    },
+    {
+      "name": "delete_alarm",
+      "description": "Permanently delete or purge an alarm (or logically mark as archived) from the system, typically used for GDPR or test data cleanup.",
+      "stage": "delete",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_id": {
+            "$ref": "#/shared_entities/alarm_id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "logical",
+              "physical"
+            ],
+            "default": "logical",
+            "description": "Logical delete flags the alarm as archived; physical delete removes it permanently."
+          },
+          "requested_by": {
+            "$ref": "#/shared_entities/operator_id"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for deletion (e.g., 'test_alarm', 'gdpr_request')"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, bypasses safety checks such as unresolved tickets linkage (where allowed by policy)."
+          }
+        },
+        "required": [
+          "alarm_id",
+          "requested_by",
+          "reason"
+        ]
+      },
+      "returns": "Deletion result indicating success, mode applied, and any cascading impacts (e.g., alarm group updates)."
+    },
+    {
+      "name": "get_alarm_timeline",
+      "description": "Retrieve a chronological timeline of all events, status changes, actions, and annotations for an alarm or alarm group for audit and RCA.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "alarm",
+              "alarm_group"
+            ]
+          },
+          "alarm_id": {
+            "$ref": "#/shared_entities/alarm_id"
+          },
+          "alarm_group_id": {
+            "$ref": "#/shared_entities/alarm_group_id"
+          },
+          "time_window": {
+            "$ref": "#/shared_entities/time_window"
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "ingest",
+                "status_change",
+                "acknowledgement",
+                "suppression",
+                "correlation",
+                "action_execution",
+                "rollback",
+                "comment"
+              ]
+            }
+          },
+          "include_details": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "scope"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "scope": {
+                  "const": "alarm"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "alarm_id"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "scope": {
+                  "const": "alarm_group"
+                }
+              }
+            },
+            "then": {
+              "required": [
+                "alarm_group_id"
+              ]
+            }
+          }
+        ]
+      },
+      "returns": "Ordered list of timeline events with timestamps, actor, event type, and detailed payload for each change impacting the alarm or group."
+    },
+    {
+      "name": "alarm_bulk_import",
+      "description": "Bulk import alarm entities from an external source (CSV, JSON, or upstream system) with validation, mapping, and partial-commit support.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "source": {
+            "type": "object",
+            "description": "Source of records being imported.",
+            "properties": {
+              "source_type": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "json",
+                  "xml",
+                  "upstream_system",
+                  "uploaded_file"
+                ]
+              },
+              "attachment": {
+                "$ref": "#/shared_entities/attachment_ref"
+              },
+              "upstream_system": {
+                "type": "string"
+              },
+              "external_query": {
+                "type": "string",
+                "description": "Optional query used to pull records from upstream."
+              }
+            },
+            "required": [
+              "source_type"
+            ]
+          },
+          "records": {
+            "type": "array",
+            "description": "Inline records, used when source_type is 'json'.",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "field_mapping": {
+            "type": "object",
+            "description": "Map of source field names to target schema fields.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "deduplication": {
+            "type": "object",
+            "properties": {
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "by_external_id",
+                  "by_natural_key",
+                  "by_hash"
+                ]
+              },
+              "natural_key_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "validation_mode": {
+            "type": "string",
+            "enum": [
+              "strict",
+              "lenient",
+              "report_only"
+            ],
+            "default": "strict"
+          },
+          "commit_mode": {
+            "type": "string",
+            "enum": [
+              "all_or_nothing",
+              "partial_commit"
+            ],
+            "default": "partial_commit"
+          },
+          "tags": {
+            "$ref": "#/shared_entities/tag_set"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "actor",
+          "source"
+        ]
+      },
+      "returns": "Bulk import outcome including counts of created/updated/skipped/failed records, per-record errors, and a batch reference."
+    },
+    {
+      "name": "alarm_bulk_update",
+      "description": "Apply a single update payload across many alarm entities matching a filter or explicit id list.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "selector": {
+            "type": "object",
+            "description": "How to choose entities for the update.",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/alarm_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "tags": {
+                    "$ref": "#/shared_entities/tag_set"
+                  },
+                  "created_within": {
+                    "$ref": "#/shared_entities/time_range"
+                  },
+                  "expression": {
+                    "type": "string",
+                    "description": "Optional SQL-like filter expression."
+                  }
+                }
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              }
+            }
+          },
+          "update": {
+            "type": "object",
+            "description": "Field-level updates to apply. Polymorphic - one of set/unset/append.",
+            "properties": {
+              "set": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "unset": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "append": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "if_match": {
+            "type": "object",
+            "description": "Optimistic concurrency check.",
+            "properties": {
+              "version": {
+                "type": "integer"
+              },
+              "etag": {
+                "type": "string"
+              }
+            }
+          },
+          "batch_size": {
+            "type": "integer",
+            "default": 100
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "actor",
+          "selector",
+          "update"
+        ]
+      },
+      "returns": "Bulk update summary including total matched, updated, skipped (e.g. due to concurrency), and failures."
+    },
+    {
+      "name": "alarm_bulk_delete",
+      "description": "Soft- or hard-delete (or archive) many alarm entities in a single operation with dependency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/alarm_id"
+            }
+          },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "older_than": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              }
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft_delete",
+              "hard_delete",
+              "archive"
+            ],
+            "default": "soft_delete"
+          },
+          "cascade": {
+            "type": "object",
+            "description": "Whether to cascade to related entities.",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "include": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "List of relationship names to cascade through."
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false,
+            "description": "Skip non-critical dependency checks."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Bulk delete result including counts of deleted/archived/skipped entities, dependency conflicts, and a tombstone reference."
+    },
+    {
+      "name": "alarm_bulk_export",
+      "description": "Export alarm entities (and optional related data) to a downloadable artifact, optionally redacting sensitive fields.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/alarm_id"
+                }
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_within": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "expression": {
+                "type": "string"
+              }
+            }
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "json",
+              "parquet",
+              "ndjson",
+              "xlsx"
+            ],
+            "default": "json"
+          },
+          "include_related": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names of related collections to include."
+          },
+          "field_projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Subset of top-level fields to include."
+          },
+          "redact_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "delivery_type": {
+                "type": "string",
+                "enum": [
+                  "download_url",
+                  "s3",
+                  "sftp",
+                  "email"
+                ],
+                "default": "download_url"
+              },
+              "destination": {
+                "type": "string",
+                "description": "Destination URI/email depending on delivery_type."
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "delivery_type"
+            ]
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "actor",
+          "format",
+          "delivery"
+        ]
+      },
+      "returns": "Export job descriptor including job_id, expected size, status, and delivery details."
+    },
+    {
+      "name": "alarm_search_advanced",
+      "description": "Faceted, full-text and structured search across alarm entities with relevance ranking and facet aggregations.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "query": {
+            "type": "string",
+            "description": "Optional full-text query."
+          },
+          "entity_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "alarm_record",
+                "alarm",
+                "alarm_group",
+                "suppression_rule",
+                "operator",
+                "network_element"
+              ]
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "owner_id": {
+                "type": "string"
+              },
+              "created_within": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_within": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "custom_expression": {
+                "type": "string"
+              }
+            }
+          },
+          "facets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Field names to compute aggregations over."
+          },
+          "highlight": {
+            "type": "boolean",
+            "default": false
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Search response with ranked hits, total count, facet bucket counts, and pagination cursor."
+    },
+    {
+      "name": "alarm_subscribe_to_events",
+      "description": "Create a notification subscription for alarm events using one or more channels and event-type filters.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "subscription_name": {
+            "type": "string"
+          },
+          "event_types": {
+            "type": "array",
+            "description": "Event types to subscribe to.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "created",
+                "updated",
+                "deleted",
+                "status_changed",
+                "failed",
+                "approved",
+                "rejected",
+                "rolled_back",
+                "completed",
+                "escalated"
+              ]
+            }
+          },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/alarm_id"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "severity": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warning",
+                    "minor",
+                    "major",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/notification_channel"
+            },
+            "minItems": 1
+          },
+          "delivery_policy": {
+            "type": "object",
+            "properties": {
+              "rate_limit_per_minute": {
+                "type": "integer"
+              },
+              "deduplicate_within_seconds": {
+                "type": "integer"
+              },
+              "retry_policy": {
+                "type": "object",
+                "properties": {
+                  "max_attempts": {
+                    "type": "integer",
+                    "default": 5
+                  },
+                  "backoff_strategy": {
+                    "type": "string",
+                    "enum": [
+                      "fixed",
+                      "linear",
+                      "exponential"
+                    ],
+                    "default": "exponential"
+                  }
+                }
+              }
+            }
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "subscription_name",
+          "event_types",
+          "channels"
+        ]
+      },
+      "returns": "Subscription descriptor including subscription_id, enabled status, and validated channel configurations."
+    },
+    {
+      "name": "alarm_list_webhook_deliveries",
+      "description": "List webhook delivery attempts for alarm notifications with filters for status, time window, and subscription.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "subscription_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "delivered",
+                "failed",
+                "retrying",
+                "dead_letter"
+              ]
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "include_payload": {
+            "type": "boolean",
+            "default": false
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Paginated list of webhook delivery records including attempt counts, response codes, and last error."
+    },
+    {
+      "name": "alarm_get_audit_log",
+      "description": "Retrieve the audit trail for one or more alarm entities with actor, change, and diff information.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/alarm_id"
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "actor_filter": {
+            "type": "object",
+            "properties": {
+              "actor_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "event_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "create",
+                "update",
+                "delete",
+                "status_change",
+                "approval",
+                "rollback",
+                "access"
+              ]
+            }
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": true
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Paginated audit events ordered by time with field-level diffs when requested."
+    },
+    {
+      "name": "alarm_schedule_recurring_job",
+      "description": "Schedule a recurring job (e.g. health probe, report generation, sync) related to alarm on a cron/interval/calendar schedule.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "job_name": {
+            "type": "string"
+          },
+          "job_kind": {
+            "type": "string",
+            "enum": [
+              "health_check",
+              "report",
+              "sync",
+              "rotation",
+              "cleanup",
+              "reconciliation",
+              "snapshot"
+            ]
+          },
+          "target": {
+            "type": "object",
+            "description": "Target scope of the job (entity ids and/or filter).",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/alarm_id"
+                }
+              },
+              "filter_expression": {
+                "type": "string"
+              }
+            }
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "parameters_payload": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Job-specific parameters passed at each run."
+          },
+          "notification_channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/notification_channel"
+            }
+          },
+          "max_concurrency": {
+            "type": "integer",
+            "default": 1
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "job_name",
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Scheduled job descriptor including job_id, next_run_at, enablement status, and schedule summary."
+    },
+    {
+      "name": "alarm_simulate_operation",
+      "description": "Simulate a alarm operation (e.g. change, deploy, terminate) without committing changes, returning predicted effects and warnings.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "create",
+              "update",
+              "delete",
+              "deploy",
+              "rollback",
+              "scale",
+              "migrate",
+              "terminate",
+              "renew"
+            ]
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/alarm_id"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The would-be request payload."
+          },
+          "scenario": {
+            "type": "object",
+            "description": "Optional what-if scenario overrides.",
+            "properties": {
+              "assume_load_factor": {
+                "type": "number"
+              },
+              "assume_failures": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "assume_traffic_pattern": {
+                "type": "string"
+              }
+            }
+          },
+          "snapshot_id": {
+            "type": "string",
+            "description": "Optional snapshot id to simulate against a frozen state."
+          },
+          "depth": {
+            "type": "string",
+            "enum": [
+              "shallow",
+              "deep"
+            ],
+            "default": "deep"
+          },
+          "include_cost_impact": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "operation"
+        ]
+      },
+      "returns": "Simulation report with predicted state diff, dependency impacts, warnings, errors, and cost estimate."
+    },
+    {
+      "name": "alarm_request_approval",
+      "description": "Open an approval request for a pending alarm change, with reviewers, justification, and SLA.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/alarm_id"
+          },
+          "change_summary": {
+            "type": "string"
+          },
+          "change_payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "approver_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "approver_id"
+              ]
+            },
+            "minItems": 1
+          },
+          "policy": {
+            "type": "object",
+            "properties": {
+              "quorum": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "veto_roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "auto_approve_if_no_response_hours": {
+                "type": "integer"
+              }
+            }
+          },
+          "sla_hours": {
+            "type": "integer"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "tags": {
+            "$ref": "#/shared_entities/tag_set"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id",
+          "change_summary",
+          "approvers"
+        ]
+      },
+      "returns": "Approval request record including approval_request_id, status, due_at, and current quorum."
+    },
+    {
+      "name": "alarm_record_approval_decision",
+      "description": "Record an individual approver's decision on a pending alarm approval request and advance the workflow.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "approval_request_id": {
+            "type": "string"
+          },
+          "decision": {
+            "$ref": "#/shared_entities/approval_decision"
+          },
+          "side_effects": {
+            "type": "object",
+            "description": "Optional side effects of this decision.",
+            "properties": {
+              "auto_execute_on_final_approval": {
+                "type": "boolean",
+                "default": false
+              },
+              "notify_requester": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "required": [
+          "actor",
+          "approval_request_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval request state including remaining required approvers and whether the request is now finalized."
+    },
+    {
+      "name": "alarm_add_comment",
+      "description": "Attach a comment, internal note, or @-mention to a alarm entity for collaboration.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/alarm_id"
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown or rich-text body of the comment."
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "internal",
+              "customer_visible",
+              "partner_visible"
+            ],
+            "default": "internal"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "User IDs to notify."
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "parent_comment_id": {
+            "type": "string",
+            "description": "If replying to a thread."
+          },
+          "tags": {
+            "$ref": "#/shared_entities/tag_set"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id",
+          "body"
+        ]
+      },
+      "returns": "Created comment record including comment_id, created_at, and notification fan-out summary."
+    },
+    {
+      "name": "alarm_attach_evidence",
+      "description": "Attach one or more evidence files (logs, screenshots, contracts, diagnostics) to a alarm entity.",
+      "stage": "evidence",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/alarm_id"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            },
+            "minItems": 1
+          },
+          "evidence_type": {
+            "type": "string",
+            "enum": [
+              "diagnostic",
+              "screenshot",
+              "log_excerpt",
+              "contract",
+              "supporting_doc",
+              "telemetry"
+            ]
+          },
+          "redaction_policy": {
+            "type": "object",
+            "properties": {
+              "redact_pii": {
+                "type": "boolean",
+                "default": true
+              },
+              "redacted_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id",
+          "attachments"
+        ]
+      },
+      "returns": "Attachment registration result with stored attachment IDs, virus-scan status, and any redactions applied."
+    },
+    {
+      "name": "alarm_create_snapshot",
+      "description": "Create a point-in-time snapshot of a alarm entity (and optionally its dependencies) for restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/alarm_id"
+          },
+          "snapshot_name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "include_related": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "exclude_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "retention_days": {
+            "type": "integer",
+            "default": 90
+          },
+          "tags": {
+            "$ref": "#/shared_entities/tag_set"
+          },
+          "encryption_kms_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id",
+          "snapshot_name"
+        ]
+      },
+      "returns": "Snapshot descriptor including snapshot_id, size, scope manifest, and retention date."
+    },
+    {
+      "name": "alarm_restore_snapshot",
+      "description": "Restore a alarm entity from a previously captured snapshot, with conflict-resolution and dry-run options.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_entity_id": {
+            "$ref": "#/shared_entities/alarm_id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "create_new"
+            ],
+            "default": "overwrite"
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "snapshot_wins",
+              "current_wins",
+              "manual_resolution"
+            ],
+            "default": "snapshot_wins"
+          },
+          "include_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "exclude_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore result including restored entity id, conflicts, applied paths, and the resulting state version."
+    },
+    {
+      "name": "alarm_get_kpi_metrics",
+      "description": "Compute aggregated KPIs and time series for alarm activity over a time range, grouped by chosen dimensions.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "granularity": {
+            "type": "string",
+            "enum": [
+              "minute",
+              "hour",
+              "day",
+              "week",
+              "month"
+            ],
+            "default": "day"
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Metric names (e.g., creations, success_rate, latency_p95)."
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "entity_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/alarm_id"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "compare_with_previous_period": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "actor",
+          "time_range",
+          "metrics"
+        ]
+      },
+      "returns": "Aggregated KPI snapshot with per-bucket time series, totals, and optional period-over-period deltas."
+    },
+    {
+      "name": "alarm_pin_to_dashboard",
+      "description": "Pin a alarm view, metric, or saved query to an operations dashboard for at-a-glance monitoring.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "dashboard_id": {
+            "type": "string"
+          },
+          "tile_type": {
+            "type": "string",
+            "enum": [
+              "metric",
+              "list",
+              "kpi",
+              "timeseries",
+              "alert_feed",
+              "map"
+            ]
+          },
+          "tile_config": {
+            "type": "object",
+            "description": "Tile-type-specific configuration.",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "metric_name": {
+                "type": "string"
+              },
+              "filter_expression": {
+                "type": "string"
+              },
+              "time_window_seconds": {
+                "type": "integer"
+              },
+              "thresholds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "level": {
+                      "type": "string",
+                      "enum": [
+                        "info",
+                        "warn",
+                        "critical"
+                      ]
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte"
+                      ]
+                    },
+                    "value": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "level",
+                    "operator",
+                    "value"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "title"
+            ]
+          },
+          "position": {
+            "type": "object",
+            "properties": {
+              "row": {
+                "type": "integer"
+              },
+              "column": {
+                "type": "integer"
+              },
+              "width": {
+                "type": "integer"
+              },
+              "height": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "required": [
+          "actor",
+          "dashboard_id",
+          "tile_type",
+          "tile_config"
+        ]
+      },
+      "returns": "Created dashboard tile descriptor including tile_id, dashboard_id, and effective configuration."
+    },
+    {
+      "name": "alarm_upsert_policy",
+      "description": "Create or update a governance/automation policy that applies to alarm entities with rule conditions and actions.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "entity_filter": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/policy_rule"
+            },
+            "minItems": 1
+          },
+          "enforcement": {
+            "type": "string",
+            "enum": [
+              "advisory",
+              "blocking",
+              "auto_remediate"
+            ],
+            "default": "advisory"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "effective_to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version_note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "name",
+          "rules"
+        ]
+      },
+      "returns": "Policy descriptor including policy_id, current version, rule count, and validation warnings."
+    },
+    {
+      "name": "alarm_evaluate_policy",
+      "description": "Evaluate one or more policies against a given alarm payload or live entity and return decisions and matched rules.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "policy_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "target": {
+            "type": "object",
+            "description": "Either an entity reference or an inline payload to evaluate.",
+            "properties": {
+              "entity_id": {
+                "$ref": "#/shared_entities/alarm_id"
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "context": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "advisory",
+              "blocking",
+              "auto_remediate"
+            ],
+            "default": "advisory"
+          },
+          "explain": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "target"
+        ]
+      },
+      "returns": "Policy evaluation report listing decisions (allow/deny/remediate), matched rules, and explanations per rule."
+    },
+    {
+      "name": "alarm_get_dependency_graph",
+      "description": "Return the dependency or association graph for a alarm entity, including inbound and outbound links.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/alarm_id"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "inbound",
+              "outbound",
+              "both"
+            ],
+            "default": "both"
+          },
+          "max_depth": {
+            "type": "integer",
+            "default": 2,
+            "minimum": 1,
+            "maximum": 10
+          },
+          "edge_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "include_metadata": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id"
+        ]
+      },
+      "returns": "Graph response containing nodes and edges up to the requested depth with edge labels and metadata."
+    },
+    {
+      "name": "alarm_manage_links_and_tags",
+      "description": "Add, remove or replace tags and cross-entity links for a alarm entity in a single atomic operation.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/alarm_id"
+          },
+          "tags": {
+            "type": "object",
+            "properties": {
+              "set": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "remove": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "links": {
+            "type": "array",
+            "description": "Links to add, remove, or update.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "add",
+                    "remove",
+                    "update"
+                  ]
+                },
+                "link_type": {
+                  "type": "string"
+                },
+                "target_entity_type": {
+                  "type": "string"
+                },
+                "target_id": {
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "op",
+                "link_type",
+                "target_entity_type",
+                "target_id"
+              ]
+            }
+          },
+          "if_match_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id"
+        ]
+      },
+      "returns": "Updated entity reference with applied tag and link changes plus any conflicts encountered."
+    }
+  ]
+}

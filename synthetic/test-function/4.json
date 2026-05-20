@@ -1,0 +1,6879 @@
+{
+  "workflow_name": "customer_retention_workflow",
+  "description": "End-to-end telco CRM customer retention workflow from risk detection to offer execution and follow-up.",
+  "domain": "telco_crm/customer_retention",
+  "shared_entities": {
+    "customer_id": {
+      "type": "string",
+      "description": "Unique customer identifier in CRM"
+    },
+    "account_id": {
+      "type": "string",
+      "description": "Billing or subscription account identifier"
+    },
+    "case_id": {
+      "type": "string",
+      "description": "Retention case or incident identifier"
+    },
+    "offer_id": {
+      "type": "string",
+      "description": "Unique retention offer identifier"
+    },
+    "interaction_id": {
+      "type": "string",
+      "description": "Identifier for a specific customer interaction (call, chat, store visit)"
+    },
+    "channel": {
+      "type": "string",
+      "enum": [
+        "call_center",
+        "retail_store",
+        "website",
+        "mobile_app",
+        "outbound_call",
+        "sms",
+        "email",
+        "social"
+      ],
+      "description": "Interaction or communication channel"
+    },
+    "contact_point": {
+      "type": "object",
+      "description": "Contact information for a customer",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "mobile",
+            "home_phone",
+            "work_phone",
+            "email",
+            "postal_address"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "description": "Phone number, email address, or address ID"
+        },
+        "preferred": {
+          "type": "boolean",
+          "description": "Whether this is the preferred contact point"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ]
+    },
+    "subscription": {
+      "type": "object",
+      "description": "Customer subscription or plan information",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "active",
+            "pending_cancel",
+            "suspended",
+            "cancelled"
+          ]
+        },
+        "plan_code": {
+          "type": "string"
+        },
+        "plan_type": {
+          "type": "string",
+          "enum": [
+            "mobile_postpaid",
+            "mobile_prepaid",
+            "fixed_broadband",
+            "fixed_voice",
+            "tv",
+            "bundle"
+          ]
+        },
+        "contract_end_date": {
+          "type": "string",
+          "format": "date"
+        },
+        "monthly_fee": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "subscription_id",
+        "status",
+        "plan_type"
+      ]
+    },
+    "churn_risk_score": {
+      "type": "object",
+      "description": "Churn risk score and explanation",
+      "properties": {
+        "score": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        },
+        "band": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "factors": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "weight": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "code",
+              "description"
+            ]
+          }
+        },
+        "generated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "score",
+        "band",
+        "generated_at"
+      ]
+    },
+    "retention_case": {
+      "type": "object",
+      "description": "Retention case summary",
+      "properties": {
+        "case_id": {
+          "type": "string"
+        },
+        "customer_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "open",
+            "in_progress",
+            "awaiting_customer",
+            "offer_pending_activation",
+            "resolved_retained",
+            "resolved_lost",
+            "cancelled"
+          ]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "urgent"
+          ]
+        },
+        "reason_codes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "case_id",
+        "customer_id",
+        "status",
+        "created_at"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "identify_at_risk_customers",
+      "description": "Search and score customers at risk of churn based on filters and churn model.",
+      "stage": "detect",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "segment_filters": {
+            "type": "object",
+            "description": "Filters to constrain search space before scoring.",
+            "properties": {
+              "plan_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "mobile_postpaid",
+                    "mobile_prepaid",
+                    "fixed_broadband",
+                    "fixed_voice",
+                    "tv",
+                    "bundle"
+                  ]
+                }
+              },
+              "tenure_months": {
+                "type": "object",
+                "properties": {
+                  "min": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "max": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              },
+              "arpu_range": {
+                "type": "object",
+                "properties": {
+                  "min": {
+                    "type": "number"
+                  },
+                  "max": {
+                    "type": "number"
+                  }
+                }
+              },
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "risk_band": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "critical"
+            ],
+            "description": "Minimum churn risk band to include."
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 100
+          },
+          "include_scores": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_subscriptions": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "risk_band"
+        ]
+      },
+      "returns": "List of at-risk customer_ids with churn scores, basic profile, and optional subscription summaries."
+    },
+    {
+      "name": "get_customer_retention_profile",
+      "description": "Retrieve a 360\u00b0 retention profile for a customer including churn risk, usage, complaints, and current commitments.",
+      "stage": "diagnose",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional sections to include.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "subscriptions",
+                "billing_history",
+                "usage_trends",
+                "recent_tickets",
+                "past_retention_cases",
+                "offer_history",
+                "contact_points"
+              ]
+            }
+          }
+        },
+        "required": [
+          "customer_id"
+        ]
+      },
+      "returns": "Comprehensive retention-oriented customer profile including churn_risk_score, key factors, subscriptions, and interaction history."
+    },
+    {
+      "name": "open_retention_case",
+      "description": "Create a new retention case for a customer, typically when they express intent to cancel or are flagged high risk.",
+      "stage": "initiate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "account_id": {
+            "$ref": "#/shared_entities/account_id"
+          },
+          "trigger_source": {
+            "type": "string",
+            "enum": [
+              "customer_cancellation_request",
+              "proactive_outreach",
+              "service_complaint",
+              "billing_dispute",
+              "network_issue",
+              "usage_drop",
+              "contract_expiry"
+            ]
+          },
+          "channel": {
+            "$ref": "#/shared_entities/channel"
+          },
+          "interaction_context": {
+            "type": "object",
+            "description": "Context of the interaction where the case was opened.",
+            "properties": {
+              "interaction_id": {
+                "$ref": "#/shared_entities/interaction_id"
+              },
+              "agent_id": {
+                "type": "string"
+              },
+              "notes": {
+                "type": "string"
+              },
+              "customer_stated_intent": {
+                "type": "string",
+                "enum": [
+                  "cancel_all_services",
+                  "cancel_specific_service",
+                  "downgrade",
+                  "price_complaint",
+                  "quality_complaint",
+                  "move_to_competitor",
+                  "just_exploring"
+                ]
+              },
+              "language": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "customer_stated_intent"
+            ]
+          },
+          "initial_reason_codes": {
+            "type": "array",
+            "description": "Initial classification of why the customer is at risk.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "priority_override": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "urgent"
+            ]
+          }
+        },
+        "required": [
+          "customer_id",
+          "trigger_source",
+          "channel",
+          "interaction_context"
+        ]
+      },
+      "returns": "New retention_case object including case_id, status, and initial prioritization."
+    },
+    {
+      "name": "recommend_retention_offers",
+      "description": "Generate personalized retention offer recommendations for a specific case.",
+      "stage": "diagnose",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "constraints": {
+            "type": "object",
+            "description": "Business guardrails and negotiation space.",
+            "properties": {
+              "max_discount_percentage": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "max_monthly_credit": {
+                "type": "number"
+              },
+              "allowed_offer_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "discount",
+                    "free_addon",
+                    "one_time_credit",
+                    "plan_migration",
+                    "device_subsidy",
+                    "contract_extension",
+                    "fee_waiver"
+                  ]
+                }
+              },
+              "disallowed_offer_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "target_outcome": {
+            "type": "string",
+            "enum": [
+              "prevent_cancellation",
+              "reduce_downgrade",
+              "recover_delinquent",
+              "upsell_bundle"
+            ]
+          },
+          "num_offers": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          }
+        },
+        "required": [
+          "case_id",
+          "customer_id"
+        ]
+      },
+      "returns": "Ranked list of offer candidates with offer_id, projected impact, revenue effect, and eligibility rationale."
+    },
+    {
+      "name": "get_offer_details",
+      "description": "Retrieve full details and eligibility for a specific retention offer for a customer.",
+      "stage": "evaluate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "offer_id": {
+            "$ref": "#/shared_entities/offer_id"
+          },
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "case_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "pricing_breakdown",
+                "term_conditions",
+                "eligibility_rules",
+                "conflict_check",
+                "simulation"
+              ]
+            }
+          }
+        },
+        "required": [
+          "offer_id",
+          "customer_id"
+        ]
+      },
+      "returns": "Full offer definition including benefits, commitments, pricing changes, and eligibility result for the given customer and case."
+    },
+    {
+      "name": "negotiate_custom_offer",
+      "description": "Construct and validate a custom retention offer proposal outside of standard catalog, with guardrails.",
+      "stage": "evaluate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "base_offer_id": {
+            "type": "string",
+            "description": "Optional catalog offer to use as baseline."
+          },
+          "proposal": {
+            "type": "object",
+            "description": "Proposed custom offer structure.",
+            "properties": {
+              "discount": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "percentage",
+                      "fixed_amount"
+                    ]
+                  },
+                  "value": {
+                    "type": "number"
+                  },
+                  "duration_months": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 36
+                  },
+                  "applies_to": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "monthly_fee",
+                        "addon_fees",
+                        "device_installments",
+                        "one_time_charges"
+                      ]
+                    }
+                  }
+                }
+              },
+              "one_time_credits": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "amount": {
+                      "type": "number"
+                    },
+                    "reason_code": {
+                      "type": "string"
+                    },
+                    "applied_bill_cycle": {
+                      "type": "string",
+                      "description": "Bill cycle identifier or YYYY-MM format."
+                    }
+                  },
+                  "required": [
+                    "amount",
+                    "reason_code"
+                  ]
+                }
+              },
+              "plan_changes": {
+                "type": "array",
+                "description": "Proposed migrations.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "subscription_id": {
+                      "type": "string"
+                    },
+                    "target_plan_code": {
+                      "type": "string"
+                    },
+                    "effective_date": {
+                      "type": "string",
+                      "format": "date"
+                    }
+                  },
+                  "required": [
+                    "subscription_id",
+                    "target_plan_code"
+                  ]
+                }
+              },
+              "contract_commitment": {
+                "type": "object",
+                "properties": {
+                  "term_months": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 36
+                  },
+                  "early_termination_fee": {
+                    "type": "number"
+                  },
+                  "grace_period_days": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 60
+                  }
+                }
+              }
+            }
+          },
+          "validation_mode": {
+            "type": "string",
+            "enum": [
+              "simulate",
+              "simulate_and_reserve_budget"
+            ],
+            "default": "simulate"
+          }
+        },
+        "required": [
+          "case_id",
+          "customer_id",
+          "proposal"
+        ]
+      },
+      "returns": "Validation result with projected revenue impact, policy compliance check, required approvals, and a provisional offer_id if allowed."
+    },
+    {
+      "name": "present_and_capture_offer_decision",
+      "description": "Record which offer was presented to the customer and capture their decision and feedback.",
+      "stage": "negotiate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "offer_id": {
+            "$ref": "#/shared_entities/offer_id"
+          },
+          "interaction": {
+            "type": "object",
+            "properties": {
+              "interaction_id": {
+                "$ref": "#/shared_entities/interaction_id"
+              },
+              "channel": {
+                "$ref": "#/shared_entities/channel"
+              },
+              "agent_id": {
+                "type": "string"
+              },
+              "presented_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "channel",
+              "presented_at"
+            ]
+          },
+          "customer_decision": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "accepted",
+                  "rejected",
+                  "deferred"
+                ]
+              },
+              "reason_code": {
+                "type": "string",
+                "description": "If rejected or deferred, capture main reason."
+              },
+              "free_text_feedback": {
+                "type": "string"
+              },
+              "follow_up_preference": {
+                "type": "object",
+                "properties": {
+                  "preferred_channel": {
+                    "$ref": "#/shared_entities/channel"
+                  },
+                  "best_time_window": {
+                    "type": "string",
+                    "description": "Free text or standardized time window label."
+                  }
+                }
+              }
+            },
+            "required": [
+              "status"
+            ]
+          }
+        },
+        "required": [
+          "case_id",
+          "offer_id",
+          "interaction",
+          "customer_decision"
+        ]
+      },
+      "returns": "Updated case with recorded offer presentation, decision outcome, and any scheduled follow-up tasks."
+    },
+    {
+      "name": "activate_retention_offer",
+      "description": "Apply an accepted retention offer to the customer account and subscriptions.",
+      "stage": "execute",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "offer_id": {
+            "$ref": "#/shared_entities/offer_id"
+          },
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "activation_options": {
+            "type": "object",
+            "properties": {
+              "effective_date": {
+                "type": "string",
+                "format": "date",
+                "description": "If omitted, defaults to immediate or next bill cycle per policy."
+              },
+              "apply_retroactively": {
+                "type": "boolean",
+                "default": false
+              },
+              "retroactive_months": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 6
+              },
+              "target_subscriptions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "description": "subscription_id values to scope activation."
+                }
+              }
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, only simulate changes without committing."
+          }
+        },
+        "required": [
+          "case_id",
+          "offer_id",
+          "customer_id"
+        ]
+      },
+      "returns": "Activation result including applied changes per subscription, billing adjustments, and updated case status."
+    },
+    {
+      "name": "get_retention_case",
+      "description": "Retrieve current status and history of a retention case.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "include_timeline": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_offers": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "case_id"
+        ]
+      },
+      "returns": "Retention_case object with optional event timeline, interactions, and associated offers."
+    },
+    {
+      "name": "update_retention_case",
+      "description": "Modify properties or add notes to an existing retention case.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "updates": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "open",
+                  "in_progress",
+                  "awaiting_customer",
+                  "offer_pending_activation",
+                  "resolved_retained",
+                  "resolved_lost",
+                  "cancelled"
+                ]
+              },
+              "priority": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "urgent"
+                ]
+              },
+              "reason_codes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "notes": {
+                "type": "array",
+                "description": "Append one or more notes to the case.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "author_id": {
+                      "type": "string"
+                    },
+                    "note_type": {
+                      "type": "string",
+                      "enum": [
+                        "agent_note",
+                        "system_update",
+                        "customer_feedback"
+                      ]
+                    },
+                    "text": {
+                      "type": "string"
+                    },
+                    "created_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    }
+                  },
+                  "required": [
+                    "note_type",
+                    "text"
+                  ]
+                }
+              },
+              "next_action": {
+                "type": "object",
+                "description": "Optional update to next planned action.",
+                "properties": {
+                  "action_type": {
+                    "type": "string",
+                    "enum": [
+                      "outbound_call",
+                      "send_proposal",
+                      "await_payment",
+                      "await_customer_decision",
+                      "monitor_usage",
+                      "none"
+                    ]
+                  },
+                  "due_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "owner_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "case_id",
+          "updates"
+        ]
+      },
+      "returns": "Updated retention_case details reflecting applied changes."
+    },
+    {
+      "name": "cancel_or_rollback_retention_offer",
+      "description": "Cancel a pending retention offer or rollback an already activated offer in case of error or customer withdrawal.",
+      "stage": "recover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "offer_id": {
+            "$ref": "#/shared_entities/offer_id"
+          },
+          "case_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "cancel_pending",
+              "rollback_activated"
+            ]
+          },
+          "reason": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "customer_withdrew",
+                  "activation_failed",
+                  "incorrect_config",
+                  "policy_violation",
+                  "duplicate_case",
+                  "other"
+                ]
+              },
+              "details": {
+                "type": "string"
+              },
+              "reported_by": {
+                "type": "string",
+                "enum": [
+                  "agent",
+                  "system",
+                  "customer"
+                ]
+              }
+            },
+            "required": [
+              "code"
+            ]
+          },
+          "rollback_options": {
+            "type": "object",
+            "description": "Applicable when mode=rollback_activated.",
+            "properties": {
+              "restore_previous_plan": {
+                "type": "boolean",
+                "default": true
+              },
+              "reverse_credits": {
+                "type": "boolean",
+                "default": true
+              },
+              "effective_date": {
+                "type": "string",
+                "format": "date"
+              },
+              "notify_customer": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "offer_id",
+          "case_id",
+          "mode",
+          "reason"
+        ]
+      },
+      "returns": "Result of cancellation or rollback action, including any residual adjustments and updated case/offer status."
+    },
+    {
+      "name": "schedule_and_track_follow_up",
+      "description": "Create or update follow-up tasks and track post-retention outcomes for a customer.",
+      "stage": "follow_up",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "follow_ups": {
+            "type": "array",
+            "description": "One or more follow-up instructions.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "task_id": {
+                  "type": "string",
+                  "description": "If provided, update existing task; otherwise create new."
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "nps_survey",
+                    "usage_check",
+                    "billing_check",
+                    "outbound_health_call",
+                    "email_check_in"
+                  ]
+                },
+                "scheduled_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "assigned_to": {
+                  "type": "string",
+                  "description": "Agent id or team id."
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "in_progress",
+                    "completed",
+                    "cancelled"
+                  ]
+                },
+                "metadata": {
+                  "type": "object",
+                  "description": "Arbitrary key-value extensions, like template IDs or survey channels."
+                }
+              },
+              "required": [
+                "type",
+                "scheduled_at"
+              ]
+            }
+          },
+          "post_retention_outcome": {
+            "type": "object",
+            "description": "Optional explicit recording of medium-term outcome.",
+            "properties": {
+              "period": {
+                "type": "string",
+                "enum": [
+                  "30_days",
+                  "60_days",
+                  "90_days",
+                  "180_days"
+                ]
+              },
+              "still_active": {
+                "type": "boolean"
+              },
+              "net_revenue_change": {
+                "type": "number",
+                "description": "Change in monthly recurring revenue vs pre-case baseline."
+              },
+              "nps_score": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 10
+              }
+            }
+          }
+        },
+        "required": [
+          "case_id",
+          "customer_id",
+          "follow_ups"
+        ]
+      },
+      "returns": "Details of created/updated follow-up tasks and updated case outcome metrics if provided."
+    },
+    {
+      "name": "search_retention_cases",
+      "description": "Faceted search across customer retention cases with rich filters, time windows, pagination, and aggregations.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "description": "Free-text and structured query.",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search expression."
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fuzzy": {
+                "type": "boolean",
+                "default": false
+              },
+              "boost": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string"
+                    },
+                    "weight": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "weight"
+                  ]
+                }
+              }
+            }
+          },
+          "filters": {
+            "type": "object",
+            "description": "Structured filters on common attributes.",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "draft",
+                    "pending",
+                    "in_progress",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "closed"
+                  ]
+                }
+              },
+              "priority": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "normal",
+                    "high",
+                    "critical"
+                  ]
+                }
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "custom_fields": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "in",
+                        "gt",
+                        "lt",
+                        "contains",
+                        "regex"
+                      ]
+                    },
+                    "value": {}
+                  },
+                  "required": [
+                    "key",
+                    "op"
+                  ]
+                }
+              }
+            }
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Time range filter.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur."
+              },
+              "granularity": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              }
+            }
+          },
+          "facets": {
+            "type": "array",
+            "description": "Facets to compute alongside the result set.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 200
+                },
+                "min_count": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "sort": {
+            "type": "array",
+            "description": "Ordered sort directives.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "direction": {
+                  "type": "string",
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ]
+                },
+                "nulls": {
+                  "type": "string",
+                  "enum": [
+                    "first",
+                    "last"
+                  ]
+                }
+              },
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls.",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 25
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque continuation cursor."
+              },
+              "include_total": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Fields to include in the result objects."
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "max_fragments": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              }
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "explain": {
+            "type": "boolean",
+            "default": false,
+            "description": "Return scoring explanations."
+          }
+        }
+      },
+      "returns": "A page of customer retention case summaries with facet aggregations, pagination cursor, and optional scoring metadata."
+    },
+    {
+      "name": "bulk_create_retention_cases",
+      "description": "Create multiple customer retention cases in a single atomic or best-effort batch with idempotency and partial-commit options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 5000,
+            "items": {
+              "type": "object",
+              "properties": {
+                "client_ref": {
+                  "type": "string",
+                  "description": "Caller-supplied idempotency key."
+                },
+                "payload": {
+                  "type": "object",
+                  "description": "Customer retention case payload."
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "owner_id": {
+                  "type": "string"
+                },
+                "priority": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "normal",
+                    "high",
+                    "critical"
+                  ]
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "validate_only"
+            ],
+            "default": "best_effort"
+          },
+          "deduplication": {
+            "type": "object",
+            "properties": {
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "client_ref",
+                  "hash",
+                  "none"
+                ]
+              },
+              "hash_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "concurrency": {
+            "type": "object",
+            "properties": {
+              "max_parallel": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              },
+              "throttle_per_second": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "on_error": {
+            "type": "string",
+            "enum": [
+              "abort",
+              "skip",
+              "quarantine"
+            ],
+            "default": "skip"
+          },
+          "notify_on_completion": {
+            "type": "object",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              },
+              "recipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "ttl_seconds": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Job retention TTL."
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "returns": "A bulk-job descriptor with per-item outcomes, created customer retention case ids, error reasons for failures, and an aggregate counts summary."
+    },
+    {
+      "name": "bulk_update_retention_cases",
+      "description": "Apply patch-style updates to many customer retention cases with optimistic concurrency and partial-failure handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 5000,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "$ref": "#/shared_entities/case_id"
+                },
+                "expected_version": {
+                  "type": "integer",
+                  "description": "Optimistic concurrency token."
+                },
+                "patch": {
+                  "type": "array",
+                  "description": "JSON-Patch operations.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "op": {
+                        "type": "string",
+                        "enum": [
+                          "add",
+                          "remove",
+                          "replace",
+                          "move",
+                          "copy",
+                          "test"
+                        ]
+                      },
+                      "path": {
+                        "type": "string"
+                      },
+                      "value": {},
+                      "from": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "op",
+                      "path"
+                    ]
+                  }
+                },
+                "reason_code": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "validate_only"
+            ]
+          },
+          "if_match": {
+            "type": "string",
+            "description": "Bulk-level ETag for optimistic concurrency."
+          },
+          "on_error": {
+            "type": "string",
+            "enum": [
+              "abort",
+              "skip",
+              "quarantine"
+            ]
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "ticket_id": {
+                "type": "string"
+              },
+              "evidence_refs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "notify": {
+            "type": "object",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              },
+              "on_failures_only": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "concurrency": {
+            "type": "object",
+            "properties": {
+              "max_parallel": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              }
+            }
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-item update outcomes (success/failure with reason), new versions for each customer retention case, and a summary of skipped and quarantined items."
+    },
+    {
+      "name": "bulk_archive_retention_cases",
+      "description": "Archive or soft-delete many customer retention cases in one call with retention, audit reason, and webhook notification.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 5000,
+            "items": {
+              "$ref": "#/shared_entities/case_id"
+            }
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "soft_delete",
+              "archive",
+              "purge"
+            ],
+            "default": "soft_delete"
+          },
+          "retention": {
+            "type": "object",
+            "properties": {
+              "retain_days": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3650
+              },
+              "legal_hold": {
+                "type": "boolean",
+                "default": false
+              },
+              "destination": {
+                "type": "string",
+                "enum": [
+                  "cold_storage",
+                  "archive_bucket",
+                  "delete_after_retention"
+                ]
+              }
+            }
+          },
+          "audit": {
+            "type": "object",
+            "properties": {
+              "reason_code": {
+                "type": "string"
+              },
+              "reason_text": {
+                "type": "string"
+              },
+              "ticket_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "reason_code"
+            ]
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "delete_related": {
+                "type": "boolean",
+                "default": false
+              },
+              "related_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "notify": {
+            "type": "object",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              },
+              "recipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "approval_request_id": {
+            "type": "string",
+            "description": "Required for purge operation."
+          }
+        },
+        "required": [
+          "target_ids",
+          "operation"
+        ]
+      },
+      "returns": "Per-id outcome, new lifecycle state for each customer retention case, scheduled purge date if applicable, and a job id for tracking."
+    },
+    {
+      "name": "export_retention_cases",
+      "description": "Export customer retention case datasets to an external sink in CSV, JSON, Parquet, or NDJSON with filters and signed-URL delivery.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "time_window": {
+                "type": "object",
+                "description": "Time range filter.",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur."
+                  },
+                  "granularity": {
+                    "type": "string",
+                    "enum": [
+                      "minute",
+                      "hour",
+                      "day",
+                      "week",
+                      "month"
+                    ]
+                  }
+                }
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "format": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "json",
+                  "ndjson",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "compression": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "gzip",
+                  "zstd"
+                ]
+              },
+              "csv_options": {
+                "type": "object",
+                "properties": {
+                  "delimiter": {
+                    "type": "string"
+                  },
+                  "quote": {
+                    "type": "string"
+                  },
+                  "header": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                }
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "destination": {
+            "type": "object",
+            "description": "Polymorphic destination descriptor.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "signed_url",
+                  "s3",
+                  "gcs",
+                  "sftp",
+                  "azure_blob"
+                ]
+              },
+              "s3": {
+                "type": "object",
+                "properties": {
+                  "bucket": {
+                    "type": "string"
+                  },
+                  "key_prefix": {
+                    "type": "string"
+                  },
+                  "region": {
+                    "type": "string"
+                  }
+                }
+              },
+              "gcs": {
+                "type": "object",
+                "properties": {
+                  "bucket": {
+                    "type": "string"
+                  },
+                  "key_prefix": {
+                    "type": "string"
+                  }
+                }
+              },
+              "sftp": {
+                "type": "object",
+                "properties": {
+                  "host": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "credential_ref": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_rows": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "split_by": {
+            "type": "string",
+            "description": "Field to shard output by, e.g., tenant_id."
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "kms_key_id": {
+                "type": "string"
+              },
+              "passphrase_ref": {
+                "type": "string"
+              }
+            }
+          },
+          "notify": {
+            "type": "object",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              }
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "format",
+          "destination"
+        ]
+      },
+      "returns": "An export job descriptor with job id, estimated row count, signed-URL(s) when applicable, and asynchronous completion event details."
+    },
+    {
+      "name": "import_retention_cases",
+      "description": "Bulk-import customer retention case records from a file or staging table with schema mapping, validation, and quarantine handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "description": "Polymorphic import source.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "uploaded_file",
+                  "s3",
+                  "gcs",
+                  "sftp",
+                  "inline"
+                ]
+              },
+              "file_uri": {
+                "type": "string"
+              },
+              "inline_rows": {
+                "type": "array",
+                "items": {
+                  "type": "object"
+                }
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "json",
+                  "ndjson",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "csv_options": {
+                "type": "object",
+                "properties": {
+                  "delimiter": {
+                    "type": "string"
+                  },
+                  "header": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "mapping": {
+            "type": "array",
+            "description": "Column-to-field mapping with transforms.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "source_column": {
+                  "type": "string"
+                },
+                "target_field": {
+                  "type": "string"
+                },
+                "transform": {
+                  "type": "string",
+                  "enum": [
+                    "none",
+                    "trim",
+                    "uppercase",
+                    "lowercase",
+                    "to_int",
+                    "to_date",
+                    "regex_extract"
+                  ]
+                },
+                "regex": {
+                  "type": "string"
+                },
+                "default": {}
+              },
+              "required": [
+                "source_column",
+                "target_field"
+              ]
+            }
+          },
+          "validation": {
+            "type": "object",
+            "properties": {
+              "schema_ref": {
+                "type": "string"
+              },
+              "strict": {
+                "type": "boolean"
+              },
+              "max_errors_pct": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              }
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "validate_only",
+              "stage",
+              "commit"
+            ],
+            "default": "stage"
+          },
+          "deduplication": {
+            "type": "object",
+            "properties": {
+              "key_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "on_duplicate": {
+                "type": "string",
+                "enum": [
+                  "skip",
+                  "update",
+                  "error"
+                ]
+              }
+            }
+          },
+          "concurrency": {
+            "type": "object",
+            "properties": {
+              "batch_size": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_parallel": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50
+              }
+            }
+          },
+          "notify": {
+            "type": "object",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              }
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "source",
+          "mapping"
+        ]
+      },
+      "returns": "An import job descriptor with counts of valid, invalid, and quarantined rows, sample error messages, and identifiers of created or updated customer retention cases."
+    },
+    {
+      "name": "subscribe_to_retention_case_events",
+      "description": "Register a webhook or message-bus subscription to receive customer retention case lifecycle events with filtering and retry policy.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "owner_team": {
+                "type": "string"
+              },
+              "contact_email": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name"
+            ]
+          },
+          "transport": {
+            "type": "object",
+            "description": "Polymorphic transport descriptor.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "webhook",
+                  "kafka",
+                  "amqp",
+                  "sns",
+                  "eventbridge"
+                ]
+              },
+              "webhook": {
+                "type": "object",
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri"
+                  },
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "POST",
+                      "PUT"
+                    ]
+                  },
+                  "secret_ref": {
+                    "type": "string"
+                  },
+                  "headers": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "kafka": {
+                "type": "object",
+                "properties": {
+                  "bootstrap_servers": {
+                    "type": "string"
+                  },
+                  "topic": {
+                    "type": "string"
+                  },
+                  "credential_ref": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "retention_case.created",
+                "retention_case.updated",
+                "retention_case.completed",
+                "retention_case.failed",
+                "retention_case.cancelled",
+                "retention_case.archived"
+              ]
+            },
+            "minItems": 1
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "matches"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "retry_policy": {
+            "type": "object",
+            "properties": {
+              "max_attempts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              },
+              "backoff": {
+                "type": "string",
+                "enum": [
+                  "fixed",
+                  "exponential",
+                  "jitter"
+                ]
+              },
+              "dead_letter": {
+                "type": "string"
+              }
+            }
+          },
+          "rate_limit": {
+            "type": "object",
+            "properties": {
+              "max_per_second": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "burst": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "signature": {
+            "type": "object",
+            "properties": {
+              "algorithm": {
+                "type": "string",
+                "enum": [
+                  "HMAC-SHA256",
+                  "HMAC-SHA512",
+                  "ED25519"
+                ]
+              },
+              "signing_key_ref": {
+                "type": "string"
+              }
+            }
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "subscriber",
+          "transport",
+          "event_types"
+        ]
+      },
+      "returns": "The created subscription record with id, secret rotation hint, active state, and an example test-event payload for the customer retention case."
+    },
+    {
+      "name": "get_retention_case_audit_history",
+      "description": "Retrieve the immutable audit trail for a customer retention case, including who changed what, when, and from which channel.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Time range filter.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur."
+              },
+              "granularity": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              }
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "actor_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "service_account",
+                    "system",
+                    "external_partner"
+                  ]
+                }
+              },
+              "event_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fields_touched": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ip_cidrs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "include": {
+            "type": "object",
+            "properties": {
+              "before_after_diff": {
+                "type": "boolean",
+                "default": true
+              },
+              "request_payload": {
+                "type": "boolean",
+                "default": false
+              },
+              "evidence_links": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "sort": {
+            "type": "array",
+            "description": "Ordered sort directives.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "direction": {
+                  "type": "string",
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ]
+                },
+                "nulls": {
+                  "type": "string",
+                  "enum": [
+                    "first",
+                    "last"
+                  ]
+                }
+              },
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls.",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 25
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque continuation cursor."
+              },
+              "include_total": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "redaction": {
+            "type": "object",
+            "properties": {
+              "mask_pii": {
+                "type": "boolean",
+                "default": true
+              },
+              "fields_to_mask": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "export": {
+            "type": "object",
+            "properties": {
+              "to": {
+                "type": "string",
+                "enum": [
+                  "signed_url",
+                  "siem",
+                  "none"
+                ]
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "json",
+                  "csv",
+                  "ndjson"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "target_id"
+        ]
+      },
+      "returns": "A chronologically ordered list of audit entries for the customer retention case, each with actor, action, before/after diff, source, and optional evidence links."
+    },
+    {
+      "name": "schedule_recurring_retention_case_job",
+      "description": "Create or update a recurring job for customer retention cases using cron, ISO interval, or calendar windows with backfill and concurrency controls.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "target_filter": {
+            "type": "object",
+            "properties": {
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/case_id"
+                }
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Polymorphic schedule specification.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "cron",
+                  "interval",
+                  "calendar",
+                  "one_shot"
+                ]
+              },
+              "cron_expression": {
+                "type": "string"
+              },
+              "interval_seconds": {
+                "type": "integer",
+                "minimum": 60
+              },
+              "calendar": {
+                "type": "object",
+                "properties": {
+                  "days_of_week": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "mon",
+                        "tue",
+                        "wed",
+                        "thu",
+                        "fri",
+                        "sat",
+                        "sun"
+                      ]
+                    }
+                  },
+                  "start_local_time": {
+                    "type": "string"
+                  },
+                  "end_local_time": {
+                    "type": "string"
+                  },
+                  "exceptions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "date"
+                    }
+                  }
+                }
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "start_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "action": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "run_pipeline",
+                  "send_report",
+                  "evaluate_policy",
+                  "rotate_secret",
+                  "refresh_metrics"
+                ]
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "concurrency": {
+            "type": "object",
+            "properties": {
+              "policy": {
+                "type": "string",
+                "enum": [
+                  "allow",
+                  "forbid",
+                  "replace"
+                ]
+              },
+              "max_running": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "backfill": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "lookback_days": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 365
+              }
+            }
+          },
+          "notify": {
+            "type": "object",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              },
+              "on_failure_only": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "owner": {
+            "type": "string"
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "schedule",
+          "action"
+        ]
+      },
+      "returns": "The created or updated schedule descriptor with id, next run time, effective cron, and any backfill plan summary for the customer retention case action."
+    },
+    {
+      "name": "simulate_retention_case_changes",
+      "description": "Preview the effect of a proposed change to a customer retention case without persisting, returning a diff and impact analysis.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "proposed_change": {
+            "type": "object",
+            "description": "Polymorphic change envelope.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "patch",
+                  "replace",
+                  "apply_policy",
+                  "lifecycle_transition"
+                ]
+              },
+              "patch": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "add",
+                        "remove",
+                        "replace",
+                        "move"
+                      ]
+                    },
+                    "path": {
+                      "type": "string"
+                    },
+                    "value": {}
+                  },
+                  "required": [
+                    "op",
+                    "path"
+                  ]
+                }
+              },
+              "replacement": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "policy_id": {
+                "type": "string"
+              },
+              "transition_to": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "context": {
+            "type": "object",
+            "properties": {
+              "as_of": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "feature_flags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "scenario": {
+                "type": "string",
+                "enum": [
+                  "normal",
+                  "peak_load",
+                  "fault_injection",
+                  "degraded"
+                ]
+              }
+            }
+          },
+          "impact": {
+            "type": "object",
+            "properties": {
+              "estimate_cost": {
+                "type": "boolean",
+                "default": true
+              },
+              "estimate_traffic_impact": {
+                "type": "boolean",
+                "default": true
+              },
+              "estimate_blast_radius": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "compare_against": {
+            "type": "object",
+            "properties": {
+              "version_id": {
+                "type": "string"
+              },
+              "snapshot_id": {
+                "type": "string"
+              }
+            }
+          },
+          "policy_checks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "explain": {
+            "type": "boolean",
+            "default": true
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "target_id",
+          "proposed_change"
+        ]
+      },
+      "returns": "A simulation report showing the resulting state of the customer retention case, a structured diff, policy-check verdicts, and a quantitative impact estimate (cost, latency, blast radius)."
+    },
+    {
+      "name": "request_retention_case_approval",
+      "description": "Create an approval workflow request for a customer retention case change, with multi-stage approvers, SLA, and evidence attachments.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "change_summary": {
+            "type": "string"
+          },
+          "justification": {
+            "type": "string"
+          },
+          "risk": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              },
+              "blast_radius": {
+                "type": "string",
+                "enum": [
+                  "single_tenant",
+                  "multi_tenant",
+                  "regional",
+                  "global"
+                ]
+              },
+              "compliance_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "approvers": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "stage": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "group",
+                    "role"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "min_required": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "stage",
+                "kind",
+                "id"
+              ]
+            }
+          },
+          "sla": {
+            "type": "object",
+            "properties": {
+              "respond_within_hours": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 720
+              },
+              "auto_escalate": {
+                "type": "boolean",
+                "default": true
+              },
+              "auto_reject_on_timeout": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "link",
+                    "attachment_id",
+                    "snapshot_id",
+                    "ticket_id"
+                  ]
+                },
+                "ref": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "ref"
+              ]
+            }
+          },
+          "notify": {
+            "type": "object",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              },
+              "remind_every_hours": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 168
+              }
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scheduled_apply_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "target_id",
+          "change_summary",
+          "approvers"
+        ]
+      },
+      "returns": "An approval-request descriptor with id, current stage, list of pending approvers, SLA deadlines, and links to the customer retention case under change."
+    },
+    {
+      "name": "decide_retention_case_approval",
+      "description": "Record an approver decision (approve, reject, request changes) on a pending customer retention case approval request.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_request_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "request_changes",
+              "delegate",
+              "abstain"
+            ]
+          },
+          "comment": {
+            "type": "string"
+          },
+          "delegate_to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "group",
+                  "role"
+                ]
+              },
+              "id": {
+                "type": "string"
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "time_window",
+                    "policy_check",
+                    "additional_approval"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "mfa": {
+            "type": "object",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "totp",
+                  "webauthn",
+                  "sms_otp",
+                  "push"
+                ]
+              },
+              "token": {
+                "type": "string"
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "attachment_id": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "attachment_id"
+              ]
+            }
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notify_requester": {
+            "type": "boolean",
+            "default": true
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "expected_stage": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optimistic concurrency check on the approval stage."
+          }
+        },
+        "required": [
+          "approval_request_id",
+          "decision"
+        ]
+      },
+      "returns": "The updated approval-request state including new stage, list of completed and pending approvers, and any condition list applied to the customer retention case."
+    },
+    {
+      "name": "add_retention_case_comment",
+      "description": "Add a threaded comment, mention, or note to a customer retention case for collaboration and case-management context.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "body": {
+            "type": "object",
+            "properties": {
+              "format": {
+                "type": "string",
+                "enum": [
+                  "markdown",
+                  "plaintext",
+                  "html"
+                ]
+              },
+              "text": {
+                "type": "string"
+              },
+              "mentions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "user",
+                        "group",
+                        "role"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "format",
+              "text"
+            ]
+          },
+          "parent_comment_id": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "internal",
+              "tenant",
+              "public",
+              "auditor_only"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "attachment_id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "image",
+                    "pdf",
+                    "log",
+                    "csv",
+                    "json",
+                    "screenshot"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "attachment_id",
+                "kind"
+              ]
+            }
+          },
+          "reaction_enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "pin": {
+            "type": "boolean",
+            "default": false
+          },
+          "notify": {
+            "type": "object",
+            "properties": {
+              "mentioned_users": {
+                "type": "boolean",
+                "default": true
+              },
+              "watchers": {
+                "type": "boolean",
+                "default": true
+              },
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              }
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "client_ref": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target_id",
+          "body"
+        ]
+      },
+      "returns": "The persisted comment record with id, threading info, visibility, mention/notification fan-out summary for the customer retention case."
+    },
+    {
+      "name": "upload_retention_case_attachment",
+      "description": "Upload or link a binary attachment (evidence, log bundle, screenshot, contract) to a customer retention case with scanning and retention.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "source": {
+            "type": "object",
+            "description": "Polymorphic upload source.",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "inline_base64",
+                  "presigned_url",
+                  "external_link",
+                  "object_storage_ref"
+                ]
+              },
+              "filename": {
+                "type": "string"
+              },
+              "content_type": {
+                "type": "string"
+              },
+              "size_bytes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "inline_data": {
+                "type": "string",
+                "description": "Base64 payload when kind is inline_base64."
+              },
+              "url": {
+                "type": "string",
+                "format": "uri"
+              },
+              "storage_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "classification": {
+            "type": "object",
+            "properties": {
+              "sensitivity": {
+                "type": "string",
+                "enum": [
+                  "public",
+                  "internal",
+                  "confidential",
+                  "restricted"
+                ]
+              },
+              "contains_pii": {
+                "type": "boolean",
+                "default": false
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "scan": {
+            "type": "object",
+            "properties": {
+              "antivirus": {
+                "type": "boolean",
+                "default": true
+              },
+              "dlp": {
+                "type": "boolean",
+                "default": true
+              },
+              "checksum_algorithm": {
+                "type": "string",
+                "enum": [
+                  "sha256",
+                  "sha512",
+                  "md5"
+                ]
+              },
+              "expected_checksum": {
+                "type": "string"
+              }
+            }
+          },
+          "retention": {
+            "type": "object",
+            "properties": {
+              "retain_days": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 3650
+              },
+              "legal_hold": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "description": {
+            "type": "string"
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "notify_watchers": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "target_id",
+          "source"
+        ]
+      },
+      "returns": "The created attachment record with id, scan verdicts, signed download URL, checksum, and link to the customer retention case."
+    },
+    {
+      "name": "create_retention_case_snapshot",
+      "description": "Capture an immutable point-in-time snapshot of a customer retention case (state, configuration, dependencies) for audit or rollback.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "snapshot_label": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "include_state": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_config": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_relationships": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_metrics_window": {
+                "type": "object",
+                "properties": {
+                  "lookback_minutes": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 1440
+                  }
+                }
+              }
+            }
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ]
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "retention": {
+            "type": "object",
+            "properties": {
+              "retain_days": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3650
+              },
+              "legal_hold": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "trigger": {
+            "type": "object",
+            "properties": {
+              "reason_code": {
+                "type": "string"
+              },
+              "ticket_id": {
+                "type": "string"
+              },
+              "auto": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "checksum_algorithm": {
+            "type": "string",
+            "enum": [
+              "sha256",
+              "sha512"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "target_id"
+        ]
+      },
+      "returns": "A snapshot record with id, size, checksum, encryption metadata, and a reference to the customer retention case version captured."
+    },
+    {
+      "name": "restore_retention_case_from_snapshot",
+      "description": "Restore a customer retention case from a snapshot with selectable scope, validation pre-checks, and notification on completion.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "snapshot_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "restore_state": {
+                "type": "boolean",
+                "default": true
+              },
+              "restore_config": {
+                "type": "boolean",
+                "default": true
+              },
+              "restore_relationships": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields_only": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "skip_existing",
+              "merge_prefer_snapshot",
+              "merge_prefer_current"
+            ]
+          },
+          "validation": {
+            "type": "object",
+            "properties": {
+              "run_policy_checks": {
+                "type": "boolean",
+                "default": true
+              },
+              "run_integrity_check": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "approval_request_id": {
+            "type": "string"
+          },
+          "rollback_plan": {
+            "type": "object",
+            "properties": {
+              "create_pre_restore_snapshot": {
+                "type": "boolean",
+                "default": true
+              },
+              "auto_rollback_on_validation_fail": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "notify": {
+            "type": "object",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              },
+              "on_success": {
+                "type": "boolean",
+                "default": true
+              },
+              "on_failure": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "scheduled_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "target_id",
+          "snapshot_id"
+        ]
+      },
+      "returns": "A restore-operation descriptor with operation id, pre-restore snapshot id, validation results, conflict resolutions applied, and final state of the customer retention case."
+    },
+    {
+      "name": "get_retention_case_metrics",
+      "description": "Compute and return KPI/metrics aggregates for customer retention cases over a time window with grouping, filters, and percentiles.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "save_rate",
+                "avg_offer_discount",
+                "mttr_hours",
+                "churn_prevented_arpu",
+                "count",
+                "p50",
+                "p95",
+                "p99",
+                "error_rate",
+                "throughput"
+              ]
+            }
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Time range filter.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur."
+              },
+              "granularity": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              }
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "custom_fields": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "in",
+                        "gt",
+                        "lt"
+                      ]
+                    },
+                    "value": {}
+                  },
+                  "required": [
+                    "key",
+                    "op"
+                  ]
+                }
+              }
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "percentiles": {
+            "type": "array",
+            "items": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100
+            }
+          },
+          "compare_to_period": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "previous_window",
+                  "previous_year",
+                  "custom"
+                ]
+              },
+              "custom_window": {
+                "type": "object",
+                "description": "Time range filter.",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur."
+                  },
+                  "granularity": {
+                    "type": "string",
+                    "enum": [
+                      "minute",
+                      "hour",
+                      "day",
+                      "week",
+                      "month"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000
+          },
+          "include_sparkline": {
+            "type": "boolean",
+            "default": false
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "MYR",
+              "USD",
+              "SGD",
+              "IDR",
+              "THB"
+            ]
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "cache_ttl_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3600
+          }
+        },
+        "required": [
+          "metrics",
+          "time_window"
+        ]
+      },
+      "returns": "A metrics result with aggregate values, percentiles, optional period-over-period deltas, sparkline series per group, and the customer retention case domain context."
+    },
+    {
+      "name": "get_retention_case_dashboard",
+      "description": "Return a pre-composed dashboard view for customer retention cases combining KPIs, alerts, top offenders, and time series.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dashboard_id": {
+            "type": "string"
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Time range filter.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur."
+              },
+              "granularity": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              }
+            }
+          },
+          "tenant_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "priority": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "widgets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "kpi",
+                    "timeseries",
+                    "table",
+                    "heatmap",
+                    "topN"
+                  ]
+                },
+                "metric": {
+                  "type": "string"
+                },
+                "group_by": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "id",
+                "kind"
+              ]
+            }
+          },
+          "refresh_strategy": {
+            "type": "string",
+            "enum": [
+              "live",
+              "cached",
+              "scheduled"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "MYR",
+              "USD",
+              "SGD",
+              "IDR",
+              "THB"
+            ]
+          },
+          "include_alerts": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_top_offenders": {
+            "type": "boolean",
+            "default": true
+          },
+          "personalize_for": {
+            "type": "string",
+            "description": "User id to personalize widgets for."
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "export_format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "pdf",
+              "png"
+            ]
+          }
+        },
+        "required": [
+          "time_window"
+        ]
+      },
+      "returns": "A dashboard payload with KPI tiles, time-series data, top offenders, active alerts, and personalization metadata for the customer retention case context."
+    },
+    {
+      "name": "create_retention_case_policy",
+      "description": "Create or update a policy/rule applied to customer retention cases with versioning, scope, and rollout strategy.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_name": {
+            "type": "string"
+          },
+          "policy_kind": {
+            "type": "string",
+            "enum": [
+              "offer_eligibility",
+              "approval_limits",
+              "escalation",
+              "follow_up_cadence",
+              "segmentation"
+            ]
+          },
+          "version": {
+            "type": "string",
+            "description": "Semantic version, e.g., 1.4.0."
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "exclusions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "rule_id": {
+                  "type": "string"
+                },
+                "condition": {
+                  "type": "object",
+                  "properties": {
+                    "expression": {
+                      "type": "string",
+                      "description": "CEL or DSL expression."
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "AND",
+                        "OR",
+                        "NOT"
+                      ]
+                    },
+                    "operands": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "additionalProperties": true
+                      }
+                    }
+                  }
+                },
+                "action": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "allow",
+                        "deny",
+                        "alert",
+                        "auto_remediate",
+                        "tag",
+                        "escalate"
+                      ]
+                    },
+                    "params": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "kind"
+                  ]
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                }
+              },
+              "required": [
+                "rule_id",
+                "action"
+              ]
+            }
+          },
+          "rollout": {
+            "type": "object",
+            "properties": {
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "all_at_once",
+                  "canary",
+                  "ring_based",
+                  "scheduled"
+                ]
+              },
+              "canary_percent": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "rings": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "scheduled_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "effective_window": {
+            "type": "object",
+            "description": "Time range filter.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur."
+              },
+              "granularity": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              }
+            }
+          },
+          "approval_request_id": {
+            "type": "string"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "policy_name",
+          "policy_kind",
+          "rules"
+        ]
+      },
+      "returns": "The created or updated policy record with id, version, rollout plan, scope, and an effective-evaluation summary against current customer retention cases."
+    },
+    {
+      "name": "evaluate_retention_case_policy",
+      "description": "Evaluate one or more policies against a customer retention case in dry-run, returning per-rule verdicts and proposed actions.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "policy_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "input_overrides": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "context": {
+            "type": "object",
+            "properties": {
+              "as_of": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "scenario": {
+                "type": "string",
+                "enum": [
+                  "normal",
+                  "peak",
+                  "degraded",
+                  "incident"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              }
+            }
+          },
+          "trace": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_inputs": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "apply_actions": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_first_deny": {
+            "type": "boolean",
+            "default": true
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "target_id",
+          "policy_ids"
+        ]
+      },
+      "returns": "Per-policy and per-rule verdicts with reasons, trace data, and a list of proposed (or applied, when apply_actions=true) actions against the customer retention case."
+    },
+    {
+      "name": "get_retention_case_dependency_graph",
+      "description": "Return the upstream and downstream dependency graph for a customer retention case including services, devices, tickets, and contracts.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "upstream",
+              "downstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "include_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "exclude_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "edge_filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "relation": {
+                  "type": "string"
+                },
+                "min_weight": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "relation"
+              ]
+            }
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "include_health": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_metrics": {
+            "type": "boolean",
+            "default": false
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json_graph",
+              "adjacency_list",
+              "dot",
+              "cytoscape"
+            ],
+            "default": "json_graph"
+          },
+          "max_nodes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "target_id"
+        ]
+      },
+      "returns": "A graph payload (nodes, edges, optional health and metrics) describing dependencies for the customer retention case, with depth and direction respected."
+    },
+    {
+      "name": "link_retention_case_to_related",
+      "description": "Create or remove an association between a customer retention case and another business object (incident, ticket, contract, asset).",
+      "stage": "associate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "incident",
+                  "ticket",
+                  "contract",
+                  "asset",
+                  "order",
+                  "case",
+                  "policy",
+                  "campaign"
+                ]
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relation": {
+            "type": "string",
+            "enum": [
+              "caused_by",
+              "blocks",
+              "duplicates",
+              "related_to",
+              "supersedes",
+              "parent_of",
+              "child_of"
+            ]
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "link",
+              "unlink",
+              "replace"
+            ],
+            "default": "link"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "reason": {
+            "type": "string"
+          },
+          "bidirectional": {
+            "type": "boolean",
+            "default": true
+          },
+          "cascade_state": {
+            "type": "object",
+            "properties": {
+              "propagate_status": {
+                "type": "boolean",
+                "default": false
+              },
+              "propagate_priority": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "notify_watchers": {
+            "type": "boolean",
+            "default": false
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "source_id",
+          "target",
+          "relation"
+        ]
+      },
+      "returns": "The resulting association record (or removal confirmation) including direction, relation type, and a snapshot of the related-object summary for the customer retention case."
+    },
+    {
+      "name": "assign_retention_case_owner",
+      "description": "Assign or reassign ownership/roles on a customer retention case with hand-off rules, watchers, and notification.",
+      "stage": "assign",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "assignments": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "owner",
+                    "assignee",
+                    "approver",
+                    "watcher",
+                    "stakeholder",
+                    "responder"
+                  ]
+                },
+                "principal": {
+                  "type": "object",
+                  "properties": {
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "user",
+                        "group",
+                        "role",
+                        "queue"
+                      ]
+                    },
+                    "id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "kind",
+                    "id"
+                  ]
+                },
+                "effective_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "expires_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "role",
+                "principal"
+              ]
+            }
+          },
+          "handoff": {
+            "type": "object",
+            "properties": {
+              "include_notes": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_attachments": {
+                "type": "boolean",
+                "default": true
+              },
+              "summary_text": {
+                "type": "string"
+              }
+            }
+          },
+          "notify": {
+            "type": "object",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              },
+              "to_new_assignees": {
+                "type": "boolean",
+                "default": true
+              },
+              "to_previous_assignees": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "reason_code": {
+            "type": "string"
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "target_id",
+          "assignments"
+        ]
+      },
+      "returns": "The updated assignment roster for the customer retention case with effective windows, hand-off receipts, and notification fan-out summary."
+    },
+    {
+      "name": "tag_retention_cases",
+      "description": "Apply, remove, or replace tags and labels on one or more customer retention cases, with conflict resolution and audit.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/shared_entities/case_id"
+            }
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "add",
+              "remove",
+              "replace"
+            ],
+            "default": "add"
+          },
+          "tags": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                },
+                "scope": {
+                  "type": "string",
+                  "enum": [
+                    "tenant",
+                    "global",
+                    "personal"
+                  ]
+                }
+              },
+              "required": [
+                "key"
+              ]
+            }
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "skip",
+              "merge"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "max_tags_per_target": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200
+          },
+          "notify": {
+            "type": "object",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "target_ids",
+          "tags"
+        ]
+      },
+      "returns": "Per-id tag-application outcomes with final tag sets and counts of added/removed/skipped operations for each customer retention case."
+    },
+    {
+      "name": "compare_retention_case_versions",
+      "description": "Produce a structured diff between two versions (or snapshots) of a customer retention case with semantic equivalence handling.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "base": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "version",
+                  "snapshot",
+                  "live"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "as_of": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compare_to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "version",
+                  "snapshot",
+                  "live"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "as_of": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "include_state": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_config": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_metadata": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields_only": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "ignore_order_in_arrays": {
+                "type": "boolean",
+                "default": true
+              },
+              "ignore_whitespace": {
+                "type": "boolean",
+                "default": true
+              },
+              "semantic_equivalence": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json_patch",
+              "unified_text",
+              "tree",
+              "side_by_side"
+            ]
+          },
+          "redaction": {
+            "type": "object",
+            "properties": {
+              "mask_pii": {
+                "type": "boolean",
+                "default": true
+              },
+              "fields_to_mask": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "target_id",
+          "base",
+          "compare_to"
+        ]
+      },
+      "returns": "A diff document describing added, removed, and changed fields between the two versions of the customer retention case, with optional side-by-side rendering."
+    },
+    {
+      "name": "configure_retention_case_retry_policy",
+      "description": "Configure default retry, backoff, and circuit-breaker policy applied to customer retention case operations and their downstream actions.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "operation_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "retry": {
+            "type": "object",
+            "properties": {
+              "max_attempts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 20
+              },
+              "initial_delay_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 60000
+              },
+              "max_delay_ms": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 600000
+              },
+              "multiplier": {
+                "type": "number",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "jitter": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "equal",
+                  "full"
+                ]
+              },
+              "retry_on": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "non_retryable_errors": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "circuit_breaker": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "failure_threshold_pct": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "rolling_window_seconds": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 3600
+              },
+              "min_request_threshold": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "open_state_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 3600
+              },
+              "half_open_probes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 100
+              }
+            }
+          },
+          "timeout": {
+            "type": "object",
+            "properties": {
+              "request_ms": {
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 600000
+              },
+              "total_ms": {
+                "type": "integer",
+                "minimum": 100,
+                "maximum": 1800000
+              }
+            }
+          },
+          "dead_letter": {
+            "type": "object",
+            "properties": {
+              "destination": {
+                "type": "string",
+                "enum": [
+                  "queue",
+                  "topic",
+                  "table",
+                  "object_storage"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              }
+            }
+          },
+          "effective_window": {
+            "type": "object",
+            "description": "Time range filter.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur."
+              },
+              "granularity": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              }
+            }
+          },
+          "approval_request_id": {
+            "type": "string"
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "retry"
+        ]
+      },
+      "returns": "The persisted retry/circuit-breaker policy with id, effective scope, and a summary of customer retention case operations that match the new policy."
+    },
+    {
+      "name": "check_retention_case_health",
+      "description": "Run a synthetic health/probe sweep against a customer retention case and its critical dependencies and return aggregated health status.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "probes": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "http",
+                    "tcp",
+                    "icmp",
+                    "dns",
+                    "synthetic_transaction",
+                    "metric_threshold"
+                  ]
+                },
+                "target": {
+                  "type": "string"
+                },
+                "timeout_ms": {
+                  "type": "integer",
+                  "minimum": 50,
+                  "maximum": 60000
+                },
+                "expected": {
+                  "type": "object",
+                  "properties": {
+                    "status_codes": {
+                      "type": "array",
+                      "items": {
+                        "type": "integer"
+                      }
+                    },
+                    "body_contains": {
+                      "type": "string"
+                    },
+                    "max_latency_ms": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "kind"
+              ]
+            }
+          },
+          "include_dependencies": {
+            "type": "boolean",
+            "default": true
+          },
+          "concurrency": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100
+          },
+          "sample_count": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 3
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "report_format": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "detailed"
+            ]
+          },
+          "alert_on_failure": {
+            "type": "object",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "target_id",
+          "probes"
+        ]
+      },
+      "returns": "Aggregated health verdict for the customer retention case, per-probe results, dependency roll-up, and any alert notifications dispatched."
+    },
+    {
+      "name": "clone_retention_case",
+      "description": "Clone a customer retention case into a new instance with selective fields, optional rename, and link-back metadata.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "new_name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "include_config": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_state": {
+                "type": "boolean",
+                "default": false
+              },
+              "include_policies": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_attachments": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields_to_reset": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "owner_overrides": {
+            "type": "object",
+            "properties": {
+              "owner_id": {
+                "type": "string"
+              },
+              "tenant_id": {
+                "type": "string"
+              }
+            }
+          },
+          "tag_overrides": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "key": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "key"
+              ]
+            }
+          },
+          "link_back": {
+            "type": "boolean",
+            "default": true
+          },
+          "rename_strategy": {
+            "type": "string",
+            "enum": [
+              "suffix_copy",
+              "explicit",
+              "auto"
+            ]
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notify": {
+            "type": "object",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "source_id"
+        ]
+      },
+      "returns": "The cloned customer retention case record with id, lineage link to the source, and a summary of fields reset, copied, or skipped."
+    },
+    {
+      "name": "generate_retention_case_report",
+      "description": "Generate a formatted customer retention case report (executive, operational, compliance) and deliver via email/object storage.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "report_kind": {
+            "type": "string",
+            "enum": [
+              "executive",
+              "operational",
+              "compliance",
+              "sla",
+              "kpi"
+            ]
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Time range filter.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur."
+              },
+              "granularity": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              }
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "pdf",
+              "html",
+              "xlsx",
+              "json",
+              "csv"
+            ]
+          },
+          "language": {
+            "type": "string",
+            "enum": [
+              "en",
+              "ms",
+              "zh",
+              "ta"
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "enum": [
+              "MYR",
+              "USD",
+              "SGD",
+              "IDR",
+              "THB"
+            ]
+          },
+          "include_sections": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "summary",
+                "kpis",
+                "top_offenders",
+                "incidents",
+                "appendix",
+                "raw_data"
+              ]
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "email",
+                  "signed_url",
+                  "object_storage",
+                  "sftp"
+                ]
+              },
+              "recipients": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "object_uri": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "branding": {
+            "type": "object",
+            "properties": {
+              "logo_url": {
+                "type": "string"
+              },
+              "primary_color": {
+                "type": "string"
+              },
+              "footer_text": {
+                "type": "string"
+              }
+            }
+          },
+          "schedule_id": {
+            "type": "string",
+            "description": "When generated by a recurring schedule."
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "report_kind",
+          "time_window",
+          "format",
+          "delivery"
+        ]
+      },
+      "returns": "A report-generation receipt with report id, download URL or delivery confirmation, page/sheet count, and the customer retention case window covered."
+    },
+    {
+      "name": "escalate_retention_case",
+      "description": "Escalate a customer retention case to a higher tier or owner group with reason, severity bump, and watcher fan-out.",
+      "stage": "escalate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_id": {
+            "$ref": "#/shared_entities/case_id"
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "tier",
+                  "group",
+                  "user",
+                  "queue",
+                  "vendor"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "tier": {
+                "type": "string",
+                "enum": [
+                  "t1",
+                  "t2",
+                  "t3",
+                  "duty_manager",
+                  "executive"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "reason": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "sla_breach",
+                  "customer_request",
+                  "complexity",
+                  "security",
+                  "regulatory",
+                  "other"
+                ]
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "code"
+            ]
+          },
+          "severity_bump": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "watchers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "user",
+                    "group",
+                    "role"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "kind",
+                "id"
+              ]
+            }
+          },
+          "notify": {
+            "type": "object",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "whatsapp",
+                    "voice",
+                    "app_push"
+                  ]
+                }
+              },
+              "include_summary": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scheduled_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expected_sla_hours": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 720
+          },
+          "request_context": {
+            "type": "object",
+            "description": "User or system actor performing the action.",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service_account",
+                  "system",
+                  "external_partner"
+                ]
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "admin",
+                  "approver",
+                  "auditor",
+                  "viewer",
+                  "service"
+                ]
+              },
+              "tenant_id": {
+                "type": "string"
+              },
+              "ip_address": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "trace_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "target_id",
+          "to",
+          "reason"
+        ]
+      },
+      "returns": "The escalation record with new owner/tier, severity, SLA, watchers, and a log of notifications sent for the customer retention case."
+    }
+  ]
+}

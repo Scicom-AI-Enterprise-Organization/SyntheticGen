@@ -1,0 +1,4657 @@
+{
+  "workflow_name": "device_swap_reconciliation_flow",
+  "description": "Cross-system reconciliation and consistency workflow for device swap orders across TAAS, Camara, inventory, billing, and provisioning systems.",
+  "domain": "taas_camara/device_swap",
+  "shared_entities": {
+    "swap_order_id": {
+      "type": "string",
+      "description": "Primary identifier of a device swap order in the orchestration system."
+    },
+    "external_order_ref": {
+      "type": "object",
+      "description": "Reference and correlation identifiers in external systems.",
+      "properties": {
+        "system": {
+          "type": "string",
+          "description": "External system name.",
+          "enum": [
+            "TAAS",
+            "CAMARA",
+            "INVENTORY",
+            "BILLING",
+            "LOGISTICS",
+            "CRM",
+            "UNKNOWN"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "description": "Order or transaction identifier in the external system."
+        },
+        "correlation_id": {
+          "type": "string",
+          "description": "Correlation or request id used in async APIs."
+        }
+      },
+      "required": [
+        "system",
+        "id"
+      ]
+    },
+    "device_identifier": {
+      "type": "object",
+      "description": "Device identification and attributes.",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "IMEI",
+            "ESN",
+            "SERIAL",
+            "ICCID"
+          ]
+        },
+        "value": {
+          "type": "string"
+        },
+        "sku": {
+          "type": "string",
+          "description": "Stock keeping unit or product code."
+        },
+        "model": {
+          "type": "string"
+        },
+        "brand": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "type",
+        "value"
+      ]
+    },
+    "party_context": {
+      "type": "object",
+      "description": "Information identifying the customer, subscription, and account.",
+      "properties": {
+        "customer_id": {
+          "type": "string"
+        },
+        "account_id": {
+          "type": "string"
+        },
+        "subscription_id": {
+          "type": "string"
+        },
+        "msisdn": {
+          "type": "string",
+          "description": "Phone number associated with the subscription."
+        }
+      }
+    },
+    "system_state_snapshot": {
+      "type": "object",
+      "description": "Snapshot of state across systems for a given swap order.",
+      "properties": {
+        "swap_order_id": {
+          "type": "string"
+        },
+        "taas": {
+          "type": "object"
+        },
+        "camara": {
+          "type": "object"
+        },
+        "inventory": {
+          "type": "object"
+        },
+        "billing": {
+          "type": "object"
+        },
+        "logistics": {
+          "type": "object"
+        },
+        "captured_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "swap_order_id",
+        "captured_at"
+      ]
+    },
+    "reconciliation_issue": {
+      "type": "object",
+      "description": "Detected inconsistency between systems for a swap.",
+      "properties": {
+        "code": {
+          "type": "string",
+          "enum": [
+            "MISSING_IN_SYSTEM",
+            "STATUS_MISMATCH",
+            "DEVICE_MISMATCH",
+            "BILLING_MISMATCH",
+            "INVENTORY_MISMATCH",
+            "DUPLICATE_ORDER",
+            "INVALID_TRANSITION",
+            "UNKNOWN"
+          ]
+        },
+        "severity": {
+          "type": "string",
+          "enum": [
+            "info",
+            "warning",
+            "error",
+            "critical"
+          ]
+        },
+        "description": {
+          "type": "string"
+        },
+        "affected_systems": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "TAAS",
+              "CAMARA",
+              "INVENTORY",
+              "BILLING",
+              "LOGISTICS",
+              "CRM"
+            ]
+          }
+        },
+        "suggested_actions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "code",
+        "severity",
+        "description"
+      ]
+    },
+    "compensation_action": {
+      "type": "object",
+      "description": "Action to restore consistency (rollback/forward-fix).",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "ROLLBACK_TAAS_ORDER",
+            "ROLLBACK_CAMARA_ORDER",
+            "ADJUST_INVENTORY",
+            "ADJUST_BILLING",
+            "REPLAY_PROVISIONING",
+            "CREATE_MISSING_ORDER",
+            "CLOSE_DUPLICATE",
+            "MANUAL_REVIEW"
+          ]
+        },
+        "target_system": {
+          "type": "string",
+          "enum": [
+            "TAAS",
+            "CAMARA",
+            "INVENTORY",
+            "BILLING",
+            "LOGISTICS",
+            "ORCHESTRATION"
+          ]
+        },
+        "parameters": {
+          "type": "object",
+          "description": "Free-form parameters specific to the compensation action."
+        },
+        "blocking": {
+          "type": "boolean",
+          "description": "If true, must succeed before proceeding to next actions."
+        }
+      },
+      "required": [
+        "type",
+        "target_system"
+      ]
+    },
+    "audit_event_id": {
+      "type": "string",
+      "description": "Identifier of an audit log entry."
+    },
+    "approval_id": {
+      "type": "string",
+      "description": "Identifier of an approval workflow."
+    },
+    "subscription_id": {
+      "type": "string",
+      "description": "Identifier of a webhook or notification subscription."
+    },
+    "snapshot_id": {
+      "type": "string",
+      "description": "Identifier of a captured state snapshot."
+    },
+    "alert_id": {
+      "type": "string",
+      "description": "Identifier of a monitoring alert."
+    },
+    "incident_id": {
+      "type": "string",
+      "description": "Identifier of an incident record."
+    },
+    "policy_id": {
+      "type": "string",
+      "description": "Identifier of a policy record."
+    },
+    "dashboard_id": {
+      "type": "string",
+      "description": "Identifier of a dashboard definition."
+    },
+    "schedule_id": {
+      "type": "string",
+      "description": "Identifier of a scheduled job."
+    }
+  },
+  "functions": [
+    {
+      "name": "create_reconciliation_batch",
+      "description": "Create a new reconciliation batch for device swap orders across TAAS and Camara systems.",
+      "stage": "init",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "object",
+            "description": "Definition of which swap orders to include in the batch.",
+            "properties": {
+              "time_window": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "status_filter": {
+                "type": "array",
+                "description": "Subset of orchestration-level statuses to reconcile.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "PENDING",
+                    "IN_PROGRESS",
+                    "COMPLETED",
+                    "FAILED",
+                    "CANCELLED",
+                    "PARTIALLY_COMPLETED"
+                  ]
+                }
+              },
+              "systems_in_scope": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "TAAS",
+                    "CAMARA",
+                    "INVENTORY",
+                    "BILLING",
+                    "LOGISTICS"
+                  ]
+                }
+              },
+              "party_filters": {
+                "type": "object",
+                "properties": {
+                  "customer_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "account_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "max_orders": {
+                "type": "integer",
+                "description": "Maximum number of swap orders to include."
+              }
+            },
+            "required": [
+              "systems_in_scope"
+            ]
+          },
+          "initiated_by": {
+            "type": "object",
+            "description": "User or system initiating the reconciliation batch.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "SYSTEM",
+                  "USER"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "display_name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "config": {
+            "type": "object",
+            "description": "Tuning parameters for reconciliation.",
+            "properties": {
+              "auto_compensation": {
+                "type": "boolean",
+                "description": "Whether to automatically apply safe compensation actions."
+              },
+              "max_parallel_orders": {
+                "type": "integer",
+                "description": "Concurrency for processing orders."
+              },
+              "issue_severity_threshold": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warning",
+                  "error",
+                  "critical"
+                ],
+                "description": "Minimum severity of issues to consider for compensation."
+              }
+            }
+          }
+        },
+        "required": [
+          "scope",
+          "initiated_by"
+        ]
+      },
+      "returns": "Reconciliation batch identifier and initial batch metadata."
+    },
+    {
+      "name": "list_reconciliation_batches",
+      "description": "List reconciliation batches with filters and pagination.",
+      "stage": "init",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "CREATED",
+                "RUNNING",
+                "COMPLETED",
+                "FAILED",
+                "PARTIALLY_COMPLETED",
+                "CANCELLED"
+              ]
+            }
+          },
+          "created_time_window": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "initiated_by_id": {
+            "type": "string"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50
+          },
+          "include_stats": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      },
+      "returns": "Paginated list of reconciliation batches with optional aggregate statistics."
+    },
+    {
+      "name": "discover_inconsistent_swap_orders",
+      "description": "Discover swap orders with potential inconsistencies across TAAS, Camara, and related systems, and attach them to an existing reconciliation batch.",
+      "stage": "discover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "description": "Identifier of the reconciliation batch."
+          },
+          "discovery_mode": {
+            "type": "string",
+            "enum": [
+              "FULL_SCAN",
+              "INCREMENTAL",
+              "DELTA_SINCE_LAST_RUN"
+            ]
+          },
+          "heuristics": {
+            "type": "object",
+            "description": "Heuristics to detect suspect swap orders.",
+            "properties": {
+              "status_inconsistency": {
+                "type": "boolean",
+                "description": "Include orders where system statuses disagree."
+              },
+              "missing_in_any_system": {
+                "type": "boolean",
+                "description": "Include orders missing from at least one system."
+              },
+              "age_threshold_minutes": {
+                "type": "integer",
+                "description": "Minimum age of IN_PROGRESS orders to treat as suspect."
+              },
+              "billing_not_applied": {
+                "type": "boolean",
+                "description": "Include orders where device swap completed but billing not adjusted."
+              },
+              "inventory_not_reserved_or_released": {
+                "type": "boolean"
+              }
+            }
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Upper limit of newly discovered swap orders to add to batch."
+          }
+        },
+        "required": [
+          "batch_id",
+          "discovery_mode"
+        ]
+      },
+      "returns": "Summary of discovered swap orders and count added to the batch."
+    },
+    {
+      "name": "capture_system_state_snapshot",
+      "description": "Capture a detailed system state snapshot for a specific swap order across TAAS, Camara, inventory, and billing systems.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "type": "string"
+          },
+          "external_refs": {
+            "type": "array",
+            "description": "Known external references that can improve matching.",
+            "items": {
+              "$ref": "#/shared_entities/external_order_ref"
+            }
+          },
+          "party": {
+            "$ref": "#/shared_entities/party_context"
+          },
+          "include_raw_payloads": {
+            "type": "boolean",
+            "description": "If true, includes raw API payloads for diagnostics."
+          },
+          "systems": {
+            "type": "array",
+            "description": "Subset of systems to include, defaults to all.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "TAAS",
+                "CAMARA",
+                "INVENTORY",
+                "BILLING",
+                "LOGISTICS",
+                "CRM"
+              ]
+            }
+          }
+        },
+        "required": [
+          "swap_order_id"
+        ]
+      },
+      "returns": "A system_state_snapshot object containing per-system state and metadata."
+    },
+    {
+      "name": "analyze_swap_inconsistencies",
+      "description": "Analyze a captured system state snapshot to detect and classify reconciliation issues.",
+      "stage": "analyze",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot": {
+            "$ref": "#/shared_entities/system_state_snapshot"
+          },
+          "analysis_profile": {
+            "type": "string",
+            "description": "Which rule set to apply.",
+            "enum": [
+              "STRICT",
+              "LENIENT",
+              "OPERATIONAL",
+              "AUDIT"
+            ]
+          },
+          "expected_target_state": {
+            "type": "object",
+            "description": "Optional explicit target state for the swap order.",
+            "properties": {
+              "lifecycle_status": {
+                "type": "string",
+                "enum": [
+                  "REQUESTED",
+                  "IN_PROGRESS",
+                  "SWAPPED",
+                  "ROLLED_BACK",
+                  "CANCELLED"
+                ]
+              },
+              "taas_status": {
+                "type": "string"
+              },
+              "camara_status": {
+                "type": "string"
+              },
+              "billing_adjusted": {
+                "type": "boolean"
+              },
+              "inventory_committed": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "required": [
+          "snapshot",
+          "analysis_profile"
+        ]
+      },
+      "returns": "List of reconciliation_issue objects, each with severity, affected systems, and suggested actions."
+    },
+    {
+      "name": "plan_compensation_actions",
+      "description": "Generate a compensation plan (rollback or forward-fix) to resolve detected inconsistencies for a swap order.",
+      "stage": "plan",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "type": "string"
+          },
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/reconciliation_issue"
+            }
+          },
+          "constraints": {
+            "type": "object",
+            "description": "Constraints on what compensation is allowed.",
+            "properties": {
+              "allowed_action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "ROLLBACK_TAAS_ORDER",
+                    "ROLLBACK_CAMARA_ORDER",
+                    "ADJUST_INVENTORY",
+                    "ADJUST_BILLING",
+                    "REPLAY_PROVISIONING",
+                    "CREATE_MISSING_ORDER",
+                    "CLOSE_DUPLICATE",
+                    "MANUAL_REVIEW"
+                  ]
+                }
+              },
+              "max_actions": {
+                "type": "integer"
+              },
+              "require_human_approval_for": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "ROLLBACK_TAAS_ORDER",
+                    "ROLLBACK_CAMARA_ORDER",
+                    "ADJUST_BILLING"
+                  ]
+                }
+              },
+              "preferred_strategy": {
+                "type": "string",
+                "enum": [
+                  "ROLLBACK",
+                  "FORWARD_FIX",
+                  "MIXED"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "swap_order_id",
+          "issues"
+        ]
+      },
+      "returns": "Ordered list of proposed compensation_action objects with rationale and dependencies."
+    },
+    {
+      "name": "execute_compensation_plan",
+      "description": "Execute a previously generated compensation plan for a swap order with transactional controls.",
+      "stage": "execute",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string",
+            "description": "Identifier of the stored compensation plan."
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "DRY_RUN",
+              "PARTIAL_APPLY",
+              "FULL_APPLY"
+            ]
+          },
+          "action_overrides": {
+            "type": "array",
+            "description": "Optional modifications to the plan before execution.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action_index": {
+                  "type": "integer",
+                  "description": "Index of the action in the original plan."
+                },
+                "override": {
+                  "$ref": "#/shared_entities/compensation_action"
+                },
+                "skip": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "action_index"
+              ]
+            }
+          },
+          "transaction_options": {
+            "type": "object",
+            "properties": {
+              "rollback_on_failure": {
+                "type": "boolean",
+                "description": "If true, attempt to undo successfully executed actions if a later action fails."
+              },
+              "stop_on_first_error": {
+                "type": "boolean"
+              },
+              "max_retries_per_action": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 0
+              }
+            }
+          }
+        },
+        "required": [
+          "swap_order_id",
+          "plan_id",
+          "execution_mode"
+        ]
+      },
+      "returns": "Execution report detailing per-action status, any rollbacks performed, and final consistency status."
+    },
+    {
+      "name": "retry_failed_swap_operations",
+      "description": "Retry failed or timed-out operations for a swap order across TAAS and Camara with configurable backoff.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "type": "string"
+          },
+          "operation_scope": {
+            "type": "array",
+            "description": "Limit retries to specific operation types.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "CREATE_TAAS_ORDER",
+                "CREATE_CAMARA_ORDER",
+                "UPDATE_INVENTORY",
+                "APPLY_BILLING_ADJUSTMENT",
+                "INITIATE_LOGISTICS",
+                "NOTIFY_CUSTOMER"
+              ]
+            }
+          },
+          "retry_strategy": {
+            "type": "object",
+            "properties": {
+              "max_attempts": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "initial_backoff_ms": {
+                "type": "integer"
+              },
+              "max_backoff_ms": {
+                "type": "integer"
+              },
+              "jitter": {
+                "type": "boolean"
+              }
+            }
+          },
+          "only_if_idempotent": {
+            "type": "boolean",
+            "description": "Avoid retrying operations known to be non-idempotent."
+          }
+        },
+        "required": [
+          "swap_order_id"
+        ]
+      },
+      "returns": "Summary of retried operations, outcomes, and updated swap order status where applicable."
+    },
+    {
+      "name": "rollback_device_swap",
+      "description": "Perform a high-level rollback of a device swap order, including TAAS, Camara, inventory, and billing adjustments.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "type": "string"
+          },
+          "rollback_reason": {
+            "type": "string"
+          },
+          "rollback_scope": {
+            "type": "object",
+            "properties": {
+              "taas": {
+                "type": "boolean",
+                "default": true
+              },
+              "camara": {
+                "type": "boolean",
+                "default": true
+              },
+              "inventory": {
+                "type": "boolean",
+                "default": true
+              },
+              "billing": {
+                "type": "boolean",
+                "default": true
+              },
+              "logistics": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "preserve_audit_trail": {
+                "type": "boolean",
+                "default": true
+              },
+              "notify_customer": {
+                "type": "boolean",
+                "default": false
+              },
+              "force_rollback": {
+                "type": "boolean",
+                "description": "Attempt rollback even if some systems report unknown state."
+              }
+            }
+          }
+        },
+        "required": [
+          "swap_order_id",
+          "rollback_reason"
+        ]
+      },
+      "returns": "Rollback transaction report including per-system results and final order lifecycle status."
+    },
+    {
+      "name": "get_swap_reconciliation_status",
+      "description": "Get reconciliation and consistency status for a specific swap order, including outstanding issues.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "SYSTEM_STATES",
+                "ISSUES",
+                "COMPENSATION_PLANS",
+                "EXECUTION_HISTORY",
+                "RAW_EVENTS"
+              ]
+            }
+          }
+        },
+        "required": [
+          "swap_order_id"
+        ]
+      },
+      "returns": "Composite view of swap order reconciliation state, including detected issues and applied/queued actions."
+    },
+    {
+      "name": "reconcile_batch_summary",
+      "description": "Compute and retrieve summary reconciliation metrics for a given batch of swap orders.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "batch_id": {
+            "type": "string"
+          },
+          "metrics": {
+            "type": "array",
+            "description": "Subset of metrics to compute.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "TOTAL_ORDERS",
+                "CONSISTENT_ORDERS",
+                "INCONSISTENT_ORDERS",
+                "RESOLVED_ORDERS",
+                "PENDING_ACTIONS",
+                "CRITICAL_ISSUES",
+                "AVERAGE_RESOLUTION_TIME"
+              ]
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "description": "Dimensions to aggregate by.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "SEVERITY",
+                "SYSTEM",
+                "STATUS",
+                "CUSTOMER_SEGMENT"
+              ]
+            }
+          }
+        },
+        "required": [
+          "batch_id"
+        ]
+      },
+      "returns": "Batch-level reconciliation metrics and optional group-by breakdowns."
+    },
+    {
+      "name": "mark_issue_for_manual_review",
+      "description": "Escalate a specific reconciliation issue for manual review and optionally block automatic actions.",
+      "stage": "governance",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "type": "string"
+          },
+          "issue_id": {
+            "type": "string",
+            "description": "Identifier of the reconciliation issue within the order."
+          },
+          "review_request": {
+            "type": "object",
+            "properties": {
+              "requested_by": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "string",
+                "enum": [
+                  "LOW",
+                  "MEDIUM",
+                  "HIGH",
+                  "URGENT"
+                ]
+              },
+              "block_auto_compensation": {
+                "type": "boolean",
+                "default": true
+              }
+            },
+            "required": [
+              "requested_by",
+              "reason"
+            ]
+          },
+          "attachments": {
+            "type": "array",
+            "description": "Optional external references like ticket ids or documents.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "JIRA",
+                    "SERVICE_NOW",
+                    "URL",
+                    "DOCUMENT"
+                  ]
+                },
+                "value": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "value"
+              ]
+            }
+          }
+        },
+        "required": [
+          "swap_order_id",
+          "issue_id",
+          "review_request"
+        ]
+      },
+      "returns": "Manual review record identifier and updated issue status."
+    },
+    {
+      "name": "synchronize_missing_swap_in_system",
+      "description": "Create or align a missing device swap record in one target system based on the orchestration canonical view.",
+      "stage": "sync",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "type": "string"
+          },
+          "target_system": {
+            "type": "string",
+            "enum": [
+              "TAAS",
+              "CAMARA",
+              "INVENTORY",
+              "BILLING",
+              "LOGISTICS"
+            ]
+          },
+          "canonical_view": {
+            "type": "object",
+            "description": "Canonical representation of the swap, if already computed; otherwise it will be fetched.",
+            "properties": {
+              "party": {
+                "$ref": "#/shared_entities/party_context"
+              },
+              "old_device": {
+                "$ref": "#/shared_entities/device_identifier"
+              },
+              "new_device": {
+                "$ref": "#/shared_entities/device_identifier"
+              },
+              "swap_metadata": {
+                "type": "object",
+                "properties": {
+                  "requested_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "channel": {
+                    "type": "string",
+                    "enum": [
+                      "RETAIL",
+                      "ONLINE",
+                      "CARE",
+                      "PARTNER"
+                    ]
+                  },
+                  "swap_reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "sync_options": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "CREATE_IF_MISSING",
+                  "UPSERT",
+                  "VALIDATE_ONLY"
+                ]
+              },
+              "fail_if_conflict": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "required": [
+          "swap_order_id",
+          "target_system"
+        ]
+      },
+      "returns": "Result of synchronization, including created/updated external_order_ref and any validation conflicts."
+    },
+    {
+      "name": "search_swap_orders",
+      "description": "Faceted search across swap_order records with rich filters, full-text query, and faceted aggregations for device_swap_reconciliation_flow.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query_text": {
+            "type": "string",
+            "description": "Optional full-text query string"
+          },
+          "filters": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "facets": {
+            "type": "array",
+            "description": "Facet definitions returned alongside results",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Facet field"
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100,
+                  "description": "Top buckets to return"
+                },
+                "include_other": {
+                  "type": "boolean",
+                  "description": "Whether to include an 'other' bucket"
+                }
+              },
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "include_archived": {
+            "type": "boolean",
+            "description": "Include archived records"
+          },
+          "highlight": {
+            "type": "boolean",
+            "description": "Return highlighted snippets when matching text"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based page index"
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Records per page"
+          },
+          "sort": {
+            "type": "array",
+            "description": "Ordered sort directives",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Sort field name"
+                },
+                "direction": {
+                  "type": "string",
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ],
+                  "description": "Sort direction"
+                }
+              },
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque continuation token for stable pagination"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "A paginated result set of swap_order records with facet buckets, total count, and continuation cursor."
+    },
+    {
+      "name": "list_swap_orders_by_status",
+      "description": "List swap_order records filtered by lifecycle status with stable cursor pagination.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "statuses": {
+            "type": "array",
+            "description": "Statuses to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "pending",
+                "active",
+                "blocked",
+                "failed",
+                "completed",
+                "archived"
+              ]
+            },
+            "minItems": 1
+          },
+          "owner_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional owner filter"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tag membership filter (any-of)"
+          },
+          "created_window": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "updated_window": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "include_metrics": {
+            "type": "boolean",
+            "description": "Attach summary metrics per record"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based page index"
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Records per page"
+          },
+          "sort": {
+            "type": "array",
+            "description": "Ordered sort directives",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Sort field name"
+                },
+                "direction": {
+                  "type": "string",
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ],
+                  "description": "Sort direction"
+                }
+              },
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque continuation token for stable pagination"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "statuses"
+        ]
+      },
+      "returns": "A paginated list of swap_order records matching the requested statuses, optionally with summary metrics."
+    },
+    {
+      "name": "get_swap_order_detail",
+      "description": "Fetch a single swap_order record with optional expansion of related entities and versioned snapshots.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "$ref": "#/shared_entities/swap_order_id"
+          },
+          "expand": {
+            "type": "array",
+            "description": "Related entity collections to inline",
+            "items": {
+              "type": "string",
+              "enum": [
+                "history",
+                "policies",
+                "approvals",
+                "comments",
+                "attachments",
+                "dependencies",
+                "metrics"
+              ]
+            }
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Read the record as of this point in time"
+          },
+          "version_id": {
+            "type": "string",
+            "description": "Specific version to retrieve when versioning is enabled"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sparse fieldset selection"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "swap_order_id"
+        ]
+      },
+      "returns": "A swap_order record with the requested expansions and version metadata."
+    },
+    {
+      "name": "bulk_create_swap_orders",
+      "description": "Submit a batch of swap_order records for creation, with idempotency keys and partial-success reporting.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "description": "Records to create",
+            "items": {
+              "type": "object",
+              "properties": {
+                "idempotency_key": {
+                  "type": "string",
+                  "description": "Caller-generated dedupe key"
+                },
+                "payload": {
+                  "type": "object",
+                  "description": "Free-form record body validated server-side"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Tags applied to the new record"
+                }
+              },
+              "required": [
+                "idempotency_key",
+                "payload"
+              ]
+            }
+          },
+          "on_error": {
+            "type": "string",
+            "enum": [
+              "abort",
+              "skip",
+              "isolate"
+            ],
+            "description": "Batch error handling strategy"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Validate only, do not persist"
+          },
+          "trace_id": {
+            "type": "string",
+            "description": "Correlation id propagated across the batch"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "returns": "A per-item outcome list with created identifiers, validation errors, and batch-level statistics."
+    },
+    {
+      "name": "bulk_update_swap_orders",
+      "description": "Apply partial updates to many swap_order records in a single transactional batch.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "patch": {
+            "type": "object",
+            "description": "JSON merge-patch applied to every matched record",
+            "additionalProperties": true
+          },
+          "expected_version": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optimistic concurrency token"
+          },
+          "max_records": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "description": "Safety cap on affected rows"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Compute affected count without applying changes"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Audit-visible reason for the change"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "patch",
+          "reason"
+        ]
+      },
+      "returns": "Affected record count, sampled previews, and any per-record errors."
+    },
+    {
+      "name": "bulk_archive_swap_orders",
+      "description": "Soft-archive swap_order records matching a selector with optional grace period before purge.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "grace_period_days": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 365,
+            "description": "Days before records become purge-eligible"
+          },
+          "preserve_audit": {
+            "type": "boolean",
+            "description": "Keep audit trail even after purge"
+          },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "obsolete",
+              "duplicate",
+              "compliance",
+              "manual"
+            ],
+            "description": "Standardised archive reason"
+          },
+          "reason_notes": {
+            "type": "string",
+            "description": "Free-form notes attached to audit"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Compute affected count without applying"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "reason_code"
+        ]
+      },
+      "returns": "Archive operation summary including matched count, scheduled purge date, and any blockers."
+    },
+    {
+      "name": "export_swap_orders",
+      "description": "Asynchronously export a filtered slice of swap_order records to the configured object store.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "ndjson",
+              "csv",
+              "parquet"
+            ],
+            "description": "Output encoding"
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "description": "Compression algorithm"
+          },
+          "destination": {
+            "type": "object",
+            "description": "Where the export should be delivered",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp",
+                  "http"
+                ],
+                "description": "Destination kind"
+              },
+              "uri": {
+                "type": "string",
+                "description": "Destination URI"
+              },
+              "credentials_ref": {
+                "type": "string",
+                "description": "Pointer to stored credentials"
+              },
+              "encryption": {
+                "type": "object",
+                "description": "Optional encryption settings",
+                "properties": {
+                  "algorithm": {
+                    "type": "string",
+                    "enum": [
+                      "aes256",
+                      "kms",
+                      "pgp"
+                    ],
+                    "description": "Algorithm to use"
+                  },
+                  "key_ref": {
+                    "type": "string",
+                    "description": "Key reference"
+                  }
+                },
+                "required": [
+                  "algorithm"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "uri"
+            ]
+          },
+          "include_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sparse field projection"
+          },
+          "max_records": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional cap on rows exported"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "format",
+          "destination"
+        ]
+      },
+      "returns": "An export job descriptor with status, destination URI, and progress callbacks."
+    },
+    {
+      "name": "subscribe_swap_order_events",
+      "description": "Register a webhook subscription for swap_order lifecycle events with HMAC signing and replay protection.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "event_types": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "Event type names to receive"
+          },
+          "filter": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "endpoint": {
+            "type": "object",
+            "description": "Receiving endpoint configuration",
+            "properties": {
+              "url": {
+                "type": "string",
+                "description": "HTTPS endpoint that receives events"
+              },
+              "signing_secret_ref": {
+                "type": "string",
+                "description": "Reference to the HMAC signing secret"
+              },
+              "tls_verify": {
+                "type": "boolean",
+                "description": "Whether to validate the server certificate"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Extra headers per delivery"
+              }
+            },
+            "required": [
+              "url"
+            ]
+          },
+          "delivery": {
+            "type": "object",
+            "description": "Delivery semantics",
+            "properties": {
+              "ordering": {
+                "type": "string",
+                "enum": [
+                  "best_effort",
+                  "ordered_per_key",
+                  "global_order"
+                ],
+                "description": "Required ordering guarantee"
+              },
+              "deduplicate_window_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Duplicate-suppression window"
+              },
+              "max_in_flight": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Concurrency cap"
+              }
+            }
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Subscription labels"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "event_types",
+          "endpoint"
+        ]
+      },
+      "returns": "A subscription handle including subscription_id, verification status, and current delivery health."
+    },
+    {
+      "name": "unsubscribe_swap_order_events",
+      "description": "Disable or delete a previously created swap_order event subscription.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string",
+            "description": "Subscription to terminate"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "delete"
+            ],
+            "description": "Lifecycle transition"
+          },
+          "drain_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Grace period to flush in-flight events"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Audit-visible reason"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "subscription_id",
+          "mode"
+        ]
+      },
+      "returns": "Final subscription state and any undelivered event counts at the time of termination."
+    },
+    {
+      "name": "get_swap_order_audit_history",
+      "description": "Retrieve the chronological audit log for a swap_order including who changed what and when.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "$ref": "#/shared_entities/swap_order_id"
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "event_categories": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "create",
+                "update",
+                "delete",
+                "approve",
+                "reject",
+                "execute",
+                "rollback",
+                "access"
+              ]
+            },
+            "description": "Audit event categories to include"
+          },
+          "include_payload_diff": {
+            "type": "boolean",
+            "description": "Inline before/after field diffs"
+          },
+          "actor_filter": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Restrict to specific actor ids"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based page index"
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Records per page"
+          },
+          "sort": {
+            "type": "array",
+            "description": "Ordered sort directives",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Sort field name"
+                },
+                "direction": {
+                  "type": "string",
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ],
+                  "description": "Sort direction"
+                }
+              },
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque continuation token for stable pagination"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "swap_order_id"
+        ]
+      },
+      "returns": "An ordered list of audit entries with diffs, actor metadata, and correlation ids."
+    },
+    {
+      "name": "query_swap_order_changelog",
+      "description": "Query the cross-record changelog for device_swap_reconciliation_flow with field-level filters.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "fields_changed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Restrict to changes touching these fields"
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "group_by": {
+            "type": "string",
+            "enum": [
+              "actor",
+              "entity",
+              "day",
+              "field"
+            ],
+            "description": "Aggregation dimension"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based page index"
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Records per page"
+          },
+          "sort": {
+            "type": "array",
+            "description": "Ordered sort directives",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Sort field name"
+                },
+                "direction": {
+                  "type": "string",
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ],
+                  "description": "Sort direction"
+                }
+              },
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque continuation token for stable pagination"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "time_window"
+        ]
+      },
+      "returns": "Aggregated changelog rows or detail entries depending on group_by, plus totals."
+    },
+    {
+      "name": "schedule_swap_order_job",
+      "description": "Create a recurring or one-off scheduled job that runs a device_swap_reconciliation_flow operation.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string",
+            "description": "Operation name to invoke when the schedule fires"
+          },
+          "input_template": {
+            "type": "object",
+            "description": "Parameters passed to the operation, with templating",
+            "additionalProperties": true
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Recurring schedule specification",
+            "properties": {
+              "cadence": {
+                "type": "string",
+                "enum": [
+                  "one_off",
+                  "hourly",
+                  "daily",
+                  "weekly",
+                  "monthly",
+                  "cron"
+                ],
+                "description": "Recurrence cadence"
+              },
+              "cron_expression": {
+                "type": "string",
+                "description": "Required when cadence=cron, 5- or 6-field cron"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone for evaluation"
+              },
+              "start_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Earliest run time"
+              },
+              "end_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Latest run time (optional)"
+              },
+              "max_occurrences": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Cap on total executions"
+              },
+              "jitter_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Random delay applied per run"
+              }
+            },
+            "required": [
+              "cadence"
+            ]
+          },
+          "owner_id": {
+            "type": "string",
+            "description": "Owning principal for the schedule"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Schedule labels"
+          },
+          "failure_policy": {
+            "type": "object",
+            "description": "What to do when a run fails",
+            "properties": {
+              "on_failure": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "halt",
+                  "alert"
+                ],
+                "description": "Per-failure action"
+              },
+              "max_failures": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Pause schedule after this many failures"
+              },
+              "alert_channel": {
+                "type": "string",
+                "description": "Channel id to alert on failure"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "operation",
+          "schedule"
+        ]
+      },
+      "returns": "A schedule descriptor including schedule_id, next run time, and validation issues."
+    },
+    {
+      "name": "pause_swap_order_schedule",
+      "description": "Temporarily pause a scheduled device_swap_reconciliation_flow job without deleting its history.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string",
+            "description": "Schedule to pause"
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Optional auto-resume time"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Audit-visible reason"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "schedule_id",
+          "reason"
+        ]
+      },
+      "returns": "Updated schedule status and prior pause history."
+    },
+    {
+      "name": "simulate_swap_order_execution",
+      "description": "Run a dry-run simulation of a device_swap_reconciliation_flow execution path without producing side effects.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scenario": {
+            "type": "object",
+            "description": "Scenario inputs",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Scenario label"
+              },
+              "seed": {
+                "type": "integer",
+                "description": "Deterministic seed for stochastic steps"
+              },
+              "fixtures": {
+                "type": "object",
+                "description": "Stubbed external responses",
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "name"
+            ]
+          },
+          "target_steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional restriction to specific steps"
+          },
+          "max_steps": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Cap on simulated steps"
+          },
+          "include_side_effect_plan": {
+            "type": "boolean",
+            "description": "Return the side effects that would have been emitted"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "scenario"
+        ]
+      },
+      "returns": "Simulation transcript with predicted outcome, side-effect plan, and assertions checked."
+    },
+    {
+      "name": "preview_swap_order_change",
+      "description": "Compute a preview of how a proposed change would affect a swap_order prior to commit.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "$ref": "#/shared_entities/swap_order_id"
+          },
+          "proposed_patch": {
+            "type": "object",
+            "description": "Merge-patch to apply for preview",
+            "additionalProperties": true
+          },
+          "show_dependencies": {
+            "type": "boolean",
+            "description": "Whether to compute downstream impact"
+          },
+          "evaluate_policies": {
+            "type": "boolean",
+            "description": "Run policy engine against the proposed state"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "swap_order_id",
+          "proposed_patch"
+        ]
+      },
+      "returns": "A preview document with field diffs, policy verdicts, and dependency impact."
+    },
+    {
+      "name": "submit_swap_order_for_approval",
+      "description": "Submit a swap_order for review with configurable approver routing and SLA targets.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "$ref": "#/shared_entities/swap_order_id"
+          },
+          "approval_chain": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Ordered approval steps",
+            "items": {
+              "type": "object",
+              "properties": {
+                "step_name": {
+                  "type": "string",
+                  "description": "Human-readable step label"
+                },
+                "approver_group": {
+                  "type": "string",
+                  "description": "Group or role authorised at this step"
+                },
+                "quorum": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Approvals required at this step"
+                },
+                "sla_minutes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "SLA before escalation"
+                },
+                "escalation_policy_id": {
+                  "type": "string",
+                  "description": "Policy invoked on SLA breach"
+                }
+              },
+              "required": [
+                "step_name",
+                "approver_group",
+                "quorum"
+              ]
+            }
+          },
+          "justification": {
+            "type": "string",
+            "description": "Reason the change is required"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Attached evidence document ids"
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Hard deadline for approval"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "swap_order_id",
+          "approval_chain",
+          "justification"
+        ]
+      },
+      "returns": "Approval workflow handle with approval_id, current step, and projected completion time."
+    },
+    {
+      "name": "record_swap_order_approval_decision",
+      "description": "Record an approve/reject/recuse decision for a pending swap_order approval step.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string",
+            "description": "Approval workflow id"
+          },
+          "step_name": {
+            "type": "string",
+            "description": "Step being decided"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "recuse",
+              "request_changes"
+            ],
+            "description": "Decision outcome"
+          },
+          "comments": {
+            "type": "string",
+            "description": "Free-form comments"
+          },
+          "conditions": {
+            "type": "array",
+            "description": "Conditions attached to a conditional approval",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "description": "Condition code"
+                },
+                "due_by": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "Deadline for the condition"
+                },
+                "owner_id": {
+                  "type": "string",
+                  "description": "Owner accountable for the condition"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "approval_id",
+          "step_name",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state, next pending step, and any triggered automations."
+    },
+    {
+      "name": "escalate_swap_order",
+      "description": "Escalate a stuck or breached swap_order to a higher tier with paging and audit.",
+      "stage": "escalate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "$ref": "#/shared_entities/swap_order_id"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "sev1",
+              "sev2",
+              "sev3",
+              "sev4"
+            ],
+            "description": "Escalation severity"
+          },
+          "target_team": {
+            "type": "string",
+            "description": "Team or rota receiving the escalation"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why the escalation is happening"
+          },
+          "sla_breach_minutes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Minutes past SLA, if applicable"
+          },
+          "page_oncall": {
+            "type": "boolean",
+            "description": "Trigger paging vs. just notification"
+          },
+          "context_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Related artifact ids attached for context"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "swap_order_id",
+          "severity",
+          "target_team",
+          "reason"
+        ]
+      },
+      "returns": "Escalation record id, paged responders, and acknowledgement timer."
+    },
+    {
+      "name": "add_swap_order_comment",
+      "description": "Append a comment, optionally with @mentions and visibility scope, to a swap_order.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "$ref": "#/shared_entities/swap_order_id"
+          },
+          "body": {
+            "type": "string",
+            "description": "Comment text in Markdown"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "User ids mentioned in the body"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "restricted"
+            ],
+            "description": "Audience scope"
+          },
+          "parent_comment_id": {
+            "type": "string",
+            "description": "Comment id this one replies to"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Labels on the comment"
+          },
+          "attachments": {
+            "type": "array",
+            "description": "Inline attachments",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "file",
+                    "link",
+                    "snippet"
+                  ],
+                  "description": "Attachment kind"
+                },
+                "uri": {
+                  "type": "string",
+                  "description": "Pointer to the attachment payload"
+                },
+                "media_type": {
+                  "type": "string",
+                  "description": "RFC 6838 media type"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "swap_order_id",
+          "body"
+        ]
+      },
+      "returns": "Newly created comment record including comment_id and resolved mentions."
+    },
+    {
+      "name": "attach_swap_order_evidence",
+      "description": "Upload an evidence file or link as an attachment to a swap_order with content hash and retention.",
+      "stage": "evidence",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "$ref": "#/shared_entities/swap_order_id"
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name of the attachment"
+          },
+          "source": {
+            "type": "object",
+            "description": "Where the bytes come from",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "inline",
+                  "object_store",
+                  "url"
+                ],
+                "description": "Source kind"
+              },
+              "content_base64": {
+                "type": "string",
+                "description": "Inline base64 bytes when type=inline"
+              },
+              "uri": {
+                "type": "string",
+                "description": "Pointer when type=object_store or url"
+              },
+              "media_type": {
+                "type": "string",
+                "description": "RFC 6838 media type"
+              },
+              "sha256": {
+                "type": "string",
+                "description": "Pre-computed content hash"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ],
+            "description": "Data classification"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Retention before automatic purge"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Attachment tags"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "swap_order_id",
+          "name",
+          "source"
+        ]
+      },
+      "returns": "Attachment descriptor including attachment_id, content hash, and stored URI."
+    },
+    {
+      "name": "snapshot_swap_order_state",
+      "description": "Capture a point-in-time snapshot of a swap_order and its dependencies for restore or audit.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "$ref": "#/shared_entities/swap_order_id"
+          },
+          "include_dependencies": {
+            "type": "boolean",
+            "description": "Capture linked entities transitively"
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "description": "Dependency traversal depth"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "audit",
+              "restore_point",
+              "diff",
+              "export"
+            ],
+            "description": "Snapshot intent"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Retention before automatic purge"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Snapshot labels"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "swap_order_id",
+          "purpose"
+        ]
+      },
+      "returns": "Snapshot descriptor with snapshot_id, captured size, and storage URI."
+    },
+    {
+      "name": "restore_swap_order_from_snapshot",
+      "description": "Restore a swap_order (and optionally dependencies) from a previously captured snapshot.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string",
+            "description": "Snapshot to restore from"
+          },
+          "target": {
+            "type": "object",
+            "description": "Where to restore",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "in_place",
+                  "new_record",
+                  "shadow"
+                ],
+                "description": "Restore target mode"
+              },
+              "new_owner_id": {
+                "type": "string",
+                "description": "Owner of the restored record when mode=new_record"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "merge_strategy": {
+            "type": "string",
+            "enum": [
+              "replace",
+              "merge",
+              "fail_on_conflict"
+            ],
+            "description": "Conflict resolution"
+          },
+          "skip_validation": {
+            "type": "boolean",
+            "description": "Skip post-restore validators"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Compute restore plan without applying"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "target"
+        ]
+      },
+      "returns": "Restore job descriptor with conflicts surfaced and final record id."
+    },
+    {
+      "name": "get_swap_order_metrics_summary",
+      "description": "Compute summary KPIs for device_swap_reconciliation_flow over a time window with optional segmentation.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "time_window": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "granularity": {
+            "type": "string",
+            "enum": [
+              "minute",
+              "hour",
+              "day",
+              "week",
+              "month"
+            ],
+            "description": "Bucket size"
+          },
+          "segment_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Dimensions to break out"
+          },
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "Metric names to compute (e.g. throughput, p95_latency, failure_rate)"
+          },
+          "filters": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "compare_to_previous_period": {
+            "type": "boolean",
+            "description": "Include delta vs the previous equal-length window"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "time_window",
+          "metrics"
+        ]
+      },
+      "returns": "A metrics document with per-bucket values, totals, and optional period-over-period deltas."
+    },
+    {
+      "name": "create_swap_order_dashboard",
+      "description": "Define a dashboard layout combining charts and tables for device_swap_reconciliation_flow.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Dashboard display name"
+          },
+          "owner_id": {
+            "type": "string",
+            "description": "Owning user or team"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Panels to render",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "description": "Panel title"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "line",
+                    "bar",
+                    "stat",
+                    "table",
+                    "heatmap"
+                  ],
+                  "description": "Visualisation type"
+                },
+                "query": {
+                  "type": "object",
+                  "description": "Query spec, polymorphic by panel type",
+                  "additionalProperties": true
+                },
+                "position": {
+                  "type": "object",
+                  "description": "Grid placement",
+                  "properties": {
+                    "x": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Column index"
+                    },
+                    "y": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Row index"
+                    },
+                    "w": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Width in columns"
+                    },
+                    "h": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Height in rows"
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y",
+                    "w",
+                    "h"
+                  ]
+                }
+              },
+              "required": [
+                "title",
+                "type",
+                "query",
+                "position"
+              ]
+            }
+          },
+          "shared_with": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Principal ids that can view"
+          },
+          "default_time_range": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard descriptor including dashboard_id and resolved share list."
+    },
+    {
+      "name": "define_swap_order_policy",
+      "description": "Create or version a policy controlling allowed device_swap_reconciliation_flow behaviour.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_name": {
+            "type": "string",
+            "description": "Human-readable policy name"
+          },
+          "scope": {
+            "type": "object",
+            "description": "Where the policy applies",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Tenant ids"
+              },
+              "environments": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Environment ids"
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Label matchers"
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Ordered rule list, first match wins",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Rule label"
+                },
+                "when": {
+                  "type": "object",
+                  "description": "Boolean filter tree with nested AND/OR support",
+                  "properties": {
+                    "combinator": {
+                      "type": "string",
+                      "enum": [
+                        "and",
+                        "or"
+                      ],
+                      "description": "How to combine clauses"
+                    },
+                    "predicates": {
+                      "type": "array",
+                      "description": "Leaf predicates at this level",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "field": {
+                            "type": "string",
+                            "description": "Field path being filtered"
+                          },
+                          "op": {
+                            "type": "string",
+                            "enum": [
+                              "eq",
+                              "ne",
+                              "gt",
+                              "gte",
+                              "lt",
+                              "lte",
+                              "in",
+                              "nin",
+                              "contains",
+                              "regex",
+                              "exists"
+                            ],
+                            "description": "Comparison operator"
+                          },
+                          "value": {
+                            "description": "Comparison value, type depends on op"
+                          }
+                        },
+                        "required": [
+                          "field",
+                          "op"
+                        ]
+                      }
+                    },
+                    "groups": {
+                      "type": "array",
+                      "description": "Nested clause groups",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                },
+                "effect": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "rate_limit"
+                  ],
+                  "description": "Rule effect"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "description": "Effect parameters"
+                }
+              },
+              "required": [
+                "name",
+                "when",
+                "effect"
+              ]
+            }
+          },
+          "enforcement_mode": {
+            "type": "string",
+            "enum": [
+              "enforce",
+              "audit_only",
+              "advisory"
+            ],
+            "description": "How strictly the policy is applied"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Earliest activation time"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "policy_name",
+          "rules"
+        ]
+      },
+      "returns": "Policy version descriptor with policy_id, version_id, and validation report."
+    },
+    {
+      "name": "evaluate_swap_order_policies",
+      "description": "Evaluate the active device_swap_reconciliation_flow policies against a candidate input and return verdicts.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "candidate": {
+            "type": "object",
+            "description": "Input under evaluation",
+            "additionalProperties": true
+          },
+          "policy_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional explicit policy set"
+          },
+          "context": {
+            "type": "object",
+            "description": "Evaluation context",
+            "properties": {
+              "tenant_id": {
+                "type": "string",
+                "description": "Tenant scope"
+              },
+              "environment_id": {
+                "type": "string",
+                "description": "Environment scope"
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Contextual labels"
+              }
+            }
+          },
+          "explain": {
+            "type": "boolean",
+            "description": "Return per-rule trace"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "candidate"
+        ]
+      },
+      "returns": "Aggregate verdict, per-rule outcomes, and any obligations attached to the decision."
+    },
+    {
+      "name": "link_swap_order_dependencies",
+      "description": "Declare typed dependency links between a swap_order and related artifacts to drive impact analysis.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "swap_order_id": {
+            "$ref": "#/shared_entities/swap_order_id"
+          },
+          "links": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Links to upsert",
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_type": {
+                  "type": "string",
+                  "description": "Target entity type"
+                },
+                "target_id": {
+                  "type": "string",
+                  "description": "Target entity id"
+                },
+                "relation": {
+                  "type": "string",
+                  "enum": [
+                    "depends_on",
+                    "blocks",
+                    "supersedes",
+                    "duplicates",
+                    "related_to"
+                  ],
+                  "description": "Relation kind"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "description": "Free-form link metadata"
+                }
+              },
+              "required": [
+                "target_type",
+                "target_id",
+                "relation"
+              ]
+            }
+          },
+          "replace_existing": {
+            "type": "boolean",
+            "description": "Replace prior links of the same relations"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "swap_order_id",
+          "links"
+        ]
+      },
+      "returns": "Resulting link set with created, updated, and removed entries."
+    }
+  ]
+}

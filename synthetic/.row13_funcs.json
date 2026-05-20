@@ -1,0 +1,667 @@
+{
+  "detect_monetization_anomalies": {
+    "name": "detect_monetization_anomalies",
+    "description": "Detect monetization-related anomalies using metrics, billing data, and configurable rules.",
+    "stage": "detect",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "object",
+          "description": "Scope of the anomaly detection run.",
+          "properties": {
+            "tenant_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Limit detection to these tenants. If omitted, scans all tenants."
+            },
+            "api_product_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Limit detection to these API products."
+            },
+            "monetization_dimensions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "revenue",
+                  "request_volume",
+                  "quota_consumption",
+                  "discounts",
+                  "credits",
+                  "latency_cost_correlation"
+                ]
+              }
+            },
+            "time_window": {
+              "$ref": "#/shared_entities/time_window"
+            }
+          }
+        },
+        "detection_config": {
+          "type": "object",
+          "description": "Configuration for detection algorithms and thresholds.",
+          "properties": {
+            "methods": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "z_score",
+                  "ewma",
+                  "seasonal_decompose",
+                  "ml_outlier",
+                  "rule_based"
+                ]
+              }
+            },
+            "sensitivity": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ],
+              "default": "medium"
+            },
+            "min_anomaly_score": {
+              "type": "number",
+              "description": "Minimum anomaly score (0-1) to consider as candidate incident."
+            },
+            "rules": {
+              "type": "array",
+              "description": "Optional rule definitions for rule_based detection.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "dimension": {
+                    "type": "string",
+                    "enum": [
+                      "revenue",
+                      "requests",
+                      "unit_price",
+                      "quota",
+                      "latency",
+                      "error_rate"
+                    ]
+                  },
+                  "operator": {
+                    "type": "string",
+                    "enum": [
+                      "gt",
+                      "gte",
+                      "lt",
+                      "lte",
+                      "eq",
+                      "neq",
+                      "pct_change_gt",
+                      "pct_change_lt"
+                    ]
+                  },
+                  "threshold": {
+                    "type": "number"
+                  },
+                  "lookback_minutes": {
+                    "type": "integer"
+                  },
+                  "group_by": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "tenant_id",
+                        "api_product_id",
+                        "subscription_id",
+                        "region"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "id",
+                  "dimension",
+                  "operator",
+                  "threshold"
+                ]
+              }
+            }
+          },
+          "required": [
+            "methods"
+          ]
+        },
+        "dry_run": {
+          "type": "boolean",
+          "description": "If true, only returns candidates without persisting incidents.",
+          "default": false
+        }
+      },
+      "required": [
+        "detection_config"
+      ]
+    },
+    "returns": "List of detected anomaly candidates with scores, optionally linked to newly created incident_ids."
+  },
+  "create_monetization_incident": {
+    "name": "create_monetization_incident",
+    "description": "Create a new monetization incident from an anomaly, manual report, or external alert.",
+    "stage": "identify",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "source": {
+          "type": "string",
+          "enum": [
+            "auto_detection",
+            "manual",
+            "external_webhook",
+            "audit_job",
+            "customer_ticket"
+          ]
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "tenant_id": {
+          "$ref": "#/shared_entities/tenant_id"
+        },
+        "api_product_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/shared_entities/api_product_id"
+          }
+        },
+        "initial_impact": {
+          "$ref": "#/shared_entities/incident_impact"
+        },
+        "detected_by_run_id": {
+          "type": "string",
+          "description": "Identifier of the detection job or run that surfaced this incident."
+        },
+        "related_subscription_ids": {
+          "type": "array",
+          "items": {
+            "$ref": "#/shared_entities/subscription_id"
+          }
+        },
+        "labels": {
+          "type": "object",
+          "description": "Free-form labels for search and routing.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "attachments": {
+          "type": "array",
+          "description": "Optional attachments with supporting evidence.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "metric_snapshot",
+                  "billing_export",
+                  "customer_report",
+                  "log_snippet",
+                  "other"
+                ]
+              },
+              "uri": {
+                "type": "string",
+                "description": "Location of the attachment, e.g. s3://, https://, gs://"
+              },
+              "metadata": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "type",
+              "uri"
+            ]
+          }
+        }
+      },
+      "required": [
+        "source",
+        "title",
+        "description",
+        "initial_impact"
+      ]
+    },
+    "returns": "Created incident with incident_id, initial status, and routing information."
+  },
+  "triage_monetization_incident": {
+    "name": "triage_monetization_incident",
+    "description": "Perform triage on an incident: classify, prioritize, and assign ownership.",
+    "stage": "triage",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "incident_id": {
+          "$ref": "#/shared_entities/incident_id"
+        },
+        "classification": {
+          "type": "object",
+          "properties": {
+            "category": {
+              "type": "string",
+              "enum": [
+                "billing_engine",
+                "pricing_catalog",
+                "quota_enforcement",
+                "rate_limiting",
+                "reporting_analytics",
+                "security_abuse",
+                "contract_misconfiguration",
+                "platform_outage",
+                "unknown"
+              ]
+            },
+            "root_cause_type": {
+              "type": "string",
+              "enum": [
+                "configuration",
+                "code_defect",
+                "data_drift",
+                "external_dependency",
+                "fraud_abuse",
+                "user_error",
+                "other",
+                "tbd"
+              ]
+            },
+            "trigger_channel": {
+              "type": "string",
+              "enum": [
+                "monitoring",
+                "customer_support",
+                "finance_ops",
+                "partner_escalation",
+                "compliance_audit"
+              ]
+            }
+          },
+          "required": [
+            "category"
+          ]
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "p0",
+            "p1",
+            "p2",
+            "p3"
+          ]
+        },
+        "owner": {
+          "type": "object",
+          "description": "Team or user responsible for the incident.",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "user",
+                "team"
+              ]
+            },
+            "id": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "id"
+          ]
+        },
+        "updated_impact": {
+          "$ref": "#/shared_entities/incident_impact"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "incident_id",
+        "classification",
+        "priority",
+        "owner"
+      ]
+    },
+    "returns": "Updated incident triage state, including priority, classification, and ownership."
+  },
+  "plan_monetization_mitigation": {
+    "name": "plan_monetization_mitigation",
+    "description": "Propose and configure mitigation actions for an open monetization incident.",
+    "stage": "respond_plan",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "incident_id": {
+          "$ref": "#/shared_entities/incident_id"
+        },
+        "strategy": {
+          "type": "object",
+          "description": "High-level mitigation strategy.",
+          "properties": {
+            "goals": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "stop_overbilling",
+                  "stop_revenue_leakage",
+                  "freeze_new_subscriptions",
+                  "temporary_discount",
+                  "traffic_throttling",
+                  "switch_pricing_plan",
+                  "rollback_deployment"
+                ]
+              }
+            },
+            "risk_tolerance": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high"
+              ]
+            },
+            "max_allowed_revenue_impact": {
+              "type": "number",
+              "description": "Maximum incremental negative revenue impact allowed for mitigation."
+            }
+          },
+          "required": [
+            "goals"
+          ]
+        },
+        "actions": {
+          "type": "array",
+          "description": "Concrete proposed mitigation actions.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "apply_temporary_rule",
+                  "adjust_price_point",
+                  "disable_feature_flag",
+                  "pause_billing_cycle",
+                  "freeze_quota_updates",
+                  "block_suspicious_tenants",
+                  "reroute_traffic",
+                  "manual_billing_adjustment"
+                ]
+              },
+              "target": {
+                "type": "object",
+                "properties": {
+                  "tenant_ids": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/shared_entities/tenant_id"
+                    }
+                  },
+                  "api_product_ids": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/shared_entities/api_product_id"
+                    }
+                  },
+                  "subscription_ids": {
+                    "type": "array",
+                    "items": {
+                      "$ref": "#/shared_entities/subscription_id"
+                    }
+                  },
+                  "regions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "parameters": {
+                "type": "object",
+                "description": "Action-specific parameters.",
+                "properties": {
+                  "rule_id": {
+                    "type": "string",
+                    "description": "Existing rule to toggle or override."
+                  },
+                  "new_unit_price": {
+                    "type": "number"
+                  },
+                  "discount_percentage": {
+                    "type": "number"
+                  },
+                  "quota_multiplier": {
+                    "type": "number"
+                  },
+                  "feature_flag_key": {
+                    "type": "string"
+                  },
+                  "traffic_percentage_cap": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100
+                  }
+                }
+              },
+              "estimated_effect": {
+                "type": "object",
+                "description": "Estimated effect of this action.",
+                "properties": {
+                  "revenue_delta": {
+                    "type": "number"
+                  },
+                  "duration_minutes": {
+                    "type": "integer"
+                  }
+                }
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        },
+        "auto_approve": {
+          "type": "boolean",
+          "description": "If true, the plan is automatically marked as approved and ready to execute.",
+          "default": false
+        }
+      },
+      "required": [
+        "incident_id",
+        "strategy"
+      ]
+    },
+    "returns": "Mitigation plan with generated mitigation_id(s) in draft or approved state."
+  },
+  "execute_monetization_mitigation": {
+    "name": "execute_monetization_mitigation",
+    "description": "Execute one or more mitigation actions for a monetization incident.",
+    "stage": "respond_execute",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "incident_id": {
+          "$ref": "#/shared_entities/incident_id"
+        },
+        "mitigation_id": {
+          "$ref": "#/shared_entities/mitigation_id"
+        },
+        "actions": {
+          "type": "array",
+          "description": "Subset of actions from the plan to execute; if omitted, executes all pending actions.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "action_id": {
+                "type": "string"
+              },
+              "override_parameters": {
+                "type": "object",
+                "description": "Optional overrides for action parameters at execution time."
+              }
+            },
+            "required": [
+              "action_id"
+            ]
+          }
+        },
+        "execution_mode": {
+          "type": "string",
+          "enum": [
+            "dry_run",
+            "staged",
+            "full"
+          ],
+          "default": "full"
+        },
+        "change_window": {
+          "type": "object",
+          "description": "Optional change window scheduling for execution.",
+          "properties": {
+            "start_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "end_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "timezone": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "incident_id",
+        "mitigation_id"
+      ]
+    },
+    "returns": "Execution status per action, with any generated rollback tokens or config snapshots."
+  },
+  "notify_stakeholders_about_incident": {
+    "name": "notify_stakeholders_about_incident",
+    "description": "Notify internal and external stakeholders about incident state changes and compensations.",
+    "stage": "communicate",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "incident_id": {
+          "$ref": "#/shared_entities/incident_id"
+        },
+        "audiences": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "internal_oncall",
+              "finance_ops",
+              "product_management",
+              "customer_success",
+              "affected_tenants_admins",
+              "all_tenants",
+              "external_partners"
+            ]
+          }
+        },
+        "channels": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "email",
+              "slack",
+              "sms",
+              "webhook",
+              "status_page",
+              "in_app_banner"
+            ]
+          }
+        },
+        "template": {
+          "type": "object",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "incident_opened",
+                "incident_updated",
+                "mitigation_applied",
+                "compensation_issued",
+                "incident_resolved",
+                "custom"
+              ]
+            },
+            "locale": {
+              "type": "string",
+              "description": "BCP-47 language tag, e.g. en-US."
+            },
+            "custom_subject": {
+              "type": "string"
+            },
+            "custom_body": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        "delivery_options": {
+          "type": "object",
+          "properties": {
+            "batch_size": {
+              "type": "integer",
+              "default": 100
+            },
+            "throttle_per_minute": {
+              "type": "integer"
+            },
+            "respect_opt_outs": {
+              "type": "boolean",
+              "default": true
+            },
+            "include_compensation_details": {
+              "type": "boolean",
+              "default": false
+            }
+          }
+        }
+      },
+      "required": [
+        "incident_id",
+        "audiences",
+        "channels",
+        "template"
+      ]
+    },
+    "returns": "Notification dispatch report including per-channel success/failure counts and correlation IDs."
+  }
+}

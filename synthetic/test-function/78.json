@@ -1,0 +1,3095 @@
+{
+  "workflow_name": "prepaid_session_booking_flow",
+  "description": "End-to-end workflow for reserving, authorizing, starting, modifying, and finalizing prepaid charging sessions for telco services (voice/data/SMS/content) including quota checks, top-ups, and error recovery.",
+  "domain": "telco_billing/prepaid_charging",
+  "shared_entities": {
+    "subscriber_id": {
+      "type": "string",
+      "description": "Unique identifier of the prepaid subscriber (e.g., MSISDN, IMSI, or internal ID)"
+    },
+    "booking_id": {
+      "type": "string",
+      "description": "Identifier for a provisional charging reservation (booking) before final rating"
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Identifier for an active charging session (e.g., data session, call, content session)"
+    },
+    "offer_id": {
+      "type": "string",
+      "description": "Identifier of a commercial offer or package that can be booked"
+    },
+    "wallet_id": {
+      "type": "string",
+      "description": "Identifier of a monetary or bonus wallet belonging to a subscriber"
+    },
+    "transaction_id": {
+      "type": "string",
+      "description": "Identifier for monetary balance-affecting transactions (debit/credit/refund)"
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "search_booking_offers",
+      "description": "Search available prepaid booking offers for a subscriber based on service type, location, and time window.",
+      "stage": "search",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string",
+            "description": "Target subscriber to personalize available offers."
+          },
+          "service_filters": {
+            "type": "object",
+            "description": "Filters for the type of service to be booked.",
+            "properties": {
+              "service_type": {
+                "type": "string",
+                "description": "Type of service the booking is for.",
+                "enum": [
+                  "voice",
+                  "data",
+                  "sms",
+                  "content",
+                  "bundle"
+                ]
+              },
+              "direction": {
+                "type": "string",
+                "description": "Direction of communication if applicable.",
+                "enum": [
+                  "mo",
+                  "mt",
+                  "both"
+                ]
+              },
+              "roaming_zone": {
+                "type": "string",
+                "description": "Roaming zone or country code where the session will occur."
+              },
+              "destination_category": {
+                "type": "string",
+                "description": "Destination rating category (e.g., onnet, offnet, international)."
+              }
+            },
+            "required": [
+              "service_type"
+            ]
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Desired start and end times for the booking.",
+            "properties": {
+              "start_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Earliest desired start time for the session."
+              },
+              "end_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Latest desired end time for the session."
+              },
+              "duration_hint_seconds": {
+                "type": "integer",
+                "description": "Expected duration of the session in seconds."
+              }
+            }
+          },
+          "constraints": {
+            "type": "object",
+            "description": "Additional commercial and technical constraints.",
+            "properties": {
+              "max_price": {
+                "type": "number",
+                "description": "Maximum acceptable total price for the booking in main currency units."
+              },
+              "currency": {
+                "type": "string",
+                "description": "Currency code for price constraints (ISO 4217)."
+              },
+              "allowed_billing_modes": {
+                "type": "array",
+                "description": "Allowed billing modes for the offers.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "prepaid_only",
+                    "hybrid",
+                    "sponsored"
+                  ]
+                }
+              },
+              "include_promotional": {
+                "type": "boolean",
+                "description": "Whether to include promotional or limited-time offers.",
+                "default": true
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination options for the search results.",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "default": 20
+              },
+              "sort_by": {
+                "type": "string",
+                "enum": [
+                  "price_asc",
+                  "price_desc",
+                  "validity",
+                  "popularity"
+                ],
+                "default": "price_asc"
+              }
+            }
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "service_filters"
+        ]
+      },
+      "returns": "List of matching offers, including pricing previews, eligibility flags, and pagination info."
+    },
+    {
+      "name": "check_prepaid_balance_and_quota",
+      "description": "Check prepaid monetary balance and relevant quota buckets for a prospective booking.",
+      "stage": "precheck",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "description": "Scope of the balance check.",
+            "properties": {
+              "wallet_ids": {
+                "type": "array",
+                "description": "Specific wallet IDs to check; if omitted, all active wallets are checked.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "quota_categories": {
+                "type": "array",
+                "description": "Requested quota categories (e.g., local_data, intl_voice).",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "include_expired": {
+                "type": "boolean",
+                "description": "Whether to include expired or inactive wallets/quotas.",
+                "default": false
+              }
+            }
+          },
+          "booking_hint": {
+            "type": "object",
+            "description": "Optional booking hint to calculate if a tentative session is affordable.",
+            "properties": {
+              "offer_id": {
+                "type": "string",
+                "description": "Offer ID for which affordability is being checked."
+              },
+              "estimated_usage": {
+                "type": "object",
+                "description": "Estimated usage metrics for the session.",
+                "properties": {
+                  "duration_seconds": {
+                    "type": "integer",
+                    "description": "Estimated call or session duration."
+                  },
+                  "data_volume_mb": {
+                    "type": "number",
+                    "description": "Estimated data volume in MB."
+                  },
+                  "message_count": {
+                    "type": "integer",
+                    "description": "Number of messages for SMS sessions."
+                  }
+                }
+              }
+            }
+          },
+          "include_hold_amounts": {
+            "type": "boolean",
+            "description": "Whether to include already reserved (held) amounts from active bookings.",
+            "default": true
+          }
+        },
+        "required": [
+          "subscriber_id"
+        ]
+      },
+      "returns": "Structure containing wallet balances, quota buckets, any affordability analysis for the hinted booking, and hold amounts."
+    },
+    {
+      "name": "create_prepaid_booking",
+      "description": "Create a provisional booking and reserve balance/quota for an upcoming session.",
+      "stage": "book",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string"
+          },
+          "offer_id": {
+            "type": "string"
+          },
+          "requested_session": {
+            "type": "object",
+            "description": "Characteristics of the session to be booked.",
+            "properties": {
+              "service_type": {
+                "type": "string",
+                "enum": [
+                  "voice",
+                  "data",
+                  "sms",
+                  "content",
+                  "bundle"
+                ]
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "mo",
+                  "mt",
+                  "both"
+                ]
+              },
+              "origin": {
+                "type": "object",
+                "description": "Originating party context.",
+                "properties": {
+                  "msisdn": {
+                    "type": "string"
+                  },
+                  "network_node": {
+                    "type": "string",
+                    "description": "Identifier of the originating network node (e.g., MSC, PGW, SMSC)."
+                  },
+                  "location": {
+                    "type": "object",
+                    "description": "Location context for rating purposes.",
+                    "properties": {
+                      "mcc": {
+                        "type": "string"
+                      },
+                      "mnc": {
+                        "type": "string"
+                      },
+                      "cell_id": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "destination": {
+                "type": "object",
+                "description": "Destination party or endpoint.",
+                "properties": {
+                  "address": {
+                    "type": "string",
+                    "description": "Destination MSISDN, URI, or content ID."
+                  },
+                  "category": {
+                    "type": "string",
+                    "description": "Destination category (e.g., onnet, international, premium)."
+                  }
+                }
+              },
+              "time_constraints": {
+                "type": "object",
+                "description": "Temporal constraints of the forthcoming session.",
+                "properties": {
+                  "earliest_start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "latest_start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "max_duration_seconds": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "usage_limits": {
+                "type": "object",
+                "description": "Upper limits for usage under this booking.",
+                "properties": {
+                  "max_data_mb": {
+                    "type": "number"
+                  },
+                  "max_messages": {
+                    "type": "integer"
+                  }
+                }
+              }
+            },
+            "required": [
+              "service_type"
+            ]
+          },
+          "charging_preferences": {
+            "type": "object",
+            "description": "Preferences affecting how the booking is charged.",
+            "properties": {
+              "preferred_wallet_priority": {
+                "type": "array",
+                "description": "Ordered list of wallet IDs or tags to use first.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fallback_to_main_balance": {
+                "type": "boolean",
+                "default": true
+              },
+              "block_if_partial": {
+                "type": "boolean",
+                "description": "Whether to reject booking if only partial coverage can be reserved.",
+                "default": false
+              }
+            }
+          },
+          "client_context": {
+            "type": "object",
+            "description": "Client and correlation information for idempotency and tracing.",
+            "properties": {
+              "external_booking_ref": {
+                "type": "string",
+                "description": "Client-provided idempotency key or correlation ID."
+              },
+              "channel": {
+                "type": "string",
+                "enum": [
+                  "network_element",
+                  "selfcare_app",
+                  "customer_care",
+                  "partner_api"
+                ]
+              },
+              "metadata": {
+                "type": "object",
+                "description": "Additional client metadata.",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "offer_id",
+          "requested_session"
+        ]
+      },
+      "returns": "New booking ID, reserved amounts per wallet/quota, granted usage limits, and booking validity window."
+    },
+    {
+      "name": "get_booking_details",
+      "description": "Retrieve details and current status of an existing prepaid booking.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "booking_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional sections to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "wallet_reservations",
+                "quota_reservations",
+                "usage_limits",
+                "audit_log"
+              ]
+            }
+          }
+        },
+        "required": [
+          "booking_id"
+        ]
+      },
+      "returns": "Booking summary, status, reserved resources, associated subscriber and offer, and any requested detailed sections."
+    },
+    {
+      "name": "authorize_and_start_session",
+      "description": "Authorize and start a real-time charging session based on an existing booking.",
+      "stage": "start",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "booking_id": {
+            "type": "string"
+          },
+          "session_request": {
+            "type": "object",
+            "description": "Information needed to bind the booking to a network session.",
+            "properties": {
+              "session_id": {
+                "type": "string",
+                "description": "Client-provided session identifier; can be used for idempotent retries."
+              },
+              "network_context": {
+                "type": "object",
+                "description": "Network-level context of the session.",
+                "properties": {
+                  "access_type": {
+                    "type": "string",
+                    "enum": [
+                      "2g",
+                      "3g",
+                      "4g",
+                      "5g",
+                      "wifi"
+                    ]
+                  },
+                  "bearer_id": {
+                    "type": "string",
+                    "description": "Bearer/PDN/session identifier in the network element."
+                  },
+                  "start_timestamp": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "required": [
+                  "access_type",
+                  "start_timestamp"
+                ]
+              },
+              "initial_usage_hint": {
+                "type": "object",
+                "description": "Optional expected usage to help allocate initial credit.",
+                "properties": {
+                  "expected_duration_seconds": {
+                    "type": "integer"
+                  },
+                  "expected_data_mb": {
+                    "type": "number"
+                  }
+                }
+              }
+            },
+            "required": [
+              "network_context"
+            ]
+          },
+          "policy_overrides": {
+            "type": "object",
+            "description": "Optional policy overrides from higher-level control systems.",
+            "properties": {
+              "force_reevaluation_of_offer": {
+                "type": "boolean",
+                "default": false
+              },
+              "max_authorized_units": {
+                "type": "object",
+                "description": "Clamp the maximum units granted in the first authorization.",
+                "properties": {
+                  "duration_seconds": {
+                    "type": "integer"
+                  },
+                  "data_mb": {
+                    "type": "number"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "booking_id",
+          "session_request"
+        ]
+      },
+      "returns": "Session ID (if generated), authorization granted units and timers, and linkage between booking and session."
+    },
+    {
+      "name": "update_session_usage",
+      "description": "Report interim usage for an active prepaid session and request additional authorization if needed.",
+      "stage": "in_progress",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "usage_report": {
+            "type": "object",
+            "description": "Measured usage since last report.",
+            "properties": {
+              "sequence_number": {
+                "type": "integer",
+                "description": "Monotonically increasing sequence number for this report."
+              },
+              "consumed_units": {
+                "type": "object",
+                "description": "Units consumed since last update.",
+                "properties": {
+                  "duration_seconds": {
+                    "type": "integer"
+                  },
+                  "data_mb": {
+                    "type": "number"
+                  },
+                  "messages": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "report_timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "usage_breakdown": {
+                "type": "array",
+                "description": "Optional granular breakdown per rating component.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "component_type": {
+                      "type": "string",
+                      "enum": [
+                        "voice",
+                        "data",
+                        "sms",
+                        "content"
+                      ]
+                    },
+                    "value": {
+                      "type": "number"
+                    },
+                    "unit": {
+                      "type": "string",
+                      "enum": [
+                        "seconds",
+                        "mb",
+                        "messages",
+                        "items"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "component_type",
+                    "value",
+                    "unit"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "sequence_number",
+              "consumed_units",
+              "report_timestamp"
+            ]
+          },
+          "request_additional_units": {
+            "type": "boolean",
+            "description": "Whether to request more units for continued service.",
+            "default": true
+          },
+          "max_additional_units": {
+            "type": "object",
+            "description": "Upper bound on additional units to grant in this update.",
+            "properties": {
+              "duration_seconds": {
+                "type": "integer"
+              },
+              "data_mb": {
+                "type": "number"
+              },
+              "messages": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "required": [
+          "session_id",
+          "usage_report"
+        ]
+      },
+      "returns": "Updated authorization (additional units or termination indication), current charged amounts, and remaining reserved resources."
+    },
+    {
+      "name": "modify_prepaid_booking",
+      "description": "Modify an existing booking before or during a session (e.g., extend duration, switch wallet priority).",
+      "stage": "modify",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "booking_id": {
+            "type": "string"
+          },
+          "modifications": {
+            "type": "object",
+            "description": "Requested changes to booking attributes.",
+            "properties": {
+              "time_constraints": {
+                "type": "object",
+                "description": "New time constraints for the booking.",
+                "properties": {
+                  "extend_validity_seconds": {
+                    "type": "integer",
+                    "description": "Seconds to extend booking validity window."
+                  },
+                  "new_latest_start": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "usage_limits": {
+                "type": "object",
+                "description": "Adjust usage limits.",
+                "properties": {
+                  "increase_max_data_mb": {
+                    "type": "number"
+                  },
+                  "increase_max_duration_seconds": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "charging_preferences": {
+                "type": "object",
+                "description": "Update charging preferences.",
+                "properties": {
+                  "preferred_wallet_priority": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "fallback_to_main_balance": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for modification (e.g., user_request, policy_change)."
+          }
+        },
+        "required": [
+          "booking_id",
+          "modifications"
+        ]
+      },
+      "returns": "Updated booking details, including any additional reservations or releases, and applied modification list."
+    },
+    {
+      "name": "finalize_session_and_charge",
+      "description": "Terminate a session, perform final rating, and commit or rollback reserved amounts.",
+      "stage": "finalize",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "final_usage": {
+            "type": "object",
+            "description": "Final usage metrics for the session, including last segment.",
+            "properties": {
+              "total_duration_seconds": {
+                "type": "integer"
+              },
+              "total_data_mb": {
+                "type": "number"
+              },
+              "total_messages": {
+                "type": "integer"
+              },
+              "usage_segments": {
+                "type": "array",
+                "description": "Optional detailed segments for advanced rating (e.g., roaming, peak/off-peak).",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "segment_type": {
+                      "type": "string",
+                      "enum": [
+                        "home",
+                        "roaming",
+                        "peak",
+                        "offpeak",
+                        "promotion"
+                      ]
+                    },
+                    "start_time": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "end_time": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "duration_seconds": {
+                      "type": "integer"
+                    },
+                    "data_mb": {
+                      "type": "number"
+                    },
+                    "messages": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "termination_cause": {
+            "type": "string",
+            "description": "Cause for session termination.",
+            "enum": [
+              "normal_release",
+              "network_failure",
+              "insufficient_balance",
+              "user_ended",
+              "timeout",
+              "policy_termination"
+            ]
+          },
+          "commit_strategy": {
+            "type": "string",
+            "description": "How to handle committed vs reserved amounts on discrepancies.",
+            "enum": [
+              "commit_up_to_reserved",
+              "full_recalculate_allow_excess_debit",
+              "full_recalculate_cap_to_reserved"
+            ],
+            "default": "commit_up_to_reserved"
+          }
+        },
+        "required": [
+          "session_id",
+          "final_usage",
+          "termination_cause"
+        ]
+      },
+      "returns": "Final charged amount, released reservations, generated transaction IDs, and rating breakdown."
+    },
+    {
+      "name": "cancel_prepaid_booking",
+      "description": "Cancel a booking that is not needed anymore and release any reserved resources.",
+      "stage": "cancel",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "booking_id": {
+            "type": "string"
+          },
+          "cancellation_reason": {
+            "type": "string",
+            "enum": [
+              "user_request",
+              "timeout",
+              "policy_violation",
+              "technical_error",
+              "duplicate_booking"
+            ]
+          },
+          "force_release": {
+            "type": "boolean",
+            "description": "If true, release reservations even if linked to an active or unknown session state.",
+            "default": false
+          },
+          "retain_audit_trail": {
+            "type": "boolean",
+            "description": "If false, anonymize personal identifiers while retaining financial records.",
+            "default": true
+          }
+        },
+        "required": [
+          "booking_id",
+          "cancellation_reason"
+        ]
+      },
+      "returns": "Cancellation confirmation, released reservations summary, and any impacted sessions/wallets."
+    },
+    {
+      "name": "retry_or_rollback_charging",
+      "description": "Handle error recovery scenarios by retrying failed charging actions or performing a controlled rollback.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "recovery_target": {
+            "type": "object",
+            "description": "Target entity to recover.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "booking",
+                  "session",
+                  "transaction"
+                ]
+              },
+              "booking_id": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              },
+              "transaction_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "recovery_action": {
+            "type": "string",
+            "description": "Requested action to perform for error recovery.",
+            "enum": [
+              "retry_final_charge",
+              "retry_reservation",
+              "rollback_reservation",
+              "reverse_transaction",
+              "mark_as_resolved"
+            ]
+          },
+          "root_cause": {
+            "type": "object",
+            "description": "Information about the detected error.",
+            "properties": {
+              "category": {
+                "type": "string",
+                "enum": [
+                  "network_timeout",
+                  "duplicate_request",
+                  "rating_failure",
+                  "wallet_inconsistency",
+                  "unknown"
+                ]
+              },
+              "details": {
+                "type": "string"
+              },
+              "original_request_id": {
+                "type": "string",
+                "description": "Identifier of the failed original request if known."
+              }
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "If true, simulate what would be changed without applying it.",
+            "default": false
+          }
+        },
+        "required": [
+          "recovery_target",
+          "recovery_action"
+        ]
+      },
+      "returns": "Outcome of the recovery action, including any new or reversed transaction IDs, and state corrections performed."
+    },
+    {
+      "name": "topup_and_reauthorize_booking",
+      "description": "Perform an immediate top-up for a prepaid subscriber and re-evaluate a failed or pending booking for authorization.",
+      "stage": "topup",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string"
+          },
+          "booking_id": {
+            "type": "string",
+            "description": "Booking to re-evaluate after top-up; can be omitted for general top-up."
+          },
+          "topup_request": {
+            "type": "object",
+            "description": "Details of the top-up operation.",
+            "properties": {
+              "amount": {
+                "type": "number",
+                "description": "Top-up amount in main currency units."
+              },
+              "currency": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string",
+                "enum": [
+                  "voucher",
+                  "credit_card",
+                  "bank_transfer",
+                  "operator_gift",
+                  "partner_promotion"
+                ]
+              },
+              "voucher_details": {
+                "type": "object",
+                "description": "Voucher-specific information if top-up source is voucher.",
+                "properties": {
+                  "voucher_code": {
+                    "type": "string"
+                  },
+                  "serial_number": {
+                    "type": "string"
+                  }
+                }
+              },
+              "client_reference": {
+                "type": "string",
+                "description": "External payment reference for reconciliation."
+              }
+            },
+            "required": [
+              "amount",
+              "currency",
+              "source"
+            ]
+          },
+          "reauthorization_options": {
+            "type": "object",
+            "description": "Options controlling post-top-up booking re-evaluation.",
+            "properties": {
+              "attempt_reauthorize": {
+                "type": "boolean",
+                "default": true
+              },
+              "auto_start_session": {
+                "type": "boolean",
+                "description": "If true and booking becomes authorized, immediately start the session if network context is available.",
+                "default": false
+              }
+            }
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "topup_request"
+        ]
+      },
+      "returns": "Top-up result (new balances and transaction ID) and, if applicable, updated booking status and reauthorization outcome."
+    },
+    {
+      "name": "list_subscriber_bookings_and_sessions",
+      "description": "List current and recent bookings and sessions for a subscriber with filtering and pagination.",
+      "stage": "list",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filter criteria for bookings and sessions.",
+            "properties": {
+              "booking_status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "authorized",
+                    "cancelled",
+                    "expired",
+                    "completed",
+                    "failed"
+                  ]
+                }
+              },
+              "session_status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "active",
+                    "ended",
+                    "aborted",
+                    "unknown"
+                  ]
+                }
+              },
+              "service_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "voice",
+                    "data",
+                    "sms",
+                    "content",
+                    "bundle"
+                  ]
+                }
+              },
+              "created_after": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_before": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "include_historical_days": {
+                "type": "integer",
+                "description": "Include items from the last N days if time bounds are not specified."
+              }
+            }
+          },
+          "include": {
+            "type": "array",
+            "description": "Which related entities to include.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "booking_summaries",
+                "session_summaries",
+                "wallet_impacts"
+              ]
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "default": 50
+              },
+              "sort_by": {
+                "type": "string",
+                "enum": [
+                  "created_desc",
+                  "created_asc",
+                  "status",
+                  "service_type"
+                ],
+                "default": "created_desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "subscriber_id"
+        ]
+      },
+      "returns": "Paginated list of bookings and/or sessions for the subscriber, with summary status and optional wallet impact snapshots."
+    },
+    {
+      "name": "get_charging_state_and_consistency",
+      "description": "Get a consolidated view of charging state for a subscriber, booking, or session and check for state inconsistencies.",
+      "stage": "status",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "object",
+            "description": "Defines what entity to inspect.",
+            "properties": {
+              "level": {
+                "type": "string",
+                "enum": [
+                  "subscriber",
+                  "booking",
+                  "session"
+                ]
+              },
+              "subscriber_id": {
+                "type": "string"
+              },
+              "booking_id": {
+                "type": "string"
+              },
+              "session_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "level"
+            ]
+          },
+          "consistency_checks": {
+            "type": "array",
+            "description": "List of consistency checks to run.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "reservation_vs_wallet_balance",
+                "session_vs_booking_link",
+                "duplicate_sessions",
+                "stale_bookings",
+                "transaction_reconciliation"
+              ]
+            }
+          },
+          "detail_level": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "detailed",
+              "debug"
+            ],
+            "default": "summary"
+          }
+        },
+        "required": [
+          "scope"
+        ]
+      },
+      "returns": "Consolidated charging state view for the specified scope, including any detected inconsistencies and recommended recovery actions."
+    },
+    {
+      "name": "search_prepaid_booking_entities",
+      "description": "Faceted search across prepaid_booking entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching prepaid_booking entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_prepaid_booking_records",
+      "description": "Bulk-create up to N prepaid_booking records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_prepaid_booking_records",
+      "description": "Apply a partial update patch to many prepaid_booking records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_prepaid_booking_records",
+      "description": "Delete or soft-delete many prepaid_booking records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_prepaid_booking_dataset",
+      "description": "Schedule or stream an export of prepaid_booking data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_prepaid_booking_dataset",
+      "description": "Validate and import a prepaid_booking dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_prepaid_booking_state",
+      "description": "Create a point-in-time snapshot of one or more prepaid_booking entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_prepaid_booking_snapshot",
+      "description": "Restore prepaid_booking state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_prepaid_booking_metrics",
+      "description": "Query aggregated metrics/KPIs for the prepaid_booking workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_prepaid_booking_dashboard",
+      "description": "Compose a dashboard view across prepaid_booking metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_prepaid_booking_audit_events",
+      "description": "Search the prepaid_booking audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_prepaid_booking_events",
+      "description": "Create a webhook subscription that delivers prepaid_booking workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_prepaid_booking_subscriptions",
+      "description": "List webhook subscriptions for prepaid_booking events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_prepaid_booking_subscription",
+      "description": "Remove a webhook subscription for prepaid_booking events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_prepaid_booking_job",
+      "description": "Schedule a recurring or one-off prepaid_booking job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_prepaid_booking_schedules",
+      "description": "List scheduled prepaid_booking jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_prepaid_booking_schedule",
+      "description": "Cancel or pause a scheduled prepaid_booking job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_prepaid_booking_operation",
+      "description": "Run a what-if simulation of a prepaid_booking operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_prepaid_booking_approval",
+      "description": "Open an approval request for a prepaid_booking action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_prepaid_booking_approval",
+      "description": "Record an approve/reject/abstain decision on a prepaid_booking approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_prepaid_booking_comment",
+      "description": "Add a threaded comment or annotation to any prepaid_booking entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_prepaid_booking_comments",
+      "description": "List comments/annotations attached to a prepaid_booking entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_prepaid_booking_policy",
+      "description": "Create or update a policy/rule controlling prepaid_booking behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_prepaid_booking_policies",
+      "description": "List prepaid_booking policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_prepaid_booking_entities",
+      "description": "Create a typed relationship between two prepaid_booking-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_prepaid_booking_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a prepaid_booking entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_prepaid_booking_entities",
+      "description": "Add, remove, or replace tags on one or many prepaid_booking entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}

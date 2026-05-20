@@ -1,0 +1,1197 @@
+{
+  "workflow_name": "fault_management_network_intelligence",
+  "description": "End-to-end network fault management workflow for detection, correlation, impact analysis, remediation, and post-incident review in a Telecom-as-a-Service (TaaS) network intelligence domain.",
+  "domain": "taas/network_intelligence",
+  "shared_entities": {
+    "fault_id": {
+      "type": "string",
+      "description": "Unique identifier for a network fault or incident."
+    },
+    "alarm_id": {
+      "type": "string",
+      "description": "Unique identifier for a raw network alarm/event from underlying systems."
+    },
+    "correlation_group_id": {
+      "type": "string",
+      "description": "Identifier representing a correlated group of related alarms or faults."
+    },
+    "network_element_id": {
+      "type": "string",
+      "description": "Identifier for a network element (e.g., base station, router, switch)."
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Identifier for tenant or operator in a multi-tenant TaaS environment."
+    },
+    "remediation_plan_id": {
+      "type": "string",
+      "description": "Identifier for an automated or semi-automated remediation plan."
+    },
+    "change_request_id": {
+      "type": "string",
+      "description": "Identifier of a change request associated with a fault remediation."
+    },
+    "audit_session_id": {
+      "type": "string",
+      "description": "Identifier for a post-incident audit/review session."
+    }
+  },
+  "functions": [
+    {
+      "name": "ingest_fault_events",
+      "description": "Ingest and normalize raw network alarms/events into the fault management system.",
+      "stage": "ingest",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant under which the events are ingested."
+          },
+          "source_system": {
+            "type": "string",
+            "description": "Originating system of the alarms (e.g., EMS, NMS, probe, OSS)."
+          },
+          "ingest_mode": {
+            "type": "string",
+            "enum": [
+              "realtime",
+              "batch",
+              "replay"
+            ],
+            "description": "Defines how events are being ingested."
+          },
+          "events": {
+            "type": "array",
+            "description": "List of raw alarms/events to be ingested.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_alarm_id": {
+                  "type": "string",
+                  "description": "Identifier of the alarm in the source system."
+                },
+                "network_element": {
+                  "type": "object",
+                  "description": "Network element context for the alarm.",
+                  "properties": {
+                    "network_element_id": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "cell_site",
+                        "router",
+                        "switch",
+                        "gNodeB",
+                        "eNodeB",
+                        "core_function",
+                        "transmission_node",
+                        "unknown"
+                      ]
+                    },
+                    "region": {
+                      "type": "string"
+                    },
+                    "geo": {
+                      "type": "object",
+                      "properties": {
+                        "lat": {
+                          "type": "number"
+                        },
+                        "lng": {
+                          "type": "number"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "network_element_id"
+                  ]
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "critical",
+                    "major",
+                    "minor",
+                    "warning",
+                    "info"
+                  ]
+                },
+                "alarm_class": {
+                  "type": "string",
+                  "description": "Vendor-specific or standardized alarm class."
+                },
+                "probable_cause": {
+                  "type": "string"
+                },
+                "timestamp": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "raw_payload": {
+                  "type": "object",
+                  "description": "Raw JSON payload as received from the source system."
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "external_alarm_id",
+                "network_element",
+                "severity",
+                "timestamp"
+              ]
+            }
+          },
+          "ingest_metadata": {
+            "type": "object",
+            "description": "Additional ingest metadata for traceability.",
+            "properties": {
+              "batch_id": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "source_region": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "source_system",
+          "ingest_mode",
+          "events"
+        ]
+      },
+      "returns": "Summary of ingested events, including mapped alarm_ids and any ingestion errors."
+    },
+    {
+      "name": "correlate_alarms_to_faults",
+      "description": "Run correlation logic on alarms to create or update fault groups.",
+      "stage": "correlate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "alarm_ids": {
+            "type": "array",
+            "description": "List of alarm identifiers to be correlated.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "correlation_strategy": {
+            "type": "string",
+            "enum": [
+              "topology_based",
+              "time_proximity",
+              "cause_effect",
+              "machine_learning",
+              "hybrid"
+            ],
+            "description": "Selects the primary correlation strategy."
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Optional time window constraints for correlation.",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "max_skew_seconds": {
+                "type": "integer",
+                "description": "Max allowed time difference between alarms in the same group."
+              }
+            }
+          },
+          "topology_scope": {
+            "type": "object",
+            "description": "Optional topology scope restrictions.",
+            "properties": {
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "network_element_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "impact_domain": {
+                "type": "string",
+                "enum": [
+                  "access",
+                  "transport",
+                  "core",
+                  "cloud",
+                  "end_to_end"
+                ]
+              }
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, only simulate correlation without persisting changes."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "alarm_ids",
+          "correlation_strategy"
+        ]
+      },
+      "returns": "Correlation result including correlation_group_id(s), created/updated fault_id(s), and mapping of alarm_ids to faults."
+    },
+    {
+      "name": "create_or_update_fault",
+      "description": "Create a new fault or update an existing one based on correlated alarms and analysis.",
+      "stage": "fault_lifecycle",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "fault_id": {
+            "type": "string",
+            "description": "Existing fault_id to update. Omit to create a new fault."
+          },
+          "correlation_group_id": {
+            "type": "string",
+            "description": "Correlation group associated with the fault."
+          },
+          "title": {
+            "type": "string",
+            "description": "Human-readable summary of the fault."
+          },
+          "description": {
+            "type": "string",
+            "description": "Detailed description of the fault."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "open",
+              "in_progress",
+              "monitoring",
+              "resolved",
+              "closed",
+              "suppressed"
+            ],
+            "description": "Lifecycle state of the fault."
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "p1_critical",
+              "p2_major",
+              "p3_minor",
+              "p4_trivial"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "availability",
+              "performance",
+              "capacity",
+              "security",
+              "configuration",
+              "unknown"
+            ]
+          },
+          "related_alarms": {
+            "type": "array",
+            "description": "List of alarms associated with this fault.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "alarm_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "root_cause_candidate",
+                    "symptom",
+                    "noise"
+                  ]
+                }
+              },
+              "required": [
+                "alarm_id"
+              ]
+            }
+          },
+          "affected_elements": {
+            "type": "array",
+            "description": "List of network elements impacted by the fault.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "network_element_id": {
+                  "type": "string"
+                },
+                "impact_type": {
+                  "type": "string",
+                  "enum": [
+                    "hard_down",
+                    "partial_degradation",
+                    "flapping",
+                    "unknown"
+                  ]
+                },
+                "impact_score": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              },
+              "required": [
+                "network_element_id"
+              ]
+            }
+          },
+          "impact_estimate": {
+            "type": "object",
+            "description": "Estimated customer and service impact.",
+            "properties": {
+              "estimated_affected_subscribers": {
+                "type": "integer"
+              },
+              "affected_services": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "voice",
+                    "sms",
+                    "mobile_data",
+                    "fixed_broadband",
+                    "enterprise_vpn",
+                    "iot_connectivity",
+                    "unknown"
+                  ]
+                }
+              },
+              "business_impact_level": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "very_high"
+                ]
+              }
+            }
+          },
+          "labels": {
+            "type": "array",
+            "description": "Arbitrary labels for classification, routing, and analytics.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "custom_attributes": {
+            "type": "object",
+            "description": "Tenant-specific extensible attributes."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "title",
+          "state",
+          "priority",
+          "category"
+        ]
+      },
+      "returns": "Created or updated fault resource including fault_id and current state."
+    },
+    {
+      "name": "get_fault_details",
+      "description": "Retrieve detailed information about a specific fault, including alarms, topology, and impact.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "fault_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional related resources to include.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "alarms",
+                "correlation",
+                "impact",
+                "timeline",
+                "remediation_plans",
+                "change_requests",
+                "audit_trail"
+              ]
+            }
+          },
+          "mask_sensitive": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to mask sensitive fields like subscriber identifiers."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "fault_id"
+        ]
+      },
+      "returns": "Full fault representation with optional embedded alarms, impact analysis, remediation, and audit information."
+    },
+    {
+      "name": "list_faults",
+      "description": "List and filter faults across the network with pagination and advanced filtering.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filter criteria for fault listing.",
+            "properties": {
+              "states": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "in_progress",
+                    "monitoring",
+                    "resolved",
+                    "closed",
+                    "suppressed"
+                  ]
+                }
+              },
+              "priorities": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "p1_critical",
+                    "p2_major",
+                    "p3_minor",
+                    "p4_trivial"
+                  ]
+                }
+              },
+              "categories": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "availability",
+                    "performance",
+                    "capacity",
+                    "security",
+                    "configuration",
+                    "unknown"
+                  ]
+                }
+              },
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "network_element_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "min_business_impact": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "very_high"
+                ]
+              },
+              "label_contains": {
+                "type": "string"
+              },
+              "search_text": {
+                "type": "string",
+                "description": "Full-text search over title and description."
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "priority",
+              "state",
+              "impact_level"
+            ],
+            "default": "created_at"
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          },
+          "page": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50,
+            "maximum": 200
+          }
+        },
+        "required": [
+          "tenant_id"
+        ]
+      },
+      "returns": "Paginated list of faults matching the filters with summary attributes and pagination metadata."
+    },
+    {
+      "name": "run_root_cause_analysis",
+      "description": "Execute automated root cause analysis (RCA) on a given fault leveraging topology, metrics, and prior incidents.",
+      "stage": "analysis",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "fault_id": {
+            "type": "string"
+          },
+          "analysis_profile": {
+            "type": "string",
+            "enum": [
+              "fast",
+              "standard",
+              "deep"
+            ],
+            "default": "standard"
+          },
+          "data_sources": {
+            "type": "array",
+            "description": "Which data sources to use for RCA.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "topology",
+                "performance_metrics",
+                "change_history",
+                "historical_incidents",
+                "ml_models"
+              ]
+            }
+          },
+          "time_horizon": {
+            "type": "object",
+            "description": "Time horizon for metrics and events considered in RCA.",
+            "properties": {
+              "lookback_minutes": {
+                "type": "integer",
+                "default": 120
+              },
+              "include_future_predictions": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "explainability": {
+            "type": "object",
+            "description": "Explainability and output preferences.",
+            "properties": {
+              "include_feature_importance": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_alternative_hypotheses": {
+                "type": "boolean",
+                "default": false
+              },
+              "max_candidates": {
+                "type": "integer",
+                "default": 5
+              }
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "fault_id"
+        ]
+      },
+      "returns": "RCA result including ranked root cause candidates, confidence scores, and supporting evidence."
+    },
+    {
+      "name": "suggest_remediation_plans",
+      "description": "Suggest remediation plans for a given fault based on RCA, playbooks, and historical resolutions.",
+      "stage": "remediation_planning",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "fault_id": {
+            "type": "string"
+          },
+          "max_suggestions": {
+            "type": "integer",
+            "default": 3,
+            "minimum": 1,
+            "maximum": 10
+          },
+          "constraints": {
+            "type": "object",
+            "description": "Operational constraints for remediation.",
+            "properties": {
+              "maintenance_window_only": {
+                "type": "boolean",
+                "default": false
+              },
+              "avoid_services": {
+                "type": "array",
+                "description": "Services that must not be impacted by remediation.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "max_expected_downtime_minutes": {
+                "type": "integer"
+              },
+              "change_policy_profile": {
+                "type": "string",
+                "description": "Name of a policy profile that governs what actions are allowed."
+              }
+            }
+          },
+          "preapproved_only": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, only suggest pre-approved plans not requiring CAB approval."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "fault_id"
+        ]
+      },
+      "returns": "List of remediation_plan candidates with remediation_plan_id (for known playbooks), risk level, estimated impact, and required approvals."
+    },
+    {
+      "name": "execute_remediation_plan",
+      "description": "Execute an automated or semi-automated remediation plan for a fault, optionally creating or linking a change request.",
+      "stage": "remediation_execution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "fault_id": {
+            "type": "string"
+          },
+          "remediation_plan_id": {
+            "type": "string",
+            "description": "Identifier of a predefined remediation plan/playbook."
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "automatic",
+              "guided",
+              "manual_steps_only"
+            ],
+            "description": "Defines how the plan will be executed."
+          },
+          "change_request": {
+            "type": "object",
+            "description": "Optional change request to create/link as part of remediation.",
+            "properties": {
+              "create_new": {
+                "type": "boolean",
+                "default": false
+              },
+              "existing_change_request_id": {
+                "type": "string",
+                "description": "Link remediation to an already existing change request."
+              },
+              "new_change_request_details": {
+                "type": "object",
+                "description": "Attributes for a new change request if create_new=true.",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "change_type": {
+                    "type": "string",
+                    "enum": [
+                      "standard",
+                      "emergency",
+                      "normal"
+                    ]
+                  },
+                  "planned_start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "planned_end": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "required": [
+                  "title",
+                  "change_type"
+                ]
+              }
+            }
+          },
+          "approval_context": {
+            "type": "object",
+            "description": "Approval metadata for audit and governance.",
+            "properties": {
+              "approved_by": {
+                "type": "string"
+              },
+              "approval_timestamp": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "approval_reference": {
+                "type": "string"
+              }
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, simulate plan execution and return impact preview."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "fault_id",
+          "remediation_plan_id",
+          "execution_mode"
+        ]
+      },
+      "returns": "Remediation execution status, including remediation_plan_execution_id, linked change_request_id (if any), and step-wise results or simulation preview."
+    },
+    {
+      "name": "get_fault_status",
+      "description": "Retrieve the current status, progression, and key timestamps of a fault.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "fault_id": {
+            "type": "string"
+          },
+          "include_health_signals": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, include recent KPIs and health checks for impacted elements."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "fault_id"
+        ]
+      },
+      "returns": "Lightweight snapshot of fault lifecycle state, remediation progress, and optional health indicators."
+    },
+    {
+      "name": "retry_or_rollback_remediation",
+      "description": "Retry a failed remediation step or perform a rollback for a previous remediation execution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "fault_id": {
+            "type": "string"
+          },
+          "remediation_plan_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "retry_failed_steps",
+              "retry_all_steps",
+              "rollback_last_execution"
+            ]
+          },
+          "execution_reference_id": {
+            "type": "string",
+            "description": "Identifier of the previous remediation execution to act upon."
+          },
+          "rollback_options": {
+            "type": "object",
+            "description": "Options controlling the rollback behavior.",
+            "properties": {
+              "rollback_depth": {
+                "type": "string",
+                "enum": [
+                  "only_last_step",
+                  "since_failure",
+                  "full_plan"
+                ],
+                "default": "since_failure"
+              },
+              "validate_post_rollback": {
+                "type": "boolean",
+                "default": true
+              },
+              "abort_on_new_alarms": {
+                "type": "boolean",
+                "default": true,
+                "description": "Abort rollback if new critical alarms appear during rollback."
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Explanation for retrying or rolling back, for audit."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "fault_id",
+          "remediation_plan_id",
+          "mode",
+          "execution_reference_id"
+        ]
+      },
+      "returns": "Result of retry or rollback operation, including updated remediation execution status and any new exceptions."
+    },
+    {
+      "name": "suppress_or_cancel_fault",
+      "description": "Suppress noisy or non-actionable faults, or cancel/close incorrectly raised faults with appropriate justification.",
+      "stage": "exception_handling",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "fault_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "suppress",
+              "unsuppress",
+              "cancel",
+              "close"
+            ],
+            "description": "Type of lifecycle exception being applied."
+          },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "false_positive",
+              "test_alarm",
+              "maintenance_activity",
+              "duplicate_fault",
+              "policy_suppression",
+              "resolved_outside_system",
+              "other"
+            ]
+          },
+          "reason_details": {
+            "type": "string",
+            "description": "Free-text explanation for the action."
+          },
+          "effective_until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When suppression expires, for suppress action."
+          },
+          "apply_to_correlation_group": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, apply same action to all faults in the same correlation group."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "fault_id",
+          "action",
+          "reason_code"
+        ]
+      },
+      "returns": "Updated fault state and any other affected faults (if correlation-wide action was applied)."
+    },
+    {
+      "name": "create_post_incident_audit",
+      "description": "Create a post-incident audit session for a resolved/closed fault, capturing timelines, decisions, and lessons learned.",
+      "stage": "post_incident",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "fault_id": {
+            "type": "string"
+          },
+          "audit_session_id": {
+            "type": "string",
+            "description": "Optional existing audit_session_id to update instead of creating new."
+          },
+          "scope": {
+            "type": "object",
+            "description": "Scope and objectives of the post-incident review.",
+            "properties": {
+              "include_change_management": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_rca_validation": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_process_gaps": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "participants": {
+            "type": "array",
+            "description": "List of participants in the audit session.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "user_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "incident_commander",
+                    "network_engineer",
+                    "service_owner",
+                    "change_manager",
+                    "observer",
+                    "other"
+                  ]
+                }
+              },
+              "required": [
+                "user_id",
+                "role"
+              ]
+            }
+          },
+          "findings": {
+            "type": "object",
+            "description": "Key findings and action items from the audit.",
+            "properties": {
+              "root_cause_confirmed": {
+                "type": "boolean"
+              },
+              "root_cause_notes": {
+                "type": "string"
+              },
+              "timeline_accuracy": {
+                "type": "string",
+                "enum": [
+                  "accurate",
+                  "minor_gaps",
+                  "significant_gaps",
+                  "unknown"
+                ]
+              },
+              "action_items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "description": {
+                      "type": "string"
+                    },
+                    "owner": {
+                      "type": "string"
+                    },
+                    "due_date": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "process",
+                        "tooling",
+                        "training",
+                        "architecture",
+                        "monitoring",
+                        "other"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "description",
+                    "owner"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "fault_id"
+        ]
+      },
+      "returns": "Created or updated post-incident audit session details including audit_session_id and stored findings."
+    },
+    {
+      "name": "get_correlation_and_topology_view",
+      "description": "Retrieve a visualizable correlation and topology view for a fault or correlation group, including impacted paths.",
+      "stage": "visualization",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "fault_id": {
+            "type": "string",
+            "description": "Fault identifier to visualize. Required if correlation_group_id not provided."
+          },
+          "correlation_group_id": {
+            "type": "string",
+            "description": "Correlation group identifier to visualize. Required if fault_id not provided."
+          },
+          "view_options": {
+            "type": "object",
+            "description": "Controls level of detail and layering.",
+            "properties": {
+              "include_alarms": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_service_topology": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_physical_topology": {
+                "type": "boolean",
+                "default": false
+              },
+              "max_hops": {
+                "type": "integer",
+                "default": 5
+              }
+            }
+          },
+          "layout_preferences": {
+            "type": "object",
+            "description": "Client layout hints for rendering the graph.",
+            "properties": {
+              "layout_algorithm": {
+                "type": "string",
+                "enum": [
+                  "force_directed",
+                  "hierarchical",
+                  "circular",
+                  "grid"
+                ],
+                "default": "hierarchical"
+              },
+              "group_by": {
+                "type": "string",
+                "enum": [
+                  "region",
+                  "layer",
+                  "service",
+                  "none"
+                ],
+                "default": "layer"
+              }
+            }
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "tenant_id",
+              "fault_id"
+            ]
+          },
+          {
+            "required": [
+              "tenant_id",
+              "correlation_group_id"
+            ]
+          }
+        ]
+      },
+      "returns": "Graph structure including nodes (network_element_id, service nodes) and edges representing topology, with annotations for alarms, impact, and RCA hints."
+    }
+  ]
+}

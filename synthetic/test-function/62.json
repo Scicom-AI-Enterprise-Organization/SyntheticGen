@@ -1,0 +1,3109 @@
+{
+  "workflow_name": "interconnect_migration_flow",
+  "description": "End-to-end migration of interconnect billing data and configurations between systems, including scoping, validation, transformation, trial runs, cutover, monitoring, and rollback.",
+  "domain": "telco_billing/interconnect_billing",
+  "shared_entities": {
+    "migration_id": {
+      "type": "string",
+      "description": "Unique identifier for a migration run or plan"
+    },
+    "batch_id": {
+      "type": "string",
+      "description": "Identifier for a logical batch of migrated records"
+    },
+    "source_system": {
+      "type": "string",
+      "description": "Identifier of the source billing or mediation system"
+    },
+    "target_system": {
+      "type": "string",
+      "description": "Identifier of the target interconnect billing system"
+    },
+    "operator_id": {
+      "type": "string",
+      "description": "Identifier of the carrier or operator (e.g., MNO, MVNO, wholesale partner)"
+    },
+    "migration_record_ref": {
+      "type": "object",
+      "description": "Reference to a specific record in the migration context",
+      "properties": {
+        "entity_type": {
+          "type": "string",
+          "enum": [
+            "cdr",
+            "rating_profile",
+            "contract",
+            "tariff",
+            "interconnect_agreement",
+            "settlement_rule",
+            "routing_plan",
+            "other"
+          ]
+        },
+        "source_key": {
+          "type": "string",
+          "description": "Primary key or composite key representation in source system"
+        },
+        "target_key": {
+          "type": "string",
+          "description": "Primary key in target system if mapped/created"
+        }
+      },
+      "required": [
+        "entity_type",
+        "source_key"
+      ]
+    },
+    "time_window": {
+      "type": "object",
+      "description": "Time window for scoping CDRs and related data",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone identifier, e.g. 'UTC', 'Europe/London'"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "init_migration_plan",
+      "description": "Initialize a new interconnect migration plan, including scope, systems, and high-level options.",
+      "stage": "plan",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source_system": {
+            "type": "string",
+            "description": "Source interconnect or legacy billing system identifier"
+          },
+          "target_system": {
+            "type": "string",
+            "description": "Target interconnect billing platform identifier"
+          },
+          "operators": {
+            "type": "array",
+            "description": "List of operators / carriers included in this migration",
+            "items": {
+              "type": "object",
+              "properties": {
+                "operator_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string",
+                  "enum": [
+                    "originating",
+                    "terminating",
+                    "transit",
+                    "roaming",
+                    "all"
+                  ]
+                },
+                "include_entities": {
+                  "type": "array",
+                  "description": "Specific entities to migrate for this operator",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "cdrs",
+                      "rating_profiles",
+                      "tariffs",
+                      "contracts",
+                      "routing_plans",
+                      "settlement_rules"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "operator_id"
+              ]
+            }
+          },
+          "cdr_time_window": {
+            "$ref": "#/shared_entities/time_window"
+          },
+          "plan_type": {
+            "type": "string",
+            "enum": [
+              "test",
+              "pilot",
+              "full"
+            ],
+            "description": "Indicates if this is a dry-run, pilot migration, or full cutover"
+          },
+          "data_domains": {
+            "type": "array",
+            "description": "Data domains in scope for migration",
+            "items": {
+              "type": "string",
+              "enum": [
+                "usage_cdrs",
+                "interconnect_contracts",
+                "pricing_tariffs",
+                "rating_config",
+                "settlement_config",
+                "partner_mappings"
+              ]
+            }
+          },
+          "constraints": {
+            "type": "object",
+            "description": "Technical and business constraints to respect during migration",
+            "properties": {
+              "max_parallel_batches": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50
+              },
+              "max_cdrs_per_batch": {
+                "type": "integer",
+                "minimum": 1000
+              },
+              "allow_partial_operators": {
+                "type": "boolean",
+                "description": "Allow partial migration if some operators fail validation"
+              },
+              "maintenance_window": {
+                "$ref": "#/shared_entities/time_window"
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Arbitrary key-value metadata for this plan"
+          },
+          "requested_by": {
+            "type": "string",
+            "description": "User or system initiating the migration"
+          }
+        },
+        "required": [
+          "source_system",
+          "target_system",
+          "plan_type"
+        ]
+      },
+      "returns": "New migration plan with assigned migration_id, initial status, and summary of scope."
+    },
+    {
+      "name": "define_migration_mapping",
+      "description": "Define or update entity and field-level mappings between source and target interconnect billing schemas.",
+      "stage": "plan",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "entity_mappings": {
+            "type": "array",
+            "description": "Mappings for each type of entity that will be migrated",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entity_type": {
+                  "type": "string",
+                  "enum": [
+                    "cdr",
+                    "rating_profile",
+                    "tariff",
+                    "interconnect_agreement",
+                    "settlement_rule",
+                    "partner_account",
+                    "routing_plan"
+                  ]
+                },
+                "source_collection": {
+                  "type": "string",
+                  "description": "Table, topic, or collection name in the source system"
+                },
+                "target_collection": {
+                  "type": "string",
+                  "description": "Table, topic, or collection name in the target system"
+                },
+                "field_mappings": {
+                  "type": "array",
+                  "description": "Mappings between source and target fields, including transformation hints",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "source_field": {
+                        "type": "string"
+                      },
+                      "target_field": {
+                        "type": "string"
+                      },
+                      "data_type": {
+                        "type": "string",
+                        "enum": [
+                          "string",
+                          "integer",
+                          "float",
+                          "boolean",
+                          "datetime",
+                          "decimal",
+                          "json"
+                        ]
+                      },
+                      "transform": {
+                        "type": "object",
+                        "description": "Optional transformation definition",
+                        "properties": {
+                          "type": {
+                            "type": "string",
+                            "enum": [
+                              "none",
+                              "map_value",
+                              "scale",
+                              "concatenate",
+                              "split",
+                              "custom_script",
+                              "lookup"
+                            ]
+                          },
+                          "params": {
+                            "type": "object",
+                            "description": "Transform-specific parameters, e.g., scale factor, delimiter, lookup table ID"
+                          }
+                        },
+                        "required": [
+                          "type"
+                        ]
+                      },
+                      "is_key": {
+                        "type": "boolean",
+                        "description": "Marks field as part of record key for reconciliation"
+                      },
+                      "nullable": {
+                        "type": "boolean",
+                        "default": true
+                      }
+                    },
+                    "required": [
+                      "source_field",
+                      "target_field"
+                    ]
+                  }
+                },
+                "filters": {
+                  "type": "object",
+                  "description": "Optional filter conditions on the source data for this entity",
+                  "properties": {
+                    "where_clause": {
+                      "type": "string",
+                      "description": "Opaque filter expression understood by the connector, e.g. SQL WHERE fragment"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "entity_type",
+                "source_collection",
+                "target_collection",
+                "field_mappings"
+              ]
+            }
+          },
+          "version_label": {
+            "type": "string",
+            "description": "Human-readable label or semantic version for this mapping definition"
+          },
+          "replace_existing": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether to replace existing mappings for this migration_id"
+          }
+        },
+        "required": [
+          "migration_id",
+          "entity_mappings"
+        ]
+      },
+      "returns": "Mapping definition saved, including mapping version, validation hints, and potential issues."
+    },
+    {
+      "name": "validate_source_data",
+      "description": "Run structural and business validations on source interconnect data before extraction.",
+      "stage": "pre_validate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "entities": {
+            "type": "array",
+            "description": "Subset of entities to validate; if omitted, all entities in plan are validated",
+            "items": {
+              "type": "string",
+              "enum": [
+                "cdr",
+                "rating_profile",
+                "tariff",
+                "interconnect_agreement",
+                "settlement_rule",
+                "partner_account",
+                "routing_plan"
+              ]
+            }
+          },
+          "validation_profiles": {
+            "type": "array",
+            "description": "Named validation profiles to apply",
+            "items": {
+              "type": "string",
+              "enum": [
+                "schema_only",
+                "business_rules",
+                "revenue_impact",
+                "all"
+              ]
+            }
+          },
+          "sample_strategy": {
+            "type": "object",
+            "description": "Defines whether validation is full or sample-based",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "full",
+                  "sample"
+                ]
+              },
+              "sample_size": {
+                "type": "integer",
+                "description": "Number of records per entity to validate when mode=sample"
+              },
+              "sampling_method": {
+                "type": "string",
+                "enum": [
+                  "random",
+                  "time_weighted",
+                  "high_value",
+                  "operator_weighted"
+                ]
+              }
+            }
+          },
+          "stop_on_error_threshold": {
+            "type": "object",
+            "description": "Thresholds at which validation should stop and mark migration as blocked",
+            "properties": {
+              "error_rate_percent": {
+                "type": "number",
+                "description": "Maximum allowed percentage of invalid records per entity"
+              },
+              "max_critical_errors": {
+                "type": "integer",
+                "description": "Maximum allowed number of critical errors overall"
+              }
+            }
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Validation report with per-entity error statistics, sample errors, and readiness verdict."
+    },
+    {
+      "name": "run_transformation_preview",
+      "description": "Preview transformed records for a small sample of source data to verify mapping correctness.",
+      "stage": "design_validate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string",
+            "enum": [
+              "cdr",
+              "rating_profile",
+              "tariff",
+              "interconnect_agreement",
+              "settlement_rule",
+              "partner_account",
+              "routing_plan"
+            ]
+          },
+          "sample_criteria": {
+            "type": "object",
+            "description": "Criteria for sampling source records to preview",
+            "properties": {
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 1000
+              },
+              "time_window": {
+                "$ref": "#/shared_entities/time_window"
+              },
+              "operator_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "value_segment": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "all"
+                ]
+              }
+            }
+          },
+          "include_raw_source": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_transformed": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, computes structured diff between mapped fields and expected patterns"
+          }
+        },
+        "required": [
+          "migration_id",
+          "entity_type"
+        ]
+      },
+      "returns": "Sampled records with raw source payload, transformed payload, and field-level mapping diagnostics."
+    },
+    {
+      "name": "start_migration_execution",
+      "description": "Start or resume the execution of a migration plan, creating batches and scheduling tasks.",
+      "stage": "execute",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "dry_run",
+              "trial_parallel",
+              "full_cutover"
+            ],
+            "description": "Dry run writes to shadow structures only; full_cutover updates production target."
+          },
+          "batching_strategy": {
+            "type": "object",
+            "description": "Strategy for chunking data into batches",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "time_window",
+                  "record_count",
+                  "operator_split",
+                  "hybrid"
+                ]
+              },
+              "time_window_size_minutes": {
+                "type": "integer"
+              },
+              "records_per_batch": {
+                "type": "integer"
+              },
+              "max_batches": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "concurrency": {
+            "type": "object",
+            "description": "Concurrency and throttling controls",
+            "properties": {
+              "max_parallel_batches": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "max_records_per_second": {
+                "type": "integer"
+              },
+              "priority": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "normal",
+                  "high"
+                ]
+              }
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Optional idempotency token to avoid starting the same execution twice"
+          },
+          "resume_from_checkpoint": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, resume from last successful checkpoint for this migration_id"
+          }
+        },
+        "required": [
+          "migration_id",
+          "execution_mode",
+          "batching_strategy"
+        ]
+      },
+      "returns": "Execution handle with migration_id, initial batches created, and execution status."
+    },
+    {
+      "name": "get_migration_status",
+      "description": "Retrieve real-time status of a migration execution, including per-batch progress and error counts.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "include_batches": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_metrics": {
+            "type": "boolean",
+            "default": true
+          },
+          "batch_filters": {
+            "type": "object",
+            "description": "Optional filters to narrow down batch details",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "in_progress",
+                    "completed",
+                    "failed",
+                    "rolled_back",
+                    "skipped"
+                  ]
+                }
+              },
+              "entity_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "operator_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Migration execution status including overall state, progress percentages, per-batch status, and key performance metrics."
+    },
+    {
+      "name": "list_migration_batches",
+      "description": "List batches within a migration execution with pagination and filtering.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "in_progress",
+                    "completed",
+                    "failed",
+                    "rolled_back",
+                    "skipped"
+                  ]
+                }
+              },
+              "entity_type": {
+                "type": "string"
+              },
+              "operator_id": {
+                "type": "string"
+              },
+              "created_after": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_before": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "status",
+              "entity_type",
+              "operator_id"
+            ]
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Paginated list of batches with status, counts, and basic metrics."
+    },
+    {
+      "name": "retry_failed_batch",
+      "description": "Retry processing of a failed or partially failed migration batch with optional overrides.",
+      "stage": "recover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "batch_id": {
+            "type": "string"
+          },
+          "retry_mode": {
+            "type": "string",
+            "enum": [
+              "full_batch",
+              "only_failed_records"
+            ]
+          },
+          "override_transformations": {
+            "type": "object",
+            "description": "Optional ad-hoc overrides for transformations during retry",
+            "properties": {
+              "entity_type": {
+                "type": "string"
+              },
+              "field_overrides": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field_path": {
+                      "type": "string",
+                      "description": "Dot-notated path to field in the transformed record"
+                    },
+                    "default_value": {
+                      "description": "Value to use when transformation fails",
+                      "oneOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "boolean"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "on_error": {
+                      "type": "string",
+                      "enum": [
+                        "use_default",
+                        "skip_record",
+                        "fail_batch"
+                      ],
+                      "default": "use_default"
+                    }
+                  },
+                  "required": [
+                    "field_path",
+                    "on_error"
+                  ]
+                }
+              }
+            }
+          },
+          "idempotency_key": {
+            "type": "string"
+          },
+          "comment": {
+            "type": "string",
+            "description": "Operational note describing why retry is being performed"
+          }
+        },
+        "required": [
+          "migration_id",
+          "batch_id",
+          "retry_mode"
+        ]
+      },
+      "returns": "Retry task created with updated batch status and reference to previous attempt."
+    },
+    {
+      "name": "reconcile_migration_results",
+      "description": "Perform reconciliation between source and target for migrated interconnect data, focusing on financial and volume integrity.",
+      "stage": "reconcile",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "description": "Defines which parts of migration to reconcile",
+            "properties": {
+              "entities": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "cdr",
+                    "rating_profile",
+                    "tariff",
+                    "interconnect_agreement",
+                    "settlement_rule"
+                  ]
+                }
+              },
+              "operators": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "time_window": {
+                "$ref": "#/shared_entities/time_window"
+              }
+            }
+          },
+          "tolerance": {
+            "type": "object",
+            "description": "Tolerance thresholds for discrepancies",
+            "properties": {
+              "volume_percentage": {
+                "type": "number",
+                "description": "Allowed percentage difference in record counts"
+              },
+              "amount_percentage": {
+                "type": "number",
+                "description": "Allowed percentage difference in rated amounts"
+              },
+              "max_absolute_amount": {
+                "type": "number",
+                "description": "Absolute maximum difference in monetary units allowed"
+              }
+            }
+          },
+          "group_by_dimensions": {
+            "type": "array",
+            "description": "Dimensions to group reconciliation metrics by",
+            "items": {
+              "type": "string",
+              "enum": [
+                "operator",
+                "direction",
+                "service_type",
+                "tariff",
+                "rating_profile"
+              ]
+            }
+          },
+          "include_sample_mismatches": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Reconciliation report with per-dimension metrics, discrepancies, and pass/fail verdict for migration."
+    },
+    {
+      "name": "finalize_migration_cutover",
+      "description": "Finalize migration by switching interconnect billing operations fully to the target system, with optional graceful switchover.",
+      "stage": "cutover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "cutover_mode": {
+            "type": "string",
+            "enum": [
+              "big_bang",
+              "phased_by_operator",
+              "phased_by_service",
+              "shadow_billing"
+            ]
+          },
+          "switch_points": {
+            "type": "array",
+            "description": "Optional detailed switch-over instructions for phased cutover",
+            "items": {
+              "type": "object",
+              "properties": {
+                "operator_id": {
+                  "type": "string"
+                },
+                "service_types": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "voice",
+                      "sms",
+                      "data",
+                      "roaming",
+                      "ipx",
+                      "other"
+                    ]
+                  }
+                },
+                "effective_time": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "When target system becomes authoritative for this slice"
+                }
+              },
+              "required": [
+                "effective_time"
+              ]
+            }
+          },
+          "fallback_strategy": {
+            "type": "object",
+            "description": "Defines how to handle issues after cutover",
+            "properties": {
+              "allow_partial_rollback": {
+                "type": "boolean",
+                "default": true
+              },
+              "auto_trigger_rollback_on": {
+                "type": "array",
+                "description": "Conditions that automatically trigger rollback",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "reconciliation_failure",
+                    "high_error_rate",
+                    "system_unavailability",
+                    "manual_signal"
+                  ]
+                }
+              }
+            }
+          },
+          "approval": {
+            "type": "object",
+            "description": "Approval information for audit and governance",
+            "properties": {
+              "approved_by": {
+                "type": "string"
+              },
+              "ticket_reference": {
+                "type": "string"
+              },
+              "approval_time": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        },
+        "required": [
+          "migration_id",
+          "cutover_mode"
+        ]
+      },
+      "returns": "Cutover plan activation confirmation with updated migration state and active switch-points."
+    },
+    {
+      "name": "cancel_migration",
+      "description": "Cancel a migration plan or execution, optionally performing cleanup and partial rollback.",
+      "stage": "cancel",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "cancel_mode": {
+            "type": "string",
+            "enum": [
+              "plan_only",
+              "stop_execution",
+              "stop_and_rollback"
+            ]
+          },
+          "rollback_options": {
+            "type": "object",
+            "description": "Options for rollback if cancel_mode requires it",
+            "properties": {
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "non_production_changes",
+                  "all_changes",
+                  "config_only",
+                  "usage_only"
+                ]
+              },
+              "force": {
+                "type": "boolean",
+                "default": false,
+                "description": "If true, attempts rollback even if some checkpoints are missing"
+              }
+            }
+          },
+          "notify_stakeholders": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "migration_id",
+          "reason",
+          "cancel_mode"
+        ]
+      },
+      "returns": "Cancellation and optional rollback result, including which changes were reverted and which remain."
+    },
+    {
+      "name": "rollback_migration_changes",
+      "description": "Perform an explicit rollback of previously applied migration changes for selected scopes.",
+      "stage": "recover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "rollback_scope": {
+            "type": "object",
+            "description": "Defines what should be rolled back",
+            "properties": {
+              "batches": {
+                "type": "array",
+                "description": "Optional list of batch_ids to rollback; if omitted, uses logical criteria below",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "entity_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "cdr",
+                    "rating_profile",
+                    "tariff",
+                    "interconnect_agreement",
+                    "settlement_rule"
+                  ]
+                }
+              },
+              "operators": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "time_window": {
+                "$ref": "#/shared_entities/time_window"
+              }
+            }
+          },
+          "strategy": {
+            "type": "string",
+            "enum": [
+              "logical_undo",
+              "physical_delete",
+              "mark_inactive"
+            ],
+            "description": "Strategy for reversing target changes"
+          },
+          "confirm_revenue_impact": {
+            "type": "boolean",
+            "description": "If true, caller asserts revenue impact has been evaluated",
+            "default": false
+          },
+          "requested_by": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "migration_id",
+          "rollback_scope",
+          "strategy"
+        ]
+      },
+      "returns": "Rollback job details including affected records estimate, status, and any non-reversible items."
+    },
+    {
+      "name": "get_migration_audit_log",
+      "description": "Retrieve detailed audit trail for a migration, including configuration changes, batch events, and operator-level actions.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "migration_id": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "event_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "plan_created",
+                    "mapping_updated",
+                    "validation_run",
+                    "execution_started",
+                    "batch_completed",
+                    "batch_failed",
+                    "reconciliation_run",
+                    "cutover_finalized",
+                    "rollback_started",
+                    "rollback_completed",
+                    "status_changed"
+                  ]
+                }
+              },
+              "severity": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warning",
+                    "error",
+                    "critical"
+                  ]
+                }
+              },
+              "operator_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "time_window": {
+                "$ref": "#/shared_entities/time_window"
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 100
+          },
+          "include_payloads": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, include serialized before/after snapshots where available"
+          }
+        },
+        "required": [
+          "migration_id"
+        ]
+      },
+      "returns": "Paginated audit log entries with timestamps, actors, event types, and optional payload snapshots."
+    },
+    {
+      "name": "search_interconnect_migration_entities",
+      "description": "Faceted search across interconnect_migration entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching interconnect_migration entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_interconnect_migration_records",
+      "description": "Bulk-create up to N interconnect_migration records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_interconnect_migration_records",
+      "description": "Apply a partial update patch to many interconnect_migration records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_interconnect_migration_records",
+      "description": "Delete or soft-delete many interconnect_migration records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_interconnect_migration_dataset",
+      "description": "Schedule or stream an export of interconnect_migration data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_interconnect_migration_dataset",
+      "description": "Validate and import a interconnect_migration dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_interconnect_migration_state",
+      "description": "Create a point-in-time snapshot of one or more interconnect_migration entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_interconnect_migration_snapshot",
+      "description": "Restore interconnect_migration state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_interconnect_migration_metrics",
+      "description": "Query aggregated metrics/KPIs for the interconnect_migration workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_interconnect_migration_dashboard",
+      "description": "Compose a dashboard view across interconnect_migration metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_interconnect_migration_audit_events",
+      "description": "Search the interconnect_migration audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_interconnect_migration_events",
+      "description": "Create a webhook subscription that delivers interconnect_migration workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_interconnect_migration_subscriptions",
+      "description": "List webhook subscriptions for interconnect_migration events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_interconnect_migration_subscription",
+      "description": "Remove a webhook subscription for interconnect_migration events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_interconnect_migration_job",
+      "description": "Schedule a recurring or one-off interconnect_migration job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_interconnect_migration_schedules",
+      "description": "List scheduled interconnect_migration jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_interconnect_migration_schedule",
+      "description": "Cancel or pause a scheduled interconnect_migration job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_interconnect_migration_operation",
+      "description": "Run a what-if simulation of a interconnect_migration operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_interconnect_migration_approval",
+      "description": "Open an approval request for a interconnect_migration action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_interconnect_migration_approval",
+      "description": "Record an approve/reject/abstain decision on a interconnect_migration approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_interconnect_migration_comment",
+      "description": "Add a threaded comment or annotation to any interconnect_migration entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_interconnect_migration_comments",
+      "description": "List comments/annotations attached to a interconnect_migration entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_interconnect_migration_policy",
+      "description": "Create or update a policy/rule controlling interconnect_migration behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_interconnect_migration_policies",
+      "description": "List interconnect_migration policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_interconnect_migration_entities",
+      "description": "Create a typed relationship between two interconnect_migration-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_interconnect_migration_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a interconnect_migration entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_interconnect_migration_entities",
+      "description": "Add, remove, or replace tags on one or many interconnect_migration entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}

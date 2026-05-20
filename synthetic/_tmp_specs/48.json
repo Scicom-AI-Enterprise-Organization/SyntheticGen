@@ -1,0 +1,1128 @@
+{
+  "workflow_name": "edge_entitlement_flow",
+  "description": "End-to-end entitlement, licensing, and quota management workflow for edge applications in a TaaS Edge environment",
+  "domain": "taas_edge/edge_application",
+  "shared_entities": {
+    "tenant_id": {
+      "type": "string",
+      "description": "Unique identifier for a tenant (customer or account)"
+    },
+    "edge_app_id": {
+      "type": "string",
+      "description": "Unique identifier for an edge application"
+    },
+    "entitlement_plan_id": {
+      "type": "string",
+      "description": "Identifier for an entitlement or licensing plan"
+    },
+    "entitlement_assignment_id": {
+      "type": "string",
+      "description": "Identifier for a specific entitlement assignment to a tenant or scope"
+    },
+    "entitlement_policy_id": {
+      "type": "string",
+      "description": "Identifier for a custom entitlement policy"
+    },
+    "quota_profile_id": {
+      "type": "string",
+      "description": "Identifier for a quota profile applied to an entitlement"
+    },
+    "environment_id": {
+      "type": "string",
+      "description": "Identifier for an edge environment (e.g., staging, production)"
+    },
+    "edge_cluster_id": {
+      "type": "string",
+      "description": "Identifier for an edge cluster or region"
+    },
+    "request_id": {
+      "type": "string",
+      "description": "Client-generated idempotency key for mutation operations"
+    },
+    "audit_id": {
+      "type": "string",
+      "description": "Identifier for an audit log entry"
+    }
+  },
+  "functions": [
+    {
+      "name": "list_entitlement_plans",
+      "description": "List and filter available entitlement and licensing plans for edge applications",
+      "stage": "catalog",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "edge_app_id": {
+            "type": "string",
+            "description": "Filter plans applicable to a specific edge application"
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Optional tenant for showing tenant-specific pricing or eligibility"
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filter options for entitlement plans",
+            "properties": {
+              "plan_type": {
+                "type": "string",
+                "enum": [
+                  "subscription",
+                  "pay_as_you_go",
+                  "trial",
+                  "perpetual"
+                ]
+              },
+              "billing_period": {
+                "type": "string",
+                "enum": [
+                  "hourly",
+                  "daily",
+                  "monthly",
+                  "annual"
+                ]
+              },
+              "region": {
+                "type": "string",
+                "description": "Edge cluster region code (e.g., us-east, eu-central)"
+              },
+              "min_quota": {
+                "type": "object",
+                "description": "Minimum quota requirements",
+                "properties": {
+                  "cpu_cores": {
+                    "type": "number"
+                  },
+                  "memory_mb": {
+                    "type": "integer"
+                  },
+                  "edge_nodes": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "capabilities": {
+                "type": "array",
+                "description": "Required capabilities the plan must include",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "multitenancy",
+                    "geo_fencing",
+                    "bursting",
+                    "offline_mode",
+                    "priority_sla"
+                  ]
+                }
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "price_asc",
+              "price_desc",
+              "name",
+              "popularity"
+            ],
+            "description": "Sorting strategy for plans"
+          },
+          "page": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 20,
+            "minimum": 1,
+            "maximum": 100
+          }
+        }
+      },
+      "returns": "Paginated list of entitlement plans with pricing, capabilities, and applicability metadata"
+    },
+    {
+      "name": "get_entitlement_plan_details",
+      "description": "Get detailed information about a specific entitlement or licensing plan",
+      "stage": "catalog",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "entitlement_plan_id": {
+            "type": "string",
+            "description": "Identifier of the entitlement plan to fetch"
+          },
+          "include": {
+            "type": "array",
+            "description": "Optional sections to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "pricing_tiers",
+                "usage_limits",
+                "overage_rules",
+                "regional_availability",
+                "compatible_apps"
+              ]
+            }
+          },
+          "tenant_context": {
+            "type": "object",
+            "description": "Optional tenant-specific context to compute discounts or feature flags",
+            "properties": {
+              "tenant_id": {
+                "type": "string"
+              },
+              "contract_tier": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "enterprise",
+                  "strategic"
+                ]
+              },
+              "partner_id": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "entitlement_plan_id"
+        ]
+      },
+      "returns": "Full entitlement plan definition including quotas, capabilities, pricing tiers, and regional constraints"
+    },
+    {
+      "name": "create_entitlement_assignment",
+      "description": "Create a new entitlement assignment of a plan to a tenant and scope",
+      "stage": "provision",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "Idempotency key to safely retry assignment creation"
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant receiving the entitlement"
+          },
+          "entitlement_plan_id": {
+            "type": "string",
+            "description": "Plan defining base quotas and capabilities"
+          },
+          "edge_app_id": {
+            "type": "string",
+            "description": "Edge application to which the entitlement applies"
+          },
+          "scope": {
+            "type": "object",
+            "description": "Scope where this entitlement is valid",
+            "properties": {
+              "environment_id": {
+                "type": "string",
+                "description": "Environment such as dev, staging, or prod"
+              },
+              "edge_clusters": {
+                "type": "array",
+                "description": "Edge clusters or regions covered by this entitlement",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "edge_cluster_id": {
+                      "type": "string"
+                    },
+                    "region": {
+                      "type": "string"
+                    },
+                    "priority": {
+                      "type": "integer",
+                      "description": "Relative priority of this cluster within the entitlement"
+                    }
+                  },
+                  "required": [
+                    "edge_cluster_id"
+                  ]
+                }
+              },
+              "namespace": {
+                "type": "string",
+                "description": "Logical namespace or project within the tenant"
+              }
+            },
+            "required": [
+              "environment_id"
+            ]
+          },
+          "quota_profile": {
+            "type": "object",
+            "description": "Overrides or references for quota limits",
+            "properties": {
+              "quota_profile_id": {
+                "type": "string",
+                "description": "Existing quota profile to apply"
+              },
+              "overrides": {
+                "type": "object",
+                "description": "Inline quota overrides if not using a named profile",
+                "properties": {
+                  "cpu_cores": {
+                    "type": "number"
+                  },
+                  "memory_mb": {
+                    "type": "integer"
+                  },
+                  "storage_gb": {
+                    "type": "integer"
+                  },
+                  "edge_nodes": {
+                    "type": "integer"
+                  },
+                  "max_deployments": {
+                    "type": "integer"
+                  },
+                  "rate_limits": {
+                    "type": "object",
+                    "description": "API or event rate limits",
+                    "properties": {
+                      "ingress_rps": {
+                        "type": "integer"
+                      },
+                      "egress_rps": {
+                        "type": "integer"
+                      },
+                      "max_concurrent_jobs": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "effective_period": {
+            "type": "object",
+            "description": "Validity period for the entitlement",
+            "properties": {
+              "start_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "auto_renew": {
+                "type": "boolean",
+                "default": false
+              },
+              "grace_period_hours": {
+                "type": "integer",
+                "description": "Grace period after expiry where traffic is allowed but flagged"
+              }
+            },
+            "required": [
+              "start_time"
+            ]
+          },
+          "policy_refs": {
+            "type": "array",
+            "description": "Optional custom entitlement policies to apply",
+            "items": {
+              "type": "object",
+              "properties": {
+                "entitlement_policy_id": {
+                  "type": "string"
+                },
+                "mode": {
+                  "type": "string",
+                  "enum": [
+                    "enforce",
+                    "monitor",
+                    "disabled"
+                  ]
+                }
+              },
+              "required": [
+                "entitlement_policy_id"
+              ]
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Arbitrary metadata tags for the assignment",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "entitlement_plan_id",
+          "edge_app_id",
+          "scope"
+        ]
+      },
+      "returns": "Created entitlement_assignment_id with resolved quotas, status, and activation details"
+    },
+    {
+      "name": "get_entitlement_assignment",
+      "description": "Retrieve a specific entitlement assignment and its current state",
+      "stage": "provision",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "entitlement_assignment_id": {
+            "type": "string",
+            "description": "Identifier of the entitlement assignment"
+          },
+          "include": {
+            "type": "array",
+            "description": "Optional expansions",
+            "items": {
+              "type": "string",
+              "enum": [
+                "resolved_quotas",
+                "usage_snapshot",
+                "policy_evaluations",
+                "audit_trail"
+              ]
+            }
+          }
+        },
+        "required": [
+          "entitlement_assignment_id"
+        ]
+      },
+      "returns": "Entitlement assignment details including scope, plan, quotas, status, and optional usage snapshot"
+    },
+    {
+      "name": "evaluate_entitlement_request",
+      "description": "Evaluate whether a specific edge operation request is allowed under current entitlements and quotas",
+      "stage": "runtime_enforcement",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "edge_app_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "edge_cluster_id": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "description": "Requested operation type",
+            "enum": [
+              "deploy_app",
+              "scale_out",
+              "scale_in",
+              "create_job",
+              "attach_storage",
+              "subscribe_stream",
+              "api_request"
+            ]
+          },
+          "request_fingerprint": {
+            "type": "object",
+            "description": "Attributes describing the requested operation",
+            "properties": {
+              "requested_resources": {
+                "type": "object",
+                "properties": {
+                  "cpu_cores": {
+                    "type": "number"
+                  },
+                  "memory_mb": {
+                    "type": "integer"
+                  },
+                  "storage_gb": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "requested_rate": {
+                "type": "object",
+                "description": "Request rate characteristics where applicable",
+                "properties": {
+                  "rps": {
+                    "type": "integer"
+                  },
+                  "concurrency": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "context_labels": {
+                "type": "object",
+                "description": "Arbitrary labels describing the request context",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, does not consume quota, only evaluates"
+          },
+          "include_recommendations": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, include recommended actions if denied or limited"
+          }
+        },
+        "required": [
+          "tenant_id",
+          "edge_app_id",
+          "environment_id",
+          "edge_cluster_id",
+          "operation"
+        ]
+      },
+      "returns": "Entitlement evaluation result including allow/deny decision, effective limits, and optional recommendations"
+    },
+    {
+      "name": "reserve_quota",
+      "description": "Reserve quota units for a specific operation, updating entitlement usage",
+      "stage": "runtime_enforcement",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "description": "Idempotency key for the reservation operation"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "entitlement_assignment_id": {
+            "type": "string",
+            "description": "Target entitlement assignment; if omitted, system infers best match",
+            "default": ""
+          },
+          "edge_app_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "edge_cluster_id": {
+            "type": "string"
+          },
+          "reservation": {
+            "type": "object",
+            "description": "Reservation details",
+            "properties": {
+              "resource_units": {
+                "type": "object",
+                "description": "Resource quantities being reserved",
+                "properties": {
+                  "cpu_cores": {
+                    "type": "number"
+                  },
+                  "memory_mb": {
+                    "type": "integer"
+                  },
+                  "storage_gb": {
+                    "type": "integer"
+                  },
+                  "edge_nodes": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "rate_units": {
+                "type": "object",
+                "description": "Rate-based units for API/stream reservations",
+                "properties": {
+                  "rps": {
+                    "type": "integer"
+                  },
+                  "messages_per_second": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "ttl_seconds": {
+                "type": "integer",
+                "description": "Time to live for the reservation; may be auto-released after expiry"
+              },
+              "reservation_reason": {
+                "type": "string",
+                "enum": [
+                  "deployment",
+                  "scale_out",
+                  "bursting",
+                  "manual_hold",
+                  "other"
+                ]
+              },
+              "client_reference": {
+                "type": "string",
+                "description": "Client-side reference for tracking the reservation"
+              }
+            },
+            "required": [
+              "resource_units"
+            ]
+          }
+        },
+        "required": [
+          "tenant_id",
+          "edge_app_id",
+          "environment_id",
+          "edge_cluster_id",
+          "reservation"
+        ]
+      },
+      "returns": "Reservation identifier with updated entitlement usage and any soft-limit warnings"
+    },
+    {
+      "name": "release_quota",
+      "description": "Release or adjust a previously reserved quota allocation",
+      "stage": "runtime_enforcement",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "reservation_id": {
+            "type": "string",
+            "description": "Identifier of the quota reservation to release or adjust"
+          },
+          "release_mode": {
+            "type": "string",
+            "enum": [
+              "full",
+              "partial",
+              "expire"
+            ],
+            "description": "Specifies whether to fully release, partially release, or mark as expired"
+          },
+          "partial_release_units": {
+            "type": "object",
+            "description": "Units to release for partial release mode",
+            "properties": {
+              "cpu_cores": {
+                "type": "number"
+              },
+              "memory_mb": {
+                "type": "integer"
+              },
+              "storage_gb": {
+                "type": "integer"
+              },
+              "edge_nodes": {
+                "type": "integer"
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable reason for release"
+          },
+          "audit_context": {
+            "type": "object",
+            "description": "Additional context to record in the audit trail",
+            "properties": {
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "system",
+                  "tenant_admin",
+                  "operator",
+                  "api_client"
+                ]
+              },
+              "actor_id": {
+                "type": "string"
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "reservation_id",
+          "release_mode"
+        ]
+      },
+      "returns": "Updated reservation state and entitlement usage, with audit_id reference"
+    },
+    {
+      "name": "get_tenant_entitlement_usage",
+      "description": "Get current and historical usage against entitlements for a tenant",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "edge_app_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for usage metrics",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "granularity": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day"
+                ],
+                "default": "hour"
+              }
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "description": "Dimensions to group usage by",
+            "items": {
+              "type": "string",
+              "enum": [
+                "edge_cluster_id",
+                "environment_id",
+                "entitlement_assignment_id",
+                "resource_type"
+              ]
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "description": "Metrics to include in the response",
+            "items": {
+              "type": "string",
+              "enum": [
+                "cpu_cores",
+                "memory_mb",
+                "storage_gb",
+                "edge_nodes",
+                "api_calls",
+                "stream_messages"
+              ]
+            }
+          },
+          "include_headroom": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, include remaining headroom vs. quotas"
+          }
+        },
+        "required": [
+          "tenant_id"
+        ]
+      },
+      "returns": "Aggregated usage metrics, grouped by selected dimensions, with remaining headroom against quotas"
+    },
+    {
+      "name": "update_entitlement_assignment",
+      "description": "Modify quotas, scope, or policies for an existing entitlement assignment",
+      "stage": "lifecycle",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "entitlement_assignment_id": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Idempotency key for update operation"
+          },
+          "patch": {
+            "type": "object",
+            "description": "Fields to update in the assignment",
+            "properties": {
+              "quota_profile": {
+                "type": "object",
+                "description": "New quota profile or overrides",
+                "properties": {
+                  "quota_profile_id": {
+                    "type": "string"
+                  },
+                  "overrides": {
+                    "type": "object",
+                    "properties": {
+                      "cpu_cores": {
+                        "type": "number"
+                      },
+                      "memory_mb": {
+                        "type": "integer"
+                      },
+                      "storage_gb": {
+                        "type": "integer"
+                      },
+                      "edge_nodes": {
+                        "type": "integer"
+                      },
+                      "max_deployments": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              },
+              "scope": {
+                "type": "object",
+                "description": "Scope modifications",
+                "properties": {
+                  "add_edge_clusters": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "edge_cluster_id": {
+                          "type": "string"
+                        },
+                        "region": {
+                          "type": "string"
+                        },
+                        "priority": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "edge_cluster_id"
+                      ]
+                    }
+                  },
+                  "remove_edge_cluster_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "effective_period": {
+                "type": "object",
+                "description": "Adjustments to the validity period",
+                "properties": {
+                  "end_time": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "auto_renew": {
+                    "type": "boolean"
+                  },
+                  "grace_period_hours": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "status": {
+                "type": "string",
+                "description": "Optional transitions for the assignment lifecycle",
+                "enum": [
+                  "active",
+                  "suspended",
+                  "terminated"
+                ]
+              },
+              "metadata": {
+                "type": "object",
+                "description": "Metadata patch; keys with null values remove entries",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "validation_mode": {
+            "type": "string",
+            "enum": [
+              "strict",
+              "best_effort"
+            ],
+            "default": "strict",
+            "description": "Controls behavior when some updates are not fully applicable"
+          }
+        },
+        "required": [
+          "entitlement_assignment_id",
+          "patch"
+        ]
+      },
+      "returns": "Updated entitlement assignment with a summary of applied changes and any partial failures"
+    },
+    {
+      "name": "suspend_or_cancel_entitlement",
+      "description": "Suspend or cancel an entitlement assignment, with optional rollback behavior",
+      "stage": "lifecycle",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "entitlement_assignment_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "suspend",
+              "cancel"
+            ]
+          },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "payment_failure",
+              "contract_end",
+              "tenant_request",
+              "policy_violation",
+              "operator_action",
+              "other"
+            ]
+          },
+          "reason_details": {
+            "type": "string"
+          },
+          "effective_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the suspension or cancellation should take effect; defaults to immediate if omitted"
+          },
+          "rollback_behavior": {
+            "type": "object",
+            "description": "How to handle existing reservations and deployments",
+            "properties": {
+              "release_all_reservations": {
+                "type": "boolean",
+                "default": true
+              },
+              "allow_grace_traffic_seconds": {
+                "type": "integer",
+                "description": "Optional extra grace period before enforcement"
+              },
+              "notify_channels": {
+                "type": "array",
+                "description": "Notification channels to inform",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "webhook",
+                    "slack",
+                    "pagerduty"
+                  ]
+                }
+              }
+            }
+          },
+          "audit_context": {
+            "type": "object",
+            "properties": {
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "system",
+                  "tenant_admin",
+                  "operator",
+                  "api_client"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "entitlement_assignment_id",
+          "action",
+          "reason_code"
+        ]
+      },
+      "returns": "New lifecycle state of the entitlement assignment and scheduled enforcement details"
+    },
+    {
+      "name": "retry_entitlement_action",
+      "description": "Retry a failed entitlement-related action such as quota reservation, plan activation, or suspension",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "failed_action_id": {
+            "type": "string",
+            "description": "Identifier of the previously failed action"
+          },
+          "retry_strategy": {
+            "type": "object",
+            "description": "Controls how the retry should be attempted",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "scheduled",
+                  "backoff"
+                ]
+              },
+              "max_attempts": {
+                "type": "integer",
+                "default": 3
+              },
+              "backoff": {
+                "type": "object",
+                "description": "Settings for backoff retries",
+                "properties": {
+                  "initial_delay_seconds": {
+                    "type": "integer"
+                  },
+                  "max_delay_seconds": {
+                    "type": "integer"
+                  },
+                  "factor": {
+                    "type": "number",
+                    "description": "Multiplier for exponential backoff"
+                  },
+                  "jitter": {
+                    "type": "boolean",
+                    "default": true
+                  }
+                }
+              },
+              "scheduled_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Time for scheduled retries when mode is scheduled"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "override_parameters": {
+            "type": "object",
+            "description": "Optional overrides for the original action parameters if known to cause failure",
+            "additionalProperties": true
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, validate but do not actually execute the retry"
+          }
+        },
+        "required": [
+          "failed_action_id",
+          "retry_strategy"
+        ]
+      },
+      "returns": "Retry job status, including scheduled run time, new attempt id, and validation results"
+    },
+    {
+      "name": "list_entitlement_audit_events",
+      "description": "List audit events related to entitlements, plans, and quota operations for compliance and debugging",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          },
+          "entitlement_assignment_id": {
+            "type": "string"
+          },
+          "edge_app_id": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filtering options for audit events",
+            "properties": {
+              "event_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "assignment_created",
+                    "assignment_updated",
+                    "assignment_suspended",
+                    "assignment_cancelled",
+                    "quota_reserved",
+                    "quota_released",
+                    "evaluation_denied",
+                    "retry_scheduled",
+                    "retry_executed"
+                  ]
+                }
+              },
+              "actor_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "system",
+                    "tenant_admin",
+                    "operator",
+                    "api_client"
+                  ]
+                }
+              },
+              "time_range": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warning",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50
+          }
+        }
+      },
+      "returns": "Paginated list of audit events with metadata such as actor, timestamp, event_type, and audit_id"
+    }
+  ]
+}

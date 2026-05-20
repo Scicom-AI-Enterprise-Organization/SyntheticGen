@@ -1,0 +1,3265 @@
+{
+  "workflow_name": "telco_core_optimization_order_to_cash",
+  "description": "End-to-end telco core network optimization workflow from opportunity identification to implementation, monitoring, and rollback within an order-to-cash context.",
+  "domain": "telco_netops/core_optimization",
+  "shared_entities": {
+    "optimization_opportunity_id": {
+      "type": "string",
+      "description": "Identifier of a detected optimization opportunity (e.g., congestion hotspot, underutilized segment)."
+    },
+    "optimization_plan_id": {
+      "type": "string",
+      "description": "Identifier of a proposed optimization plan bundling multiple changes."
+    },
+    "change_order_id": {
+      "type": "string",
+      "description": "Identifier of a formal change order associated with an optimization plan."
+    },
+    "implementation_batch_id": {
+      "type": "string",
+      "description": "Identifier of a batch of configuration changes scheduled/executed together."
+    },
+    "rollback_plan_id": {
+      "type": "string",
+      "description": "Identifier of a rollback plan tied to an implementation batch or change order."
+    },
+    "topology_slice_id": {
+      "type": "string",
+      "description": "Identifier for a logical subset of the network topology (e.g., region, cluster, slice)."
+    },
+    "kpi_profile_id": {
+      "type": "string",
+      "description": "Identifier for a KPI profile defining target thresholds and weights."
+    },
+    "approval_request_id": {
+      "type": "string",
+      "description": "Identifier for an approval request for a change or optimization plan."
+    },
+    "simulation_run_id": {
+      "type": "string",
+      "description": "Identifier for a simulation run used to predict optimization impact."
+    },
+    "incident_id": {
+      "type": "string",
+      "description": "Identifier of a network incident potentially caused or mitigated by an optimization."
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "discover_optimization_opportunities",
+      "description": "Scan network telemetry and business data to discover candidate optimization opportunities across the core network.",
+      "stage": "discover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "time_window": {
+            "type": "object",
+            "description": "Time window over which to analyze telemetry.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "description": "Start timestamp in ISO 8601 format."
+              },
+              "to": {
+                "type": "string",
+                "description": "End timestamp in ISO 8601 format."
+              },
+              "aggregation_interval": {
+                "type": "string",
+                "description": "Aggregation granularity (e.g., 5m, 1h).",
+                "enum": [
+                  "5m",
+                  "15m",
+                  "1h",
+                  "6h",
+                  "24h"
+                ]
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "topology_scope": {
+            "type": "object",
+            "description": "Scope of the network to analyze.",
+            "properties": {
+              "topology_slice_id": {
+                "type": "string",
+                "description": "Predefined topology slice identifier to restrict analysis."
+              },
+              "regions": {
+                "type": "array",
+                "description": "Region codes to include.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "node_types": {
+                "type": "array",
+                "description": "Types of nodes to focus on.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "SGW",
+                    "PGW",
+                    "MME",
+                    "AMF",
+                    "SMF",
+                    "UPF",
+                    "HSS",
+                    "UDM",
+                    "PCRF",
+                    "PCF"
+                  ]
+                }
+              }
+            }
+          },
+          "kpi_filters": {
+            "type": "object",
+            "description": "Minimum performance degradation thresholds to consider as opportunities.",
+            "properties": {
+              "congestion": {
+                "type": "object",
+                "properties": {
+                  "utilization_above": {
+                    "type": "number",
+                    "description": "Minimum average utilization percentage to flag congestion.",
+                    "minimum": 0,
+                    "maximum": 100
+                  },
+                  "duration_min_minutes": {
+                    "type": "integer",
+                    "description": "Minimum continuous duration in minutes."
+                  }
+                }
+              },
+              "latency": {
+                "type": "object",
+                "properties": {
+                  "p95_latency_ms_above": {
+                    "type": "number",
+                    "description": "Minimum p95 latency threshold in ms."
+                  }
+                }
+              },
+              "availability": {
+                "type": "object",
+                "properties": {
+                  "availability_below": {
+                    "type": "number",
+                    "description": "Availability percentage below which to flag issues.",
+                    "minimum": 0,
+                    "maximum": 100
+                  }
+                }
+              }
+            }
+          },
+          "business_impact_weights": {
+            "type": "object",
+            "description": "Weighting of business impact dimensions for ranking opportunities.",
+            "properties": {
+              "revenue": {
+                "type": "number",
+                "default": 0.4
+              },
+              "subscriber_impact": {
+                "type": "number",
+                "default": 0.4
+              },
+              "sla_risk": {
+                "type": "number",
+                "default": 0.2
+              }
+            }
+          },
+          "max_results": {
+            "type": "integer",
+            "description": "Maximum number of opportunities to return.",
+            "default": 100,
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "time_window"
+        ]
+      },
+      "returns": "List of detected optimization opportunities with optimization_opportunity_id, scope, severity, and business impact score."
+    },
+    {
+      "name": "get_optimization_opportunity_details",
+      "description": "Retrieve detailed telemetry, topology, and business context for a specific optimization opportunity.",
+      "stage": "discover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "optimization_opportunity_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional sections to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "raw_telemetry",
+                "aggregated_kpis",
+                "impacted_nodes",
+                "impacted_subscribers",
+                "sla_contracts",
+                "incident_correlation"
+              ]
+            }
+          },
+          "telemetry_window_override": {
+            "type": "object",
+            "description": "Optional override for telemetry time window.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "description": "Start timestamp in ISO 8601 format."
+              },
+              "to": {
+                "type": "string",
+                "description": "End timestamp in ISO 8601 format."
+              }
+            }
+          }
+        },
+        "required": [
+          "optimization_opportunity_id"
+        ]
+      },
+      "returns": "Full details for the optimization opportunity including kpis, affected topology, subscriber segments, and related incidents."
+    },
+    {
+      "name": "create_optimization_plan",
+      "description": "Create a structured optimization plan for a given opportunity, defining proposed changes and expected impact.",
+      "stage": "plan",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "optimization_opportunity_id": {
+            "type": "string",
+            "description": "Opportunity this plan addresses."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable name for the optimization plan."
+          },
+          "description": {
+            "type": "string",
+            "description": "Detailed description of the proposed optimization."
+          },
+          "kpi_profile_id": {
+            "type": "string",
+            "description": "KPI profile to use for success evaluation."
+          },
+          "proposed_changes": {
+            "type": "array",
+            "description": "List of proposed configuration or routing changes.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "change_type": {
+                  "type": "string",
+                  "enum": [
+                    "routing_policy",
+                    "capacity_reallocation",
+                    "qos_profile_update",
+                    "load_balancing",
+                    "feature_toggle",
+                    "parameter_tuning"
+                  ]
+                },
+                "target_scope": {
+                  "type": "object",
+                  "properties": {
+                    "topology_slice_id": {
+                      "type": "string"
+                    },
+                    "node_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "interface_ids": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "subscriber_segments": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "parameters": {
+                  "type": "object",
+                  "description": "Change-specific parameters (polymorphic).",
+                  "properties": {
+                    "routing_policy": {
+                      "type": "object",
+                      "properties": {
+                        "policy_name": {
+                          "type": "string"
+                        },
+                        "priority": {
+                          "type": "integer"
+                        },
+                        "match_conditions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "field": {
+                                "type": "string"
+                              },
+                              "operator": {
+                                "type": "string",
+                                "enum": [
+                                  "eq",
+                                  "neq",
+                                  "gt",
+                                  "lt",
+                                  "gte",
+                                  "lte",
+                                  "in",
+                                  "not_in"
+                                ]
+                              },
+                              "value": {
+                                "type": [
+                                  "string",
+                                  "number",
+                                  "boolean"
+                                ]
+                              }
+                            },
+                            "required": [
+                              "field",
+                              "operator",
+                              "value"
+                            ]
+                          }
+                        },
+                        "actions": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "action_type": {
+                                "type": "string",
+                                "enum": [
+                                  "prefer_path",
+                                  "avoid_path",
+                                  "set_qos",
+                                  "reroute"
+                                ]
+                              },
+                              "action_value": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "action_type"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "capacity_reallocation": {
+                      "type": "object",
+                      "properties": {
+                        "from_nodes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "to_nodes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "bandwidth_mbps": {
+                          "type": "number"
+                        }
+                      }
+                    },
+                    "qos_profile_update": {
+                      "type": "object",
+                      "properties": {
+                        "profile_id": {
+                          "type": "string"
+                        },
+                        "new_parameters": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": [
+                              "string",
+                              "number",
+                              "boolean"
+                            ]
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "risk_level": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high"
+                  ]
+                },
+                "depends_on_change_ids": {
+                  "type": "array",
+                  "description": "IDs of other changes in this plan that must be executed first.",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "change_type",
+                "target_scope"
+              ]
+            }
+          },
+          "validation_requirements": {
+            "type": "object",
+            "description": "Validation checks required before implementation.",
+            "properties": {
+              "simulation_required": {
+                "type": "boolean",
+                "default": true
+              },
+              "lab_testing_required": {
+                "type": "boolean",
+                "default": false
+              },
+              "peer_review_required": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "business_case": {
+            "type": "object",
+            "description": "High-level business case for this plan.",
+            "properties": {
+              "estimated_revenue_uplift_monthly": {
+                "type": "number"
+              },
+              "estimated_cost_savings_monthly": {
+                "type": "number"
+              },
+              "estimated_churn_impact": {
+                "type": "number",
+                "description": "Estimated change in churn rate in percentage points."
+              },
+              "justification": {
+                "type": "string"
+              }
+            }
+          },
+          "tags": {
+            "type": "object",
+            "description": "Free-form key-value tags.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "optimization_opportunity_id",
+          "name",
+          "proposed_changes"
+        ]
+      },
+      "returns": "Created optimization_plan_id with initial status, list of changes, and validation requirements."
+    },
+    {
+      "name": "simulate_optimization_impact",
+      "description": "Run network simulation to estimate the impact of an optimization plan before scheduling implementation.",
+      "stage": "plan",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "optimization_plan_id": {
+            "type": "string"
+          },
+          "simulation_profile": {
+            "type": "object",
+            "description": "Simulation assumptions and load profiles.",
+            "properties": {
+              "traffic_scenarios": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "traffic_mix": {
+                      "type": "object",
+                      "description": "Percentage of different traffic classes.",
+                      "properties": {
+                        "enhanced_mobile_broadband": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100
+                        },
+                        "ultra_reliable_low_latency": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100
+                        },
+                        "massive_iot": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 100
+                        }
+                      }
+                    },
+                    "expected_peak_load_percent": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 200
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "expected_peak_load_percent"
+                  ]
+                }
+              },
+              "failure_injection": {
+                "type": "object",
+                "description": "Optional failure scenarios to test resilience.",
+                "properties": {
+                  "enable": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "scenarios": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "scenario_type": {
+                          "type": "string",
+                          "enum": [
+                            "node_failure",
+                            "link_failure",
+                            "site_outage"
+                          ]
+                        },
+                        "target_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "duration_minutes": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "scenario_type"
+                      ]
+                    }
+                  }
+                }
+              },
+              "kpi_profile_id": {
+                "type": "string",
+                "description": "KPI profile to apply during simulation."
+              }
+            }
+          },
+          "simulation_mode": {
+            "type": "string",
+            "enum": [
+              "fast_estimate",
+              "full_topology",
+              "what_if_comparison"
+            ],
+            "default": "fast_estimate"
+          },
+          "compare_against_baseline": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "optimization_plan_id"
+        ]
+      },
+      "returns": "simulation_run_id and projected KPI deltas, risk indicators, and recommendation to proceed or revise."
+    },
+    {
+      "name": "request_optimization_approval",
+      "description": "Create an approval request for an optimization plan, including simulation results and business case.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "optimization_plan_id": {
+            "type": "string"
+          },
+          "simulation_run_id": {
+            "type": "string",
+            "description": "Simulation run supporting this approval request."
+          },
+          "change_order_reference": {
+            "type": "object",
+            "description": "Optional linkage to an existing or draft change order.",
+            "properties": {
+              "change_order_id": {
+                "type": "string"
+              },
+              "create_if_missing": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "approver_groups": {
+            "type": "array",
+            "description": "Groups that must approve the plan.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "netops",
+                "security",
+                "architecture",
+                "finance",
+                "product"
+              ]
+            }
+          },
+          "risk_assessment": {
+            "type": "object",
+            "properties": {
+              "overall_risk": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "risk_factors": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "technical",
+                        "operational",
+                        "security",
+                        "regulatory"
+                      ]
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "mitigation": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "category",
+                    "description"
+                  ]
+                }
+              }
+            }
+          },
+          "requested_window": {
+            "type": "object",
+            "description": "Preferred implementation window.",
+            "properties": {
+              "start": {
+                "type": "string",
+                "description": "ISO 8601 start time."
+              },
+              "end": {
+                "type": "string",
+                "description": "ISO 8601 end time."
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone identifier."
+              }
+            }
+          },
+          "comments": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "optimization_plan_id",
+          "approver_groups"
+        ]
+      },
+      "returns": "approval_request_id with current approval status, required approvers, and linked change_order_id if created."
+    },
+    {
+      "name": "get_approval_status",
+      "description": "Retrieve the current approval status for an optimization plan or specific approval request.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_request_id": {
+            "type": "string",
+            "description": "Approval request identifier. Required if optimization_plan_id not provided."
+          },
+          "optimization_plan_id": {
+            "type": "string",
+            "description": "Plan identifier. Used to fetch the latest related approval if approval_request_id not provided."
+          },
+          "include_timeline": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "approval_request_id"
+            ]
+          },
+          {
+            "required": [
+              "optimization_plan_id"
+            ]
+          }
+        ]
+      },
+      "returns": "Current approval state, per-group decisions, comments, and any blocking issues."
+    },
+    {
+      "name": "schedule_implementation_batch",
+      "description": "Create and schedule an implementation batch for approved optimization changes and link it to a change order.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "optimization_plan_id": {
+            "type": "string"
+          },
+          "change_order_id": {
+            "type": "string",
+            "description": "Existing change order ID, if any. If omitted, a new order may be created depending on policy."
+          },
+          "window": {
+            "type": "object",
+            "description": "Scheduled implementation window.",
+            "properties": {
+              "start": {
+                "type": "string",
+                "description": "ISO 8601 planned start time."
+              },
+              "end": {
+                "type": "string",
+                "description": "ISO 8601 planned end time."
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone identifier."
+              },
+              "is_maintenance_window": {
+                "type": "boolean",
+                "default": true
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          },
+          "execution_strategy": {
+            "type": "object",
+            "description": "Strategy for executing changes.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "all_at_once",
+                  "phased",
+                  "canary"
+                ]
+              },
+              "batching_rules": {
+                "type": "array",
+                "description": "Rules for grouping changes into sub-batches.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "group_by": {
+                      "type": "string",
+                      "enum": [
+                        "region",
+                        "node_type",
+                        "traffic_class"
+                      ]
+                    },
+                    "max_parallel_groups": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  },
+                  "required": [
+                    "group_by"
+                  ]
+                }
+              },
+              "auto_pause_on_kpi_degradation": {
+                "type": "boolean",
+                "default": true
+              },
+              "kpi_degradation_thresholds": {
+                "type": "object",
+                "description": "Thresholds that trigger auto-pause.",
+                "properties": {
+                  "latency_increase_pct": {
+                    "type": "number"
+                  },
+                  "packet_loss_increase_pct": {
+                    "type": "number"
+                  },
+                  "throughput_drop_pct": {
+                    "type": "number"
+                  }
+                }
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "notification_channels": {
+            "type": "array",
+            "description": "Channels to notify before and after implementation.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "slack",
+                    "sms",
+                    "webhook"
+                  ]
+                },
+                "target": {
+                  "type": "string",
+                  "description": "Destination address or URL."
+                },
+                "events": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "scheduled",
+                      "started",
+                      "completed",
+                      "paused",
+                      "failed",
+                      "rolled_back"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "type",
+                "target"
+              ]
+            }
+          }
+        },
+        "required": [
+          "optimization_plan_id",
+          "window",
+          "execution_strategy"
+        ]
+      },
+      "returns": "implementation_batch_id with schedule, linked change_order_id, and derived execution sub-batches."
+    },
+    {
+      "name": "execute_implementation_batch",
+      "description": "Trigger execution of a scheduled implementation batch and monitor real-time progress.",
+      "stage": "execute",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "implementation_batch_id": {
+            "type": "string"
+          },
+          "start_mode": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "at_scheduled_time",
+              "dry_run"
+            ],
+            "default": "immediate"
+          },
+          "override_safety_checks": {
+            "type": "object",
+            "description": "Optional overrides for pre-execution safety checks.",
+            "properties": {
+              "allow_outside_maintenance_window": {
+                "type": "boolean",
+                "default": false
+              },
+              "ignore_minor_incidents": {
+                "type": "boolean",
+                "default": false
+              },
+              "force_execution": {
+                "type": "boolean",
+                "default": false
+              },
+              "reason": {
+                "type": "string",
+                "description": "Justification for overrides."
+              }
+            }
+          },
+          "tracking_options": {
+            "type": "object",
+            "properties": {
+              "emit_detailed_events": {
+                "type": "boolean",
+                "default": true
+              },
+              "event_sampling_interval_sec": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          }
+        },
+        "required": [
+          "implementation_batch_id"
+        ]
+      },
+      "returns": "Execution start confirmation with initial status, expected milestones, and real-time monitoring endpoint."
+    },
+    {
+      "name": "get_implementation_status",
+      "description": "Get current status, progress, and any incidents related to an implementation batch.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "implementation_batch_id": {
+            "type": "string"
+          },
+          "detail_level": {
+            "type": "string",
+            "enum": [
+              "summary",
+              "per_change",
+              "per_node"
+            ],
+            "default": "summary"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "kpi_trends",
+                "events",
+                "incidents",
+                "audit_log"
+              ]
+            }
+          }
+        },
+        "required": [
+          "implementation_batch_id"
+        ]
+      },
+      "returns": "Current batch status, success/failure per change or node (depending on detail_level), kpi deltas, and linked incident_ids if any."
+    },
+    {
+      "name": "pause_or_cancel_implementation",
+      "description": "Pause or cancel an in-progress implementation batch, optionally triggering rollback.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "implementation_batch_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "cancel"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "rollback_strategy": {
+            "type": "object",
+            "description": "Rollback options when canceling.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "auto_full",
+                  "auto_partial",
+                  "manual"
+                ],
+                "default": "auto_full"
+              },
+              "scope": {
+                "type": "object",
+                "description": "Scope of rollback for partial mode.",
+                "properties": {
+                  "node_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "change_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "create_new_rollback_plan": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "required": [
+          "implementation_batch_id",
+          "action"
+        ]
+      },
+      "returns": "Updated implementation status, created rollback_plan_id if applicable, and next recommended actions."
+    },
+    {
+      "name": "create_rollback_plan",
+      "description": "Create an explicit rollback plan for an optimization, either pre-implementation or after a failure.",
+      "stage": "rollback",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source_type": {
+            "type": "string",
+            "enum": [
+              "optimization_plan",
+              "implementation_batch",
+              "change_order"
+            ]
+          },
+          "source_id": {
+            "type": "string",
+            "description": "Identifier of the source entity (optimization_plan_id, implementation_batch_id, or change_order_id)."
+          },
+          "strategy": {
+            "type": "object",
+            "properties": {
+              "rollback_mode": {
+                "type": "string",
+                "enum": [
+                  "full",
+                  "partial",
+                  "granular"
+                ]
+              },
+              "selection_criteria": {
+                "type": "object",
+                "description": "Criteria for selecting what to roll back.",
+                "properties": {
+                  "regions": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "node_types": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "traffic_classes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "pre_checks": {
+                "type": "array",
+                "description": "Checks that must pass before rollback.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "no_active_incidents",
+                    "kpi_degraded",
+                    "within_rollback_window",
+                    "manual_signoff"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "rollback_mode"
+            ]
+          },
+          "notify_impacted_teams": {
+            "type": "boolean",
+            "default": true
+          },
+          "comments": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_type",
+          "source_id",
+          "strategy"
+        ]
+      },
+      "returns": "rollback_plan_id with list of planned reverse changes, risk assessment, and required approvals if any."
+    },
+    {
+      "name": "retry_failed_changes",
+      "description": "Retry failed changes from an implementation batch with adjusted parameters or alternative strategy.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "implementation_batch_id": {
+            "type": "string"
+          },
+          "retry_scope": {
+            "type": "object",
+            "description": "Defines which failures to retry.",
+            "properties": {
+              "include_change_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "include_node_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "failure_reasons": {
+                "type": "array",
+                "description": "Filter by failure reasons.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "transient_error",
+                    "timeout",
+                    "dependency_failure",
+                    "validation_error",
+                    "unknown"
+                  ]
+                }
+              }
+            }
+          },
+          "adjustments": {
+            "type": "object",
+            "description": "Adjustments to apply on retry.",
+            "properties": {
+              "max_concurrent_retries": {
+                "type": "integer",
+                "default": 5,
+                "minimum": 1
+              },
+              "backoff_strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "fixed",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "backoff_base_seconds": {
+                "type": "integer",
+                "default": 30
+              },
+              "override_parameters": {
+                "type": "object",
+                "description": "Optional per-change-type parameter overrides.",
+                "properties": {
+                  "routing_policy": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    }
+                  },
+                  "capacity_reallocation": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    }
+                  },
+                  "qos_profile_update": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "auto_fallback_to_rollback": {
+            "type": "boolean",
+            "default": true
+          },
+          "fallback_rollback_plan_id": {
+            "type": "string",
+            "description": "Existing rollback plan to invoke if retries fail."
+          }
+        },
+        "required": [
+          "implementation_batch_id"
+        ]
+      },
+      "returns": "New retry execution summary with per-change retry status and whether fallback rollback was triggered."
+    },
+    {
+      "name": "evaluate_post_implementation_kpis",
+      "description": "Evaluate KPIs after implementation to determine if the optimization met success criteria and update related change order state.",
+      "stage": "settle",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "optimization_plan_id": {
+            "type": "string"
+          },
+          "implementation_batch_id": {
+            "type": "string"
+          },
+          "kpi_profile_id": {
+            "type": "string",
+            "description": "KPI profile to use. If omitted, the profile associated with the plan is used."
+          },
+          "analysis_window": {
+            "type": "object",
+            "description": "Time window for post-implementation KPI analysis.",
+            "properties": {
+              "before_hours": {
+                "type": "number",
+                "description": "Hours before implementation to use as baseline."
+              },
+              "after_hours": {
+                "type": "number",
+                "description": "Hours after implementation to measure impact."
+              },
+              "normalize_for_seasonality": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "dimensions": {
+            "type": "array",
+            "description": "Dimensions to segment KPIs by.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "region",
+                "node_type",
+                "traffic_class",
+                "subscriber_segment"
+              ]
+            }
+          },
+          "update_change_order": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "optimization_plan_id",
+          "implementation_batch_id"
+        ]
+      },
+      "returns": "KPI evaluation report with success/failure verdict, detailed deltas by dimension, and updated change_order_id status if applicable."
+    },
+    {
+      "name": "search_core_optimization_entities",
+      "description": "Faceted search across core_optimization entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching core_optimization entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_core_optimization_records",
+      "description": "Bulk-create up to N core_optimization records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_core_optimization_records",
+      "description": "Apply a partial update patch to many core_optimization records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_core_optimization_records",
+      "description": "Delete or soft-delete many core_optimization records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_core_optimization_dataset",
+      "description": "Schedule or stream an export of core_optimization data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_core_optimization_dataset",
+      "description": "Validate and import a core_optimization dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_core_optimization_state",
+      "description": "Create a point-in-time snapshot of one or more core_optimization entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_core_optimization_snapshot",
+      "description": "Restore core_optimization state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_core_optimization_metrics",
+      "description": "Query aggregated metrics/KPIs for the core_optimization workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_core_optimization_dashboard",
+      "description": "Compose a dashboard view across core_optimization metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_core_optimization_audit_events",
+      "description": "Search the core_optimization audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_core_optimization_events",
+      "description": "Create a webhook subscription that delivers core_optimization workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_core_optimization_subscriptions",
+      "description": "List webhook subscriptions for core_optimization events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_core_optimization_subscription",
+      "description": "Remove a webhook subscription for core_optimization events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_core_optimization_job",
+      "description": "Schedule a recurring or one-off core_optimization job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_core_optimization_schedules",
+      "description": "List scheduled core_optimization jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_core_optimization_schedule",
+      "description": "Cancel or pause a scheduled core_optimization job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_core_optimization_operation",
+      "description": "Run a what-if simulation of a core_optimization operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_core_optimization_approval",
+      "description": "Open an approval request for a core_optimization action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_core_optimization_approval",
+      "description": "Record an approve/reject/abstain decision on a core_optimization approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_core_optimization_comment",
+      "description": "Add a threaded comment or annotation to any core_optimization entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_core_optimization_comments",
+      "description": "List comments/annotations attached to a core_optimization entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_core_optimization_policy",
+      "description": "Create or update a policy/rule controlling core_optimization behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_core_optimization_policies",
+      "description": "List core_optimization policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_core_optimization_entities",
+      "description": "Create a typed relationship between two core_optimization-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_core_optimization_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a core_optimization entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_core_optimization_entities",
+      "description": "Add, remove, or replace tags on one or many core_optimization entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}

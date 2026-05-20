@@ -1,0 +1,3203 @@
+{
+  "workflow_name": "udm_subscription_moderation_flow",
+  "description": "End-to-end moderation and lifecycle management workflow for 5G UDM subscriber data, including validation, policy review, approval, deployment, rollback, and audits.",
+  "domain": "telco_5g_deep/udm_management",
+  "shared_entities": {
+    "subscriber_id": {
+      "type": "string",
+      "description": "Unique subscriber identifier (e.g., SUPI/IMSI or internal UUID)"
+    },
+    "profile_id": {
+      "type": "string",
+      "description": "Identifier for a specific subscriber data profile record in UDM"
+    },
+    "moderation_request_id": {
+      "type": "string",
+      "description": "Identifier for a moderation request workflow instance"
+    },
+    "policy_id": {
+      "type": "string",
+      "description": "Identifier of a network or data policy applied to a subscriber"
+    },
+    "change_set_id": {
+      "type": "string",
+      "description": "Identifier for a group of proposed changes to subscriber data"
+    },
+    "audit_id": {
+      "type": "string",
+      "description": "Identifier for an audit record associated with a moderation action"
+    },
+    "moderation_status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "pending_review",
+        "approved",
+        "rejected",
+        "scheduled",
+        "deploying",
+        "deployed",
+        "rollback_pending",
+        "rolled_back",
+        "failed",
+        "cancelled"
+      ],
+      "description": "Overall lifecycle status of a moderation request"
+    },
+    "moderation_actor": {
+      "type": "object",
+      "description": "Information about the actor performing moderation actions (human or system)",
+      "properties": {
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "human",
+            "system"
+          ]
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "User ID, service ID, or system identifier"
+        },
+        "role": {
+          "type": "string",
+          "description": "Role or permission group name"
+        },
+        "description": {
+          "type": "string",
+          "description": "Optional description or display name of actor"
+        }
+      },
+      "required": [
+        "actor_type",
+        "actor_id"
+      ]
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "submit_subscription_change_for_moderation",
+      "description": "Create a new moderation request encapsulating proposed changes to a subscriber's UDM data.",
+      "stage": "init",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "$ref": "#/shared_entities/subscriber_id"
+          },
+          "origin_context": {
+            "type": "object",
+            "description": "Context about where this change originated.",
+            "properties": {
+              "channel": {
+                "type": "string",
+                "enum": [
+                  "selfcare_portal",
+                  "csr_console",
+                  "batch_provisioning",
+                  "api_partner",
+                  "network_automation",
+                  "other"
+                ]
+              },
+              "request_source_id": {
+                "type": "string",
+                "description": "External request identifier or correlation ID."
+              },
+              "tenant_id": {
+                "type": "string",
+                "description": "Tenant or MVNO identifier, if applicable."
+              },
+              "reason": {
+                "type": "string",
+                "description": "High-level reason for the change (e.g., upgrade plan, policy update)."
+              }
+            },
+            "required": [
+              "channel"
+            ]
+          },
+          "proposed_changes": {
+            "type": "object",
+            "description": "Structured set of changes being requested for the subscriber.",
+            "properties": {
+              "subscription_profile": {
+                "type": "object",
+                "description": "Core subscription attributes to be created or updated.",
+                "properties": {
+                  "profile_id": {
+                    "type": "string",
+                    "description": "Existing profile to modify; omit to create new."
+                  },
+                  "operation": {
+                    "type": "string",
+                    "enum": [
+                      "create",
+                      "update",
+                      "delete"
+                    ],
+                    "description": "Type of change for the profile."
+                  },
+                  "data": {
+                    "type": "object",
+                    "description": "UDM subscription data payload to be applied.",
+                    "properties": {
+                      "data_networks": {
+                        "type": "array",
+                        "description": "List of data network (DNN) configurations for the subscriber.",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "dnn": {
+                              "type": "string",
+                              "description": "Data Network Name (e.g., 'internet', 'enterprise-vpn')."
+                            },
+                            "slice": {
+                              "type": "object",
+                              "description": "Network slice information.",
+                              "properties": {
+                                "sst": {
+                                  "type": "integer",
+                                  "description": "Slice/Service Type."
+                                },
+                                "sd": {
+                                  "type": "string",
+                                  "description": "Slice Differentiator."
+                                }
+                              },
+                              "required": [
+                                "sst"
+                              ]
+                            },
+                            "qos_profile": {
+                              "type": "object",
+                              "description": "QoS parameters for this DNN.",
+                              "properties": {
+                                "name": {
+                                  "type": "string"
+                                },
+                                "5qi": {
+                                  "type": "integer"
+                                },
+                                "mbr_ul_kbps": {
+                                  "type": "integer"
+                                },
+                                "mbr_dl_kbps": {
+                                  "type": "integer"
+                                },
+                                "gbr_ul_kbps": {
+                                  "type": "integer"
+                                },
+                                "gbr_dl_kbps": {
+                                  "type": "integer"
+                                }
+                              }
+                            },
+                            "session_ambr": {
+                              "type": "object",
+                              "description": "Aggregated Max Bit Rate for the session.",
+                              "properties": {
+                                "uplink_kbps": {
+                                  "type": "integer"
+                                },
+                                "downlink_kbps": {
+                                  "type": "integer"
+                                }
+                              }
+                            },
+                            "policy_refs": {
+                              "type": "array",
+                              "description": "Policies linked to this DNN and slice.",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "policy_id": {
+                                    "$ref": "#/shared_entities/policy_id"
+                                  },
+                                  "priority": {
+                                    "type": "integer"
+                                  }
+                                },
+                                "required": [
+                                  "policy_id"
+                                ]
+                              }
+                            }
+                          },
+                          "required": [
+                            "dnn"
+                          ]
+                        }
+                      },
+                      "access_restrictions": {
+                        "type": "object",
+                        "description": "Access and roaming restrictions.",
+                        "properties": {
+                          "roaming_allowed": {
+                            "type": "boolean"
+                          },
+                          "5g_allowed": {
+                            "type": "boolean"
+                          },
+                          "plmn_whitelist": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "description": "Allowed PLMN IDs."
+                            }
+                          },
+                          "plmn_blacklist": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "description": "Blocked PLMN IDs."
+                            }
+                          }
+                        }
+                      },
+                      "service_features": {
+                        "type": "object",
+                        "description": "Service-level flags and feature toggles.",
+                        "properties": {
+                          "volte_enabled": {
+                            "type": "boolean"
+                          },
+                          "wifi_calling_enabled": {
+                            "type": "boolean"
+                          },
+                          "private_network_memberships": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "network_id": {
+                                  "type": "string"
+                                },
+                                "role": {
+                                  "type": "string",
+                                  "enum": [
+                                    "standard",
+                                    "admin",
+                                    "monitor"
+                                  ]
+                                }
+                              },
+                              "required": [
+                                "network_id"
+                              ]
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "operation"
+                ]
+              },
+              "policy_assignments": {
+                "type": "array",
+                "description": "Top-level policy assignments or removals for the subscriber.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "policy_id": {
+                      "$ref": "#/shared_entities/policy_id"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "attach",
+                        "detach"
+                      ]
+                    },
+                    "scope": {
+                      "type": "string",
+                      "enum": [
+                        "subscriber",
+                        "slice",
+                        "dnn"
+                      ]
+                    },
+                    "scope_filter": {
+                      "type": "object",
+                      "description": "Condition for when this policy applies.",
+                      "properties": {
+                        "slice": {
+                          "type": "object",
+                          "properties": {
+                            "sst": {
+                              "type": "integer"
+                            },
+                            "sd": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "dnn": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "policy_id",
+                    "action"
+                  ]
+                }
+              }
+            }
+          },
+          "moderation_actor": {
+            "$ref": "#/shared_entities/moderation_actor"
+          },
+          "validation_mode": {
+            "type": "string",
+            "enum": [
+              "syntactic_only",
+              "semantic_and_policy",
+              "full_network_impact"
+            ],
+            "description": "Depth of validation to run as part of moderation."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Arbitrary metadata attached to this moderation request.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "origin_context",
+          "proposed_changes",
+          "moderation_actor"
+        ]
+      },
+      "returns": "New moderation_request_id, initial moderation_status, and a normalized change_set_id representing the proposed changes."
+    },
+    {
+      "name": "validate_subscriber_change_set",
+      "description": "Run syntactic, semantic, and policy validations against a proposed change set.",
+      "stage": "validation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_set_id": {
+            "$ref": "#/shared_entities/change_set_id"
+          },
+          "validation_scope": {
+            "type": "object",
+            "description": "Controls which validations are run.",
+            "properties": {
+              "syntax": {
+                "type": "boolean",
+                "default": true
+              },
+              "policy_compliance": {
+                "type": "boolean",
+                "default": true
+              },
+              "quota_limits": {
+                "type": "boolean",
+                "default": false
+              },
+              "network_impact_simulation": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "subscriber_context_hint": {
+            "type": "object",
+            "description": "Optional hints about current subscriber context to optimize validation.",
+            "properties": {
+              "current_serving_plmn": {
+                "type": "string"
+              },
+              "active_slices": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "sst": {
+                      "type": "integer"
+                    },
+                    "sd": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "concurrent_session_count": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "required": [
+          "change_set_id"
+        ]
+      },
+      "returns": "Validation result including pass/fail, list of issues by severity, and recommended remediation steps."
+    },
+    {
+      "name": "run_automated_policy_review",
+      "description": "Evaluate a moderation request against automated policy rules to flag risks and required manual checks.",
+      "stage": "review",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "moderation_request_id": {
+            "$ref": "#/shared_entities/moderation_request_id"
+          },
+          "review_profiles": {
+            "type": "array",
+            "description": "Set of automated review profiles or rule bundles to execute.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "profile_name": {
+                  "type": "string"
+                },
+                "ruleset_version": {
+                  "type": "string"
+                },
+                "strict_mode": {
+                  "type": "boolean",
+                  "default": false
+                }
+              },
+              "required": [
+                "profile_name"
+              ]
+            }
+          },
+          "risk_thresholds": {
+            "type": "object",
+            "description": "Category-specific thresholds that influence auto-approval decisions.",
+            "properties": {
+              "max_overall_risk_score": {
+                "type": "number"
+              },
+              "block_on_categories": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "security",
+                    "fraud",
+                    "sla_violation",
+                    "regulatory",
+                    "revenue_impact"
+                  ]
+                }
+              },
+              "require_human_on_categories": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "security",
+                    "fraud",
+                    "sla_violation",
+                    "regulatory",
+                    "revenue_impact"
+                  ]
+                }
+              }
+            }
+          },
+          "moderation_actor": {
+            "$ref": "#/shared_entities/moderation_actor"
+          }
+        },
+        "required": [
+          "moderation_request_id"
+        ]
+      },
+      "returns": "Automated review report including risk scores, rule hits, suggested disposition (approve/reject/manual_review)."
+    },
+    {
+      "name": "add_human_review_decision",
+      "description": "Attach a human moderator's decision and comments to a moderation request.",
+      "stage": "review",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "moderation_request_id": {
+            "$ref": "#/shared_entities/moderation_request_id"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "request_changes",
+              "escalate"
+            ]
+          },
+          "decision_details": {
+            "type": "object",
+            "description": "Additional information and rationale about the decision.",
+            "properties": {
+              "comment": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "risk_overrides": {
+                "type": "array",
+                "description": "Manual overrides of specific risk flags.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "category": {
+                      "type": "string",
+                      "enum": [
+                        "security",
+                        "fraud",
+                        "sla_violation",
+                        "regulatory",
+                        "revenue_impact",
+                        "other"
+                      ]
+                    },
+                    "justification": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "category",
+                    "justification"
+                  ]
+                }
+              },
+              "requested_changes": {
+                "type": "array",
+                "description": "Specific changes requested before approval.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "path": {
+                      "type": "string",
+                      "description": "JSON pointer path to the field needing change."
+                    },
+                    "instruction": {
+                      "type": "string"
+                    },
+                    "mandatory": {
+                      "type": "boolean",
+                      "default": true
+                    }
+                  },
+                  "required": [
+                    "path",
+                    "instruction"
+                  ]
+                }
+              }
+            }
+          },
+          "next_reviewer_queue": {
+            "type": "string",
+            "description": "Optional queue to route to if escalated or changes requested."
+          },
+          "moderation_actor": {
+            "$ref": "#/shared_entities/moderation_actor"
+          }
+        },
+        "required": [
+          "moderation_request_id",
+          "decision",
+          "moderation_actor"
+        ]
+      },
+      "returns": "Updated moderation_status, appended audit trail entry, and routing information if escalated or changes requested."
+    },
+    {
+      "name": "schedule_or_apply_moderated_change",
+      "description": "Schedule or immediately apply an approved moderation request to UDM subscriber data.",
+      "stage": "deployment",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "moderation_request_id": {
+            "$ref": "#/shared_entities/moderation_request_id"
+          },
+          "deployment_mode": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "scheduled",
+              "windowed"
+            ]
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Scheduling parameters for deployment.",
+            "properties": {
+              "start_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "UTC time when deployment can start."
+              },
+              "end_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Optional end of deployment window."
+              },
+              "time_zone": {
+                "type": "string",
+                "description": "IANA time zone identifier if schedule is in local time."
+              }
+            }
+          },
+          "impact_constraints": {
+            "type": "object",
+            "description": "Constraints to limit network or subscriber impact during deployment.",
+            "properties": {
+              "max_concurrent_sessions_impacted": {
+                "type": "integer"
+              },
+              "graceful_session_handling": {
+                "type": "string",
+                "enum": [
+                  "allow_existing",
+                  "force_reestablish",
+                  "gradual_migration"
+                ]
+              },
+              "notify_external_systems": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "rollback_strategy": {
+            "type": "object",
+            "description": "Rollback behavior in case of partial or full failure.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "auto_full",
+                  "auto_partial",
+                  "manual"
+                ]
+              },
+              "max_allowed_failure_percentage": {
+                "type": "number",
+                "description": "Threshold to trigger rollback for bulk scenarios."
+              },
+              "create_snapshot": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "moderation_actor": {
+            "$ref": "#/shared_entities/moderation_actor"
+          }
+        },
+        "required": [
+          "moderation_request_id",
+          "deployment_mode",
+          "moderation_actor"
+        ]
+      },
+      "returns": "Deployment job identifier, current deployment state (pending/deploying/deployed/failed), and associated change_set_id snapshot reference."
+    },
+    {
+      "name": "get_moderation_request_status",
+      "description": "Retrieve the current status and key details for a moderation request.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "moderation_request_id": {
+            "$ref": "#/shared_entities/moderation_request_id"
+          },
+          "include": {
+            "type": "array",
+            "description": "Optional extra sections to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "proposed_changes",
+                "validation_results",
+                "automated_review",
+                "human_reviews",
+                "deployment_history",
+                "audit_trail"
+              ]
+            }
+          }
+        },
+        "required": [
+          "moderation_request_id"
+        ]
+      },
+      "returns": "Moderation status, high-level disposition, and optional sections such as validation results, review history, and deployment details."
+    },
+    {
+      "name": "retry_failed_moderation_step",
+      "description": "Retry a failed step within the moderation or deployment flow, with optional overrides.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "moderation_request_id": {
+            "$ref": "#/shared_entities/moderation_request_id"
+          },
+          "failed_step": {
+            "type": "string",
+            "enum": [
+              "validation",
+              "automated_review",
+              "deployment",
+              "rollback"
+            ]
+          },
+          "override_parameters": {
+            "type": "object",
+            "description": "Optional overrides for the step being retried.",
+            "properties": {
+              "validation_scope": {
+                "type": "object",
+                "properties": {
+                  "syntax": {
+                    "type": "boolean"
+                  },
+                  "policy_compliance": {
+                    "type": "boolean"
+                  },
+                  "quota_limits": {
+                    "type": "boolean"
+                  },
+                  "network_impact_simulation": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "deployment_mode": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "scheduled",
+                  "windowed"
+                ]
+              },
+              "schedule": {
+                "type": "object",
+                "properties": {
+                  "start_time": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end_time": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "time_zone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "rollback_strategy": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "auto_full",
+                      "auto_partial",
+                      "manual"
+                    ]
+                  },
+                  "max_allowed_failure_percentage": {
+                    "type": "number"
+                  },
+                  "create_snapshot": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          },
+          "comment": {
+            "type": "string",
+            "description": "Reason for retry and context for audit."
+          },
+          "moderation_actor": {
+            "$ref": "#/shared_entities/moderation_actor"
+          }
+        },
+        "required": [
+          "moderation_request_id",
+          "failed_step",
+          "moderation_actor"
+        ]
+      },
+      "returns": "New attempt record for the step, updated moderation_status, and reference to any new validation or deployment jobs created."
+    },
+    {
+      "name": "rollback_moderated_change",
+      "description": "Rollback an applied moderated change for a subscriber, restoring a previous UDM state.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "moderation_request_id": {
+            "$ref": "#/shared_entities/moderation_request_id"
+          },
+          "target_state": {
+            "type": "string",
+            "enum": [
+              "pre_change_snapshot",
+              "specific_audit_point"
+            ]
+          },
+          "audit_id": {
+            "$ref": "#/shared_entities/audit_id",
+            "description": "Required if target_state is 'specific_audit_point'."
+          },
+          "rollback_reason": {
+            "type": "string",
+            "description": "Reason for triggering rollback (e.g., service degradation, misconfiguration)."
+          },
+          "rollback_options": {
+            "type": "object",
+            "description": "Fine-grained rollback configuration.",
+            "properties": {
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "full_request",
+                  "subscription_profile_only",
+                  "policies_only"
+                ]
+              },
+              "graceful_session_handling": {
+                "type": "string",
+                "enum": [
+                  "allow_existing",
+                  "force_reestablish",
+                  "gradual_migration"
+                ]
+              },
+              "notify_external_systems": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "moderation_actor": {
+            "$ref": "#/shared_entities/moderation_actor"
+          }
+        },
+        "required": [
+          "moderation_request_id",
+          "target_state",
+          "rollback_reason",
+          "moderation_actor"
+        ]
+      },
+      "returns": "Rollback job identifier, rollback status, and details of which subscriber profile and policies were reverted."
+    },
+    {
+      "name": "cancel_moderation_request",
+      "description": "Cancel an in-progress moderation request before or during deployment.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "moderation_request_id": {
+            "$ref": "#/shared_entities/moderation_request_id"
+          },
+          "cancel_reason": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "description": "If true, attempt to force cancel even during deployment windows.",
+            "default": false
+          },
+          "notify_channels": {
+            "type": "array",
+            "description": "Channels to inform about this cancellation.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "originator",
+                "network_ops",
+                "security_ops",
+                "external_api_client"
+              ]
+            }
+          },
+          "moderation_actor": {
+            "$ref": "#/shared_entities/moderation_actor"
+          }
+        },
+        "required": [
+          "moderation_request_id",
+          "cancel_reason",
+          "moderation_actor"
+        ]
+      },
+      "returns": "Cancellation confirmation, updated moderation_status=cancelled, and audit record reference."
+    },
+    {
+      "name": "list_moderation_requests",
+      "description": "Search and list moderation requests using flexible filters for reporting or dashboards.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "description": "Filter criteria for listing moderation requests.",
+            "properties": {
+              "subscriber_id": {
+                "$ref": "#/shared_entities/subscriber_id"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/moderation_status"
+                }
+              },
+              "created_time_range": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "deployment_state_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "not_scheduled",
+                    "scheduled",
+                    "deploying",
+                    "deployed",
+                    "failed",
+                    "rolled_back"
+                  ]
+                }
+              },
+              "risk_category_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "security",
+                    "fraud",
+                    "sla_violation",
+                    "regulatory",
+                    "revenue_impact"
+                  ]
+                }
+              },
+              "origin_channel_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "selfcare_portal",
+                    "csr_console",
+                    "batch_provisioning",
+                    "api_partner",
+                    "network_automation",
+                    "other"
+                  ]
+                }
+              },
+              "review_queue": {
+                "type": "string",
+                "description": "Current review queue name."
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200,
+                "default": 50
+              }
+            }
+          },
+          "sort": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string",
+                "enum": [
+                  "created_at",
+                  "updated_at",
+                  "status",
+                  "risk_score"
+                ]
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of moderation requests with summary fields (id, subscriber_id, status, risk, timestamps, origin)."
+    },
+    {
+      "name": "get_subscriber_profile_moderation_view",
+      "description": "Retrieve a consolidated view of a subscriber's current UDM profile and any active or recent moderation requests.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "$ref": "#/shared_entities/subscriber_id"
+          },
+          "include_history": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, include recent moderation history and audit summaries."
+          },
+          "history_limit": {
+            "type": "integer",
+            "default": 10,
+            "description": "Maximum number of historical moderation items to return."
+          },
+          "view_options": {
+            "type": "object",
+            "description": "Options to control level of detail in profile view.",
+            "properties": {
+              "include_policies": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_qos_details": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_access_restrictions": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_private_network_memberships": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          }
+        },
+        "required": [
+          "subscriber_id"
+        ]
+      },
+      "returns": "Composite view including current UDM subscription profile, effective policies, and optionally recent moderation and audit summaries."
+    },
+    {
+      "name": "record_moderation_audit_event",
+      "description": "Record a custom audit event associated with a moderation request or subscriber for compliance and traceability.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "type": "object",
+            "description": "Context linking this audit event to entities.",
+            "properties": {
+              "moderation_request_id": {
+                "$ref": "#/shared_entities/moderation_request_id"
+              },
+              "subscriber_id": {
+                "$ref": "#/shared_entities/subscriber_id"
+              },
+              "profile_id": {
+                "$ref": "#/shared_entities/profile_id"
+              },
+              "change_set_id": {
+                "$ref": "#/shared_entities/change_set_id"
+              }
+            }
+          },
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "validation_result",
+              "policy_review_result",
+              "human_decision",
+              "deployment_action",
+              "rollback_action",
+              "status_change",
+              "external_notification",
+              "manual_note"
+            ]
+          },
+          "event_severity": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warning",
+              "error",
+              "critical"
+            ]
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable description of the event."
+          },
+          "details": {
+            "type": "object",
+            "description": "Structured key-value details for the event.",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "moderation_actor": {
+            "$ref": "#/shared_entities/moderation_actor"
+          }
+        },
+        "required": [
+          "event_type",
+          "event_severity",
+          "message"
+        ]
+      },
+      "returns": "New audit_id created for the event and a timestamp of when the event was recorded."
+    },
+    {
+      "name": "get_moderation_audit_trail",
+      "description": "Retrieve the ordered audit trail of moderation actions and events for a moderation request or subscriber.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "moderation_request_id": {
+            "$ref": "#/shared_entities/moderation_request_id"
+          },
+          "subscriber_id": {
+            "$ref": "#/shared_entities/subscriber_id",
+            "description": "Alternative to moderation_request_id; at least one must be provided."
+          },
+          "time_range": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "validation_result",
+                "policy_review_result",
+                "human_decision",
+                "deployment_action",
+                "rollback_action",
+                "status_change",
+                "external_notification",
+                "manual_note"
+              ]
+            }
+          },
+          "severity_in": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "info",
+                "warning",
+                "error",
+                "critical"
+              ]
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for pagination."
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 100
+              }
+            }
+          }
+        }
+      },
+      "returns": "Chronologically ordered list of audit events matching the filters, with pagination cursor for subsequent retrieval."
+    },
+    {
+      "name": "search_udm_moderation_entities",
+      "description": "Faceted search across udm_moderation entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching udm_moderation entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_udm_moderation_records",
+      "description": "Bulk-create up to N udm_moderation records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_udm_moderation_records",
+      "description": "Apply a partial update patch to many udm_moderation records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_udm_moderation_records",
+      "description": "Delete or soft-delete many udm_moderation records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_udm_moderation_dataset",
+      "description": "Schedule or stream an export of udm_moderation data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_udm_moderation_dataset",
+      "description": "Validate and import a udm_moderation dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_udm_moderation_state",
+      "description": "Create a point-in-time snapshot of one or more udm_moderation entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_udm_moderation_snapshot",
+      "description": "Restore udm_moderation state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_udm_moderation_metrics",
+      "description": "Query aggregated metrics/KPIs for the udm_moderation workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_udm_moderation_dashboard",
+      "description": "Compose a dashboard view across udm_moderation metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_udm_moderation_audit_events",
+      "description": "Search the udm_moderation audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_udm_moderation_events",
+      "description": "Create a webhook subscription that delivers udm_moderation workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_udm_moderation_subscriptions",
+      "description": "List webhook subscriptions for udm_moderation events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_udm_moderation_subscription",
+      "description": "Remove a webhook subscription for udm_moderation events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_udm_moderation_job",
+      "description": "Schedule a recurring or one-off udm_moderation job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_udm_moderation_schedules",
+      "description": "List scheduled udm_moderation jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_udm_moderation_schedule",
+      "description": "Cancel or pause a scheduled udm_moderation job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_udm_moderation_operation",
+      "description": "Run a what-if simulation of a udm_moderation operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_udm_moderation_approval",
+      "description": "Open an approval request for a udm_moderation action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_udm_moderation_approval",
+      "description": "Record an approve/reject/abstain decision on a udm_moderation approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_udm_moderation_comment",
+      "description": "Add a threaded comment or annotation to any udm_moderation entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_udm_moderation_comments",
+      "description": "List comments/annotations attached to a udm_moderation entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_udm_moderation_policy",
+      "description": "Create or update a policy/rule controlling udm_moderation behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_udm_moderation_policies",
+      "description": "List udm_moderation policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_udm_moderation_entities",
+      "description": "Create a typed relationship between two udm_moderation-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_udm_moderation_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a udm_moderation entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_udm_moderation_entities",
+      "description": "Add, remove, or replace tags on one or many udm_moderation entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}

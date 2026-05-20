@@ -1,0 +1,3211 @@
+{
+  "workflow_name": "tariff_change_management",
+  "description": "End-to-end telecom tariff change management workflow, from designing and simulating new tariff plans to approvals, rollout, monitoring, and rollback.",
+  "domain": "telco_billing/tariff_management",
+  "shared_entities": {
+    "tariff_id": {
+      "type": "string",
+      "description": "Unique identifier for a tariff plan (product catalog level)."
+    },
+    "tariff_version_id": {
+      "type": "string",
+      "description": "Identifier of a specific version of a tariff plan within its lifecycle."
+    },
+    "change_request_id": {
+      "type": "string",
+      "description": "Identifier for a tariff change management request."
+    },
+    "simulation_id": {
+      "type": "string",
+      "description": "Identifier for a pricing and impact simulation scenario."
+    },
+    "approval_workflow_id": {
+      "type": "string",
+      "description": "Identifier for the approval workflow instance associated with a change request."
+    },
+    "deployment_batch_id": {
+      "type": "string",
+      "description": "Identifier for a deployment batch of subscribers impacted by a tariff change."
+    },
+    "rollback_plan_id": {
+      "type": "string",
+      "description": "Identifier for a rollback plan prepared for a tariff change deployment."
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "list_tariffs",
+      "description": "List existing tariffs with filtering by status, product type, and lifecycle state.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "description": "Filter criteria for tariffs.",
+            "properties": {
+              "status": {
+                "type": "string",
+                "description": "Current operational status of the tariff.",
+                "enum": [
+                  "draft",
+                  "pending_approval",
+                  "scheduled",
+                  "active",
+                  "retired"
+                ]
+              },
+              "product_type": {
+                "type": "string",
+                "description": "Type/category of the tariff.",
+                "enum": [
+                  "mobile_postpaid",
+                  "mobile_prepaid",
+                  "fixed_broadband",
+                  "iptv",
+                  "converged",
+                  "iot"
+                ]
+              },
+              "market_segment": {
+                "type": "string",
+                "description": "Target market segment.",
+                "enum": [
+                  "consumer",
+                  "smb",
+                  "enterprise",
+                  "wholesale"
+                ]
+              },
+              "has_pending_change": {
+                "type": "boolean",
+                "description": "Whether tariff has any pending change requests."
+              },
+              "created_by": {
+                "type": "string",
+                "description": "Filter tariffs created by a specific user ID."
+              }
+            }
+          },
+          "paging": {
+            "type": "object",
+            "description": "Pagination options.",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200,
+                "default": 50
+              }
+            }
+          },
+          "sort": {
+            "type": "object",
+            "description": "Sorting options.",
+            "properties": {
+              "field": {
+                "type": "string",
+                "enum": [
+                  "name",
+                  "created_at",
+                  "updated_at",
+                  "status"
+                ]
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "asc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of tariffs matching the filter with summary details (id, name, status, latest_version, key attributes)."
+    },
+    {
+      "name": "get_tariff_details",
+      "description": "Get detailed information about a specific tariff and its versions.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tariff_id": {
+            "type": "string",
+            "description": "Identifier of the tariff to retrieve."
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional sections to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "versions",
+                "pricing_components",
+                "eligibility_rules",
+                "discounts",
+                "linked_offers",
+                "audit_log",
+                "pending_changes"
+              ]
+            }
+          },
+          "version_filter": {
+            "type": "object",
+            "description": "Filter which versions to include when 'versions' is requested.",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "pending_approval",
+                  "scheduled",
+                  "active",
+                  "retired"
+                ]
+              },
+              "effective_on": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Only include versions effective at a specific timestamp."
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50
+              }
+            }
+          }
+        },
+        "required": [
+          "tariff_id"
+        ]
+      },
+      "returns": "Full tariff metadata including structure, current and historical versions, and optionally eligibility rules, discounts, and audit log."
+    },
+    {
+      "name": "create_tariff_change_request",
+      "description": "Create a new tariff change request (new version or new tariff) with proposed modifications.",
+      "stage": "design",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_type": {
+            "type": "string",
+            "description": "Type of change being requested.",
+            "enum": [
+              "new_tariff",
+              "new_version",
+              "price_adjustment",
+              "benefit_change",
+              "termination"
+            ]
+          },
+          "source_tariff": {
+            "type": "object",
+            "description": "Reference to an existing tariff/version if the change is not creating a brand-new tariff.",
+            "properties": {
+              "tariff_id": {
+                "type": "string"
+              },
+              "tariff_version_id": {
+                "type": "string"
+              }
+            }
+          },
+          "requested_by": {
+            "type": "string",
+            "description": "User or system ID requesting the change."
+          },
+          "business_justification": {
+            "type": "string",
+            "description": "Narrative justification for the change."
+          },
+          "target_markets": {
+            "type": "array",
+            "description": "Markets/regions where this change will apply.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "country_code": {
+                  "type": "string"
+                },
+                "region_code": {
+                  "type": "string"
+                },
+                "channel_restrictions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "online",
+                      "retail",
+                      "call_center",
+                      "partner",
+                      "all"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "country_code"
+              ]
+            }
+          },
+          "proposed_tariff_definition": {
+            "type": "object",
+            "description": "Definition of the new or modified tariff structure.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "product_type": {
+                "type": "string",
+                "enum": [
+                  "mobile_postpaid",
+                  "mobile_prepaid",
+                  "fixed_broadband",
+                  "iptv",
+                  "converged",
+                  "iot"
+                ]
+              },
+              "market_segment": {
+                "type": "string",
+                "enum": [
+                  "consumer",
+                  "smb",
+                  "enterprise",
+                  "wholesale"
+                ]
+              },
+              "pricing_model": {
+                "type": "string",
+                "enum": [
+                  "flat",
+                  "tiered",
+                  "usage_based",
+                  "bundle",
+                  "hybrid"
+                ]
+              },
+              "pricing_components": {
+                "type": "array",
+                "description": "Array of pricing components that make up the tariff.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "component_type": {
+                      "type": "string",
+                      "enum": [
+                        "monthly_recurring_charge",
+                        "one_time_charge",
+                        "usage_voice",
+                        "usage_data",
+                        "usage_sms",
+                        "addon"
+                      ]
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "charge": {
+                      "type": "object",
+                      "properties": {
+                        "currency": {
+                          "type": "string"
+                        },
+                        "amount": {
+                          "type": "number"
+                        },
+                        "billing_period": {
+                          "type": "string",
+                          "enum": [
+                            "one_time",
+                            "monthly",
+                            "quarterly",
+                            "yearly",
+                            "per_use"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "currency",
+                        "amount"
+                      ]
+                    },
+                    "usage_tiers": {
+                      "type": "array",
+                      "description": "Usage tiers if component is tiered.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "from": {
+                            "type": "number"
+                          },
+                          "to": {
+                            "type": "number"
+                          },
+                          "unit": {
+                            "type": "string",
+                            "enum": [
+                              "minutes",
+                              "mb",
+                              "gb",
+                              "messages",
+                              "units"
+                            ]
+                          },
+                          "rate_per_unit": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "from",
+                          "unit",
+                          "rate_per_unit"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "component_type",
+                    "name",
+                    "charge"
+                  ]
+                }
+              },
+              "eligibility_rules": {
+                "type": "object",
+                "description": "Eligibility conditions for subscribers.",
+                "properties": {
+                  "min_tenure_months": {
+                    "type": "integer"
+                  },
+                  "allowed_customer_types": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "consumer_individual",
+                        "consumer_family",
+                        "business",
+                        "government"
+                      ]
+                    }
+                  },
+                  "device_lock_in_required": {
+                    "type": "boolean"
+                  },
+                  "blacklist_tariffs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "description": "Tariff IDs that cannot be combined with this tariff."
+                    }
+                  }
+                }
+              },
+              "discounts": {
+                "type": "array",
+                "description": "Optional discount rules associated to the tariff.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "discount_type": {
+                      "type": "string",
+                      "enum": [
+                        "percentage",
+                        "fixed_amount",
+                        "bundle_bonus"
+                      ]
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "number"
+                    },
+                    "applicable_components": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "description": "Name or ID of pricing component this discount applies to."
+                      }
+                    },
+                    "validity": {
+                      "type": "object",
+                      "properties": {
+                        "start_date": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "end_date": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "duration_months": {
+                          "type": "integer",
+                          "description": "If defined, discount expires this many months after activation."
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "discount_type",
+                    "value"
+                  ]
+                }
+              }
+            }
+          },
+          "requested_effective_window": {
+            "type": "object",
+            "description": "Requested effective period for the change.",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "start"
+            ]
+          },
+          "risk_assessment": {
+            "type": "object",
+            "description": "Initial risk assessment from the requester.",
+            "properties": {
+              "risk_level": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "identified_risks": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "mitigation_plan_summary": {
+                "type": "string"
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "description": "Optional documentation references.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "business_case",
+                    "legal_review",
+                    "marketing_material",
+                    "other"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "url"
+              ]
+            }
+          }
+        },
+        "required": [
+          "change_type",
+          "requested_by",
+          "requested_effective_window"
+        ]
+      },
+      "returns": "New change_request_id along with initial status, linked tariff/tariff_version if any, and a summary of the proposed changes."
+    },
+    {
+      "name": "simulate_tariff_change_impact",
+      "description": "Run revenue and customer impact simulations for a proposed tariff change.",
+      "stage": "simulation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_request_id": {
+            "type": "string",
+            "description": "Identifier of the change request to simulate."
+          },
+          "simulation_scope": {
+            "type": "object",
+            "description": "Defines which subscriber base or segment is simulated.",
+            "properties": {
+              "scope_type": {
+                "type": "string",
+                "enum": [
+                  "sample_subscribers",
+                  "full_base_segment",
+                  "what_if_scenario"
+                ]
+              },
+              "segment_definition": {
+                "type": "object",
+                "description": "Optional criteria to define simulation segment.",
+                "properties": {
+                  "current_tariff_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "market_segment": {
+                    "type": "string",
+                    "enum": [
+                      "consumer",
+                      "smb",
+                      "enterprise",
+                      "wholesale"
+                    ]
+                  },
+                  "arpu_range": {
+                    "type": "object",
+                    "properties": {
+                      "min": {
+                        "type": "number"
+                      },
+                      "max": {
+                        "type": "number"
+                      }
+                    }
+                  },
+                  "country_codes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "sample_size": {
+                "type": "integer",
+                "description": "Number of subscribers in sample if scope_type is sample_subscribers."
+              }
+            },
+            "required": [
+              "scope_type"
+            ]
+          },
+          "assumptions": {
+            "type": "object",
+            "description": "Assumptions for churn, upsell, and usage elasticity.",
+            "properties": {
+              "churn_delta_percentage": {
+                "type": "number",
+                "description": "Expected percentage change in churn rate."
+              },
+              "upsell_takeup_rate": {
+                "type": "number",
+                "description": "Expected percentage of customers who will move to higher plans."
+              },
+              "usage_elasticity": {
+                "type": "object",
+                "properties": {
+                  "voice_elasticity": {
+                    "type": "number"
+                  },
+                  "data_elasticity": {
+                    "type": "number"
+                  },
+                  "sms_elasticity": {
+                    "type": "number"
+                  }
+                }
+              },
+              "promotion_duration_months": {
+                "type": "integer"
+              }
+            }
+          },
+          "time_horizon_months": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 60,
+            "default": 12
+          },
+          "output_granularity": {
+            "type": "string",
+            "enum": [
+              "monthly",
+              "quarterly",
+              "yearly"
+            ],
+            "default": "monthly"
+          }
+        },
+        "required": [
+          "change_request_id",
+          "simulation_scope"
+        ]
+      },
+      "returns": "simulation_id and summarized projected KPIs (revenue, margin, ARPU, churn impact) with breakdowns per segment and time period."
+    },
+    {
+      "name": "submit_tariff_change_for_approval",
+      "description": "Submit a tariff change request into a formal approval workflow.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_request_id": {
+            "type": "string"
+          },
+          "approval_workflow_template": {
+            "type": "string",
+            "description": "Name or ID of the approval workflow template to use."
+          },
+          "required_approvers": {
+            "type": "array",
+            "description": "Explicit list of approver roles or user IDs in sequence stages.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "stage_name": {
+                  "type": "string"
+                },
+                "approver_type": {
+                  "type": "string",
+                  "enum": [
+                    "role",
+                    "user"
+                  ]
+                },
+                "approver_id": {
+                  "type": "string",
+                  "description": "Role name or user ID depending on approver_type."
+                },
+                "min_approvals": {
+                  "type": "integer",
+                  "description": "Minimum approvals required at this stage if multiple approvers are defined.",
+                  "minimum": 1
+                }
+              },
+              "required": [
+                "stage_name",
+                "approver_type",
+                "approver_id"
+              ]
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "description": "Additional documents for approvers.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "url"
+              ]
+            }
+          },
+          "comments": {
+            "type": "string",
+            "description": "Optional notes from the submitter to approvers."
+          }
+        },
+        "required": [
+          "change_request_id"
+        ]
+      },
+      "returns": "approval_workflow_id and updated change request status (e.g., pending_approval), including approval stages and current pending stage."
+    },
+    {
+      "name": "approve_or_reject_tariff_change",
+      "description": "Approve or reject a tariff change at a particular approval stage.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_workflow_id": {
+            "type": "string"
+          },
+          "approver_id": {
+            "type": "string",
+            "description": "User ID of the approver taking action."
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "request_changes"
+            ]
+          },
+          "stage_name": {
+            "type": "string",
+            "description": "Name of the approval stage this action applies to."
+          },
+          "comments": {
+            "type": "string"
+          },
+          "requested_changes": {
+            "type": "array",
+            "description": "If action is request_changes, list of change requests.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field_path": {
+                  "type": "string",
+                  "description": "JSON pointer or field path for the requested change."
+                },
+                "description": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "blocker",
+                    "major",
+                    "minor"
+                  ]
+                }
+              },
+              "required": [
+                "field_path",
+                "description"
+              ]
+            }
+          }
+        },
+        "required": [
+          "approval_workflow_id",
+          "approver_id",
+          "action"
+        ]
+      },
+      "returns": "Updated approval workflow status, overall decision if final stage, and updated change request status (approved/rejected/changes_requested)."
+    },
+    {
+      "name": "schedule_tariff_deployment",
+      "description": "Schedule deployment of an approved tariff change, including phased rollout strategy.",
+      "stage": "deployment_planning",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_request_id": {
+            "type": "string"
+          },
+          "deployment_strategy": {
+            "type": "string",
+            "enum": [
+              "big_bang",
+              "phased",
+              "pilot_then_full"
+            ]
+          },
+          "rollout_phases": {
+            "type": "array",
+            "description": "If deployment strategy is phased or pilot_then_full, define rollout phases.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "phase_name": {
+                  "type": "string"
+                },
+                "start_time": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "target_population": {
+                  "type": "object",
+                  "properties": {
+                    "population_type": {
+                      "type": "string",
+                      "enum": [
+                        "percentage_of_base",
+                        "fixed_subscriber_list",
+                        "segment"
+                      ]
+                    },
+                    "percentage": {
+                      "type": "number",
+                      "description": "Percentage of base if population_type is percentage_of_base."
+                    },
+                    "subscriber_list_id": {
+                      "type": "string",
+                      "description": "Reference to a precomputed subscriber list."
+                    },
+                    "segment_criteria": {
+                      "type": "object",
+                      "description": "Criteria to dynamically determine subscribers in this phase.",
+                      "properties": {
+                        "current_tariff_id": {
+                          "type": "string"
+                        },
+                        "country_code": {
+                          "type": "string"
+                        },
+                        "max_bill_shock_risk_score": {
+                          "type": "number"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "population_type"
+                  ]
+                },
+                "guardrails": {
+                  "type": "object",
+                  "description": "Automatic stop conditions for this phase.",
+                  "properties": {
+                    "max_support_tickets_increase_pct": {
+                      "type": "number"
+                    },
+                    "max_revenue_drop_pct": {
+                      "type": "number"
+                    },
+                    "max_churn_increase_pct": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "phase_name",
+                "start_time",
+                "target_population"
+              ]
+            }
+          },
+          "change_freeze_exceptions": {
+            "type": "boolean",
+            "description": "Whether this deployment has an approved exception to change freeze windows."
+          },
+          "pre_deployment_checks": {
+            "type": "array",
+            "description": "List of checks that must pass before deployment can start.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "billing_system_sync",
+                "crm_offer_sync",
+                "legal_signoff",
+                "communications_ready",
+                "customer_care_training_complete"
+              ]
+            }
+          }
+        },
+        "required": [
+          "change_request_id",
+          "deployment_strategy"
+        ]
+      },
+      "returns": "deployment_batch_id (for the first or main batch), created rollout schedule, and updated change request status (e.g., scheduled)."
+    },
+    {
+      "name": "execute_tariff_deployment_batch",
+      "description": "Trigger execution of a specific deployment batch/phase and track initial results.",
+      "stage": "deployment_execution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_batch_id": {
+            "type": "string"
+          },
+          "initiated_by": {
+            "type": "string",
+            "description": "User or system ID initiating the batch."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "If true, run validations only without applying changes.",
+            "default": false
+          },
+          "override_guardrails": {
+            "type": "boolean",
+            "description": "Whether to override pre-configured guardrails (requires privilege).",
+            "default": false
+          },
+          "notes": {
+            "type": "string",
+            "description": "Optional notes about this execution."
+          }
+        },
+        "required": [
+          "deployment_batch_id",
+          "initiated_by"
+        ]
+      },
+      "returns": "Updated deployment batch status (queued/in_progress/completed/failed), summary of validations, and counts of subscribers to be migrated."
+    },
+    {
+      "name": "get_tariff_change_status",
+      "description": "Retrieve status of a tariff change request including approval, deployment, and monitoring indicators.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_request_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "approval_workflow",
+                "deployment_batches",
+                "kpi_trends",
+                "incidents",
+                "rollback_plans"
+              ]
+            }
+          },
+          "kpi_window": {
+            "type": "object",
+            "description": "Optional KPI time window filters.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "granularity": {
+                "type": "string",
+                "enum": [
+                  "hourly",
+                  "daily",
+                  "weekly"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "change_request_id"
+        ]
+      },
+      "returns": "Overall change request lifecycle status, with optional detailed approval status, batch statuses, KPI evolution, and linked incidents or rollback plans."
+    },
+    {
+      "name": "prepare_tariff_rollback_plan",
+      "description": "Create a rollback plan for a tariff change, including rollback conditions and target state.",
+      "stage": "rollback_planning",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_request_id": {
+            "type": "string"
+          },
+          "rollback_strategy": {
+            "type": "string",
+            "enum": [
+              "full_rollback",
+              "partial_rollback",
+              "roll_forward_fix"
+            ]
+          },
+          "target_state": {
+            "type": "object",
+            "description": "Definition of what state subscribers should be returned to.",
+            "properties": {
+              "revert_to_previous_tariff": {
+                "type": "boolean",
+                "default": true
+              },
+              "fallback_tariff_id": {
+                "type": "string",
+                "description": "If previous tariff is not available, use this fallback tariff."
+              },
+              "preserve_discounts": {
+                "type": "boolean",
+                "description": "Whether to preserve current discounts when rolling back.",
+                "default": false
+              }
+            }
+          },
+          "rollback_conditions": {
+            "type": "object",
+            "description": "Conditions under which rollback will be triggered.",
+            "properties": {
+              "auto_trigger": {
+                "type": "boolean",
+                "default": true
+              },
+              "thresholds": {
+                "type": "object",
+                "properties": {
+                  "max_support_tickets_increase_pct": {
+                    "type": "number"
+                  },
+                  "max_churn_increase_pct": {
+                    "type": "number"
+                  },
+                  "min_revenue_uplift_pct": {
+                    "type": "number",
+                    "description": "If uplift falls below this value, rollback may be triggered."
+                  }
+                }
+              },
+              "manual_trigger_allowed_roles": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "description": "Roles allowed to manually trigger rollback."
+                }
+              }
+            }
+          },
+          "communication_plan": {
+            "type": "object",
+            "description": "Basic outline of how rollback will be communicated to subscribers.",
+            "properties": {
+              "notify_customers": {
+                "type": "boolean",
+                "default": true
+              },
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "sms",
+                    "email",
+                    "app_notification",
+                    "ivr"
+                  ]
+                }
+              },
+              "message_template_id": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "change_request_id",
+          "rollback_strategy"
+        ]
+      },
+      "returns": "rollback_plan_id and status of the rollback plan (draft/approved), with a summary of rollback conditions and target state."
+    },
+    {
+      "name": "trigger_tariff_rollback",
+      "description": "Trigger execution of an existing rollback plan for a tariff change.",
+      "stage": "rollback_execution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "rollback_plan_id": {
+            "type": "string"
+          },
+          "initiated_by": {
+            "type": "string",
+            "description": "User or system that is triggering rollback."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "kpi_threshold_breached",
+              "technical_issue",
+              "regulatory_issue",
+              "customer_experience_issue",
+              "other"
+            ]
+          },
+          "reason_details": {
+            "type": "string",
+            "description": "Additional free-text explanation of the reason."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "If true, only compute impact without applying rollback.",
+            "default": false
+          }
+        },
+        "required": [
+          "rollback_plan_id",
+          "initiated_by",
+          "reason"
+        ]
+      },
+      "returns": "Rollback execution status, impacted subscriber counts, and linkage to any created incidents or problem records."
+    },
+    {
+      "name": "retry_failed_tariff_deployment_operations",
+      "description": "Retry or remediate failed subscriber-level operations from a deployment batch.",
+      "stage": "error_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_batch_id": {
+            "type": "string"
+          },
+          "retry_scope": {
+            "type": "string",
+            "enum": [
+              "all_failed",
+              "by_error_code",
+              "manual_selection"
+            ]
+          },
+          "error_filter": {
+            "type": "object",
+            "description": "Filter which failures to retry when retry_scope is by_error_code.",
+            "properties": {
+              "error_codes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "max_retries": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          },
+          "manual_selection": {
+            "type": "array",
+            "description": "List of subscriber IDs to retry when retry_scope is manual_selection.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remediation_actions": {
+            "type": "array",
+            "description": "Optional corrective actions to apply before retry.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action_type": {
+                  "type": "string",
+                  "enum": [
+                    "refresh_subscriber_profile",
+                    "sync_billing_account",
+                    "force_override_conflicting_offer"
+                  ]
+                },
+                "parameters": {
+                  "type": "object",
+                  "description": "Action-specific parameters."
+                }
+              },
+              "required": [
+                "action_type"
+              ]
+            }
+          },
+          "initiated_by": {
+            "type": "string",
+            "description": "User or system ID initiating the retry."
+          }
+        },
+        "required": [
+          "deployment_batch_id",
+          "retry_scope",
+          "initiated_by"
+        ]
+      },
+      "returns": "Summary of retried operations, remaining failures, and updated deployment batch error statistics."
+    },
+    {
+      "name": "cancel_tariff_change_request",
+      "description": "Cancel a tariff change request if it has not yet been fully deployed.",
+      "stage": "cancellation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_request_id": {
+            "type": "string"
+          },
+          "cancelled_by": {
+            "type": "string",
+            "description": "User ID requesting cancellation."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "business_decision",
+              "regulatory_block",
+              "technical_feasibility",
+              "duplicate_request",
+              "other"
+            ]
+          },
+          "reason_details": {
+            "type": "string"
+          },
+          "force_cancel": {
+            "type": "boolean",
+            "description": "If true, attempt to cancel even if partially deployed (may require rollback).",
+            "default": false
+          }
+        },
+        "required": [
+          "change_request_id",
+          "cancelled_by",
+          "reason"
+        ]
+      },
+      "returns": "Cancellation result (success/failed/partial), updated change request status, and any recommended rollback or clean-up actions."
+    },
+    {
+      "name": "search_tariff_change_entities",
+      "description": "Faceted search across tariff_change entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching tariff_change entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_tariff_change_records",
+      "description": "Bulk-create up to N tariff_change records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_tariff_change_records",
+      "description": "Apply a partial update patch to many tariff_change records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_tariff_change_records",
+      "description": "Delete or soft-delete many tariff_change records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_tariff_change_dataset",
+      "description": "Schedule or stream an export of tariff_change data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_tariff_change_dataset",
+      "description": "Validate and import a tariff_change dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_tariff_change_state",
+      "description": "Create a point-in-time snapshot of one or more tariff_change entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_tariff_change_snapshot",
+      "description": "Restore tariff_change state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_tariff_change_metrics",
+      "description": "Query aggregated metrics/KPIs for the tariff_change workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_tariff_change_dashboard",
+      "description": "Compose a dashboard view across tariff_change metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_tariff_change_audit_events",
+      "description": "Search the tariff_change audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_tariff_change_events",
+      "description": "Create a webhook subscription that delivers tariff_change workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_tariff_change_subscriptions",
+      "description": "List webhook subscriptions for tariff_change events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_tariff_change_subscription",
+      "description": "Remove a webhook subscription for tariff_change events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_tariff_change_job",
+      "description": "Schedule a recurring or one-off tariff_change job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_tariff_change_schedules",
+      "description": "List scheduled tariff_change jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_tariff_change_schedule",
+      "description": "Cancel or pause a scheduled tariff_change job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_tariff_change_operation",
+      "description": "Run a what-if simulation of a tariff_change operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_tariff_change_approval",
+      "description": "Open an approval request for a tariff_change action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_tariff_change_approval",
+      "description": "Record an approve/reject/abstain decision on a tariff_change approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_tariff_change_comment",
+      "description": "Add a threaded comment or annotation to any tariff_change entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_tariff_change_comments",
+      "description": "List comments/annotations attached to a tariff_change entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_tariff_change_policy",
+      "description": "Create or update a policy/rule controlling tariff_change behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_tariff_change_policies",
+      "description": "List tariff_change policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_tariff_change_entities",
+      "description": "Create a typed relationship between two tariff_change-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_tariff_change_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a tariff_change entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_tariff_change_entities",
+      "description": "Add, remove, or replace tags on one or many tariff_change entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}

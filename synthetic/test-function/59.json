@@ -1,0 +1,4337 @@
+{
+  "workflow_name": "cloud_exchange_checkout_flow",
+  "description": "End-to-end checkout workflow for purchasing connectivity services via a telecom-as-a-service (TaaS) cloud exchange, including quote building, availability checks, order placement, provisioning, modifications, and rollback.",
+  "domain": "taas_connectivity/cloud_exchange",
+  "shared_entities": {
+    "customer_id": {
+      "type": "string",
+      "description": "Unique identifier of the customer account in the cloud exchange."
+    },
+    "cart_id": {
+      "type": "string",
+      "description": "Identifier for a temporary cart holding requested connectivity items prior to order placement."
+    },
+    "quote_id": {
+      "type": "string",
+      "description": "Identifier for a generated price quote based on a cart or specific configuration."
+    },
+    "order_id": {
+      "type": "string",
+      "description": "Identifier of a submitted order in the cloud exchange."
+    },
+    "connection_id": {
+      "type": "string",
+      "description": "Identifier of a provisioned connectivity instance (e.g., a virtual circuit or interconnect)."
+    },
+    "availability_request_id": {
+      "type": "string",
+      "description": "Identifier for an asynchronous capacity/availability request."
+    },
+    "payment_profile_id": {
+      "type": "string",
+      "description": "Identifier for a saved payment profile or billing arrangement."
+    }
+  },
+  "functions": [
+    {
+      "name": "search_connectivity_offers",
+      "description": "Search and filter available connectivity offers on the cloud exchange marketplace.",
+      "stage": "discover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "description": "Customer requesting offers; used for eligibility and pricing rules."
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filter criteria applied when searching for offers.",
+            "properties": {
+              "provider_ids": {
+                "type": "array",
+                "description": "Limit results to specific connectivity providers.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "regions": {
+                "type": "array",
+                "description": "Regions in which connectivity must be available.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bandwidth_mbps": {
+                "type": "object",
+                "description": "Bandwidth range filter in Mbps.",
+                "properties": {
+                  "min": {
+                    "type": "integer"
+                  },
+                  "max": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "connection_type": {
+                "type": "string",
+                "description": "Type of connectivity.",
+                "enum": [
+                  "l2_vpn",
+                  "l3_vpn",
+                  "internet_exchange",
+                  "cloud_onramp",
+                  "direct_connect",
+                  "partner_interconnect"
+                ]
+              },
+              "term_length_months": {
+                "type": "array",
+                "description": "Preferred contract durations in months.",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "sla_tier": {
+                "type": "string",
+                "description": "Minimum SLA tier requirements.",
+                "enum": [
+                  "standard",
+                  "enhanced",
+                  "premium"
+                ]
+              },
+              "billing_model": {
+                "type": "string",
+                "description": "Preferred billing model.",
+                "enum": [
+                  "committed",
+                  "payg"
+                ]
+              },
+              "cloud_providers": {
+                "type": "array",
+                "description": "Cloud providers that the connectivity must support.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "aws",
+                    "azure",
+                    "gcp",
+                    "oracle_cloud",
+                    "alibaba_cloud",
+                    "ibm_cloud",
+                    "other"
+                  ]
+                }
+              },
+              "tags": {
+                "type": "array",
+                "description": "Arbitrary market tags to filter offers by capabilities.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "sort": {
+            "type": "object",
+            "description": "Sorting options for returned offers.",
+            "properties": {
+              "sort_by": {
+                "type": "string",
+                "enum": [
+                  "price",
+                  "bandwidth",
+                  "latency_sla",
+                  "provider_rating"
+                ]
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "description": "Page number for pagination (1-based)."
+          },
+          "page_size": {
+            "type": "integer",
+            "description": "Number of offers per page."
+          }
+        },
+        "required": [
+          "customer_id"
+        ]
+      },
+      "returns": "A paginated list of matching connectivity offers with summarized pricing and capabilities."
+    },
+    {
+      "name": "create_or_update_cart",
+      "description": "Create a new cart or update an existing cart with selected connectivity items and configurations.",
+      "stage": "select",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "cart_id": {
+            "type": "string",
+            "description": "Existing cart to be updated; if omitted, a new cart is created."
+          },
+          "customer_id": {
+            "type": "string",
+            "description": "Owner of the cart and eventual order."
+          },
+          "items": {
+            "type": "array",
+            "description": "Connectivity items to add or update in the cart.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "description": "Action to perform on this item.",
+                  "enum": [
+                    "add",
+                    "update",
+                    "remove"
+                  ]
+                },
+                "cart_item_id": {
+                  "type": "string",
+                  "description": "Existing cart item ID when updating or removing."
+                },
+                "offer_id": {
+                  "type": "string",
+                  "description": "Identifier of the selected connectivity offer."
+                },
+                "quantity": {
+                  "type": "integer",
+                  "description": "Number of identical connections requested.",
+                  "minimum": 1
+                },
+                "config": {
+                  "type": "object",
+                  "description": "Technical configuration of the connectivity.",
+                  "properties": {
+                    "endpoints": {
+                      "type": "array",
+                      "description": "Endpoints participating in this connection.",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "role": {
+                            "type": "string",
+                            "enum": [
+                              "customer_edge",
+                              "cloud_edge",
+                              "data_center",
+                              "internet_exchange"
+                            ]
+                          },
+                          "location": {
+                            "type": "object",
+                            "description": "Location information for the endpoint.",
+                            "properties": {
+                              "type": {
+                                "type": "string",
+                                "enum": [
+                                  "on_prem",
+                                  "colo",
+                                  "cloud_region"
+                                ]
+                              },
+                              "colo_id": {
+                                "type": "string",
+                                "description": "Colocation facility ID (if type is colo)."
+                              },
+                              "cloud_provider": {
+                                "type": "string",
+                                "enum": [
+                                  "aws",
+                                  "azure",
+                                  "gcp",
+                                  "oracle_cloud",
+                                  "alibaba_cloud",
+                                  "ibm_cloud",
+                                  "other"
+                                ]
+                              },
+                              "cloud_region": {
+                                "type": "string",
+                                "description": "Cloud region code, e.g., us-east-1."
+                              },
+                              "address": {
+                                "type": "string",
+                                "description": "Street address or free-form location description."
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ]
+                          },
+                          "vlan": {
+                            "type": "integer",
+                            "description": "VLAN ID to use at this endpoint.",
+                            "minimum": 1,
+                            "maximum": 4094
+                          },
+                          "bandwidth_mbps": {
+                            "type": "integer",
+                            "description": "Requested bandwidth for this endpoint in Mbps."
+                          }
+                        },
+                        "required": [
+                          "role",
+                          "location"
+                        ]
+                      }
+                    },
+                    "redundancy": {
+                      "type": "object",
+                      "description": "Redundancy and high availability settings.",
+                      "properties": {
+                        "redundancy_mode": {
+                          "type": "string",
+                          "enum": [
+                            "single",
+                            "dual_active_active",
+                            "dual_active_standby"
+                          ]
+                        },
+                        "separate_failure_domains": {
+                          "type": "boolean",
+                          "description": "If true, paths must traverse distinct failure domains."
+                        }
+                      }
+                    },
+                    "routing": {
+                      "type": "object",
+                      "description": "Routing-related parameters.",
+                      "properties": {
+                        "routing_type": {
+                          "type": "string",
+                          "enum": [
+                            "static",
+                            "bgp"
+                          ]
+                        },
+                        "bgp": {
+                          "type": "object",
+                          "description": "BGP-specific configuration when routing_type is bgp.",
+                          "properties": {
+                            "customer_asn": {
+                              "type": "integer"
+                            },
+                            "provider_asn": {
+                              "type": "integer"
+                            },
+                            "md5_key": {
+                              "type": "string",
+                              "description": "Optional BGP MD5 password."
+                            },
+                            "advertised_prefixes": {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "description": "CIDR block to be advertised."
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "billing": {
+                      "type": "object",
+                      "description": "Billing preferences for this item.",
+                      "properties": {
+                        "billing_model": {
+                          "type": "string",
+                          "enum": [
+                            "committed",
+                            "payg"
+                          ]
+                        },
+                        "commit_bandwidth_mbps": {
+                          "type": "integer",
+                          "description": "Committed bandwidth in Mbps if billing_model is committed."
+                        },
+                        "term_months": {
+                          "type": "integer",
+                          "description": "Contract term in months."
+                        }
+                      }
+                    }
+                  }
+                },
+                "metadata": {
+                  "type": "object",
+                  "description": "Free-form key-value tags applied to this cart item.",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "action"
+              ]
+            }
+          },
+          "cart_level_discounts": {
+            "type": "array",
+            "description": "Optional discount codes or promotions applied at cart level.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "coupon",
+                    "contract",
+                    "volume"
+                  ]
+                }
+              },
+              "required": [
+                "code",
+                "type"
+              ]
+            }
+          }
+        },
+        "required": [
+          "customer_id",
+          "items"
+        ]
+      },
+      "returns": "The updated cart with calculated subtotals, applied discounts, and a cart_id."
+    },
+    {
+      "name": "check_connectivity_availability",
+      "description": "Check capacity and feasibility for the connectivity items in a cart or for a standalone configuration.",
+      "stage": "validate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "availability_request_id": {
+            "type": "string",
+            "description": "Existing availability request to re-check or poll; if omitted, a new request is created."
+          },
+          "customer_id": {
+            "type": "string",
+            "description": "Customer requesting the availability check."
+          },
+          "cart_id": {
+            "type": "string",
+            "description": "Cart to validate. If provided, items in the cart are used."
+          },
+          "inline_config": {
+            "type": "object",
+            "description": "Optional standalone configuration when not using a cart.",
+            "properties": {
+              "offers": {
+                "type": "array",
+                "description": "List of offers and desired quantities to validate.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "offer_id": {
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "bandwidth_mbps": {
+                      "type": "integer"
+                    },
+                    "endpoints": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "location_type": {
+                            "type": "string",
+                            "enum": [
+                              "colo",
+                              "cloud_region",
+                              "on_prem"
+                            ]
+                          },
+                          "location_id": {
+                            "type": "string",
+                            "description": "Location identifier such as colo ID or cloud region."
+                          }
+                        },
+                        "required": [
+                          "location_type",
+                          "location_id"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "offer_id",
+                    "quantity"
+                  ]
+                }
+              },
+              "timeframe": {
+                "type": "object",
+                "description": "Requested activation timeframe.",
+                "properties": {
+                  "earliest_start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "latest_start": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              }
+            }
+          },
+          "async_mode": {
+            "type": "boolean",
+            "description": "If true, returns an availability_request_id and performs checks asynchronously."
+          }
+        },
+        "required": [
+          "customer_id"
+        ]
+      },
+      "returns": "Immediate availability result or an availability_request_id for asynchronous polling, including per-item feasibility and capacity details."
+    },
+    {
+      "name": "get_availability_status",
+      "description": "Retrieve the status and results of a previously initiated connectivity availability request.",
+      "stage": "validate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "availability_request_id": {
+            "type": "string",
+            "description": "Identifier of the availability request to query."
+          },
+          "include_details": {
+            "type": "boolean",
+            "description": "If true, returns detailed per-path and per-endpoint capacity insights."
+          }
+        },
+        "required": [
+          "availability_request_id"
+        ]
+      },
+      "returns": "Status of the availability request (pending, completed, failed) and detailed availability results if completed."
+    },
+    {
+      "name": "generate_connectivity_quote",
+      "description": "Generate a detailed commercial quote for the items in a cart, including taxes, fees, and terms.",
+      "stage": "quote",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "cart_id": {
+            "type": "string",
+            "description": "Cart for which to generate a quote."
+          },
+          "customer_id": {
+            "type": "string",
+            "description": "Customer requesting the quote; used for tax calculation and eligibility."
+          },
+          "pricing_overrides": {
+            "type": "object",
+            "description": "Optional manual pricing inputs for privileged users.",
+            "properties": {
+              "allowed": {
+                "type": "boolean",
+                "description": "If true, indicates that overrides are permitted (e.g., by a sales engineer)."
+              },
+              "item_level_overrides": {
+                "type": "array",
+                "description": "Custom pricing per cart item.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "cart_item_id": {
+                      "type": "string"
+                    },
+                    "unit_price_override": {
+                      "type": "number",
+                      "description": "Overridden unit price (monthly) for this item."
+                    },
+                    "currency": {
+                      "type": "string",
+                      "description": "Currency code for the override, e.g., USD."
+                    },
+                    "reason": {
+                      "type": "string",
+                      "description": "Reason or reference ID for the override."
+                    }
+                  },
+                  "required": [
+                    "cart_item_id",
+                    "unit_price_override"
+                  ]
+                }
+              },
+              "discount_percent": {
+                "type": "number",
+                "description": "Global discount percentage applied at cart level."
+              }
+            }
+          },
+          "validity": {
+            "type": "object",
+            "description": "Quote validity and acceptance constraints.",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Expiration date/time of the quote."
+              },
+              "auto_expire": {
+                "type": "boolean",
+                "description": "If true, quote automatically becomes invalid after valid_until."
+              }
+            }
+          }
+        },
+        "required": [
+          "cart_id",
+          "customer_id"
+        ]
+      },
+      "returns": "A quote_id and a detailed pricing breakdown including recurring charges, one-time fees, taxes, and total amounts."
+    },
+    {
+      "name": "review_quote_and_prepare_checkout",
+      "description": "Retrieve a quote and prepare all information needed for checkout, including payment options and compliance checks.",
+      "stage": "quote",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "quote_id": {
+            "type": "string",
+            "description": "Quote to be reviewed prior to order submission."
+          },
+          "customer_id": {
+            "type": "string",
+            "description": "Customer performing checkout."
+          },
+          "include_payment_profiles": {
+            "type": "boolean",
+            "description": "If true, include a list of available payment profiles and terms."
+          },
+          "include_compliance_flags": {
+            "type": "boolean",
+            "description": "If true, run compliance checks and return any required approvals."
+          }
+        },
+        "required": [
+          "quote_id",
+          "customer_id"
+        ]
+      },
+      "returns": "Quote details, summary of cart items, available payment profiles, compliance flags, and any checkout prerequisites."
+    },
+    {
+      "name": "submit_connectivity_order",
+      "description": "Submit an order based on an approved quote and checkout data, including payment and contract terms.",
+      "stage": "checkout",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "quote_id": {
+            "type": "string",
+            "description": "Quote being converted to an order."
+          },
+          "customer_id": {
+            "type": "string",
+            "description": "Customer placing the order."
+          },
+          "payment": {
+            "type": "object",
+            "description": "Payment method and billing details for the order.",
+            "properties": {
+              "payment_profile_id": {
+                "type": "string",
+                "description": "Existing saved payment profile to use."
+              },
+              "method": {
+                "type": "string",
+                "description": "Payment method type when not using a profile.",
+                "enum": [
+                  "invoice",
+                  "credit_card",
+                  "direct_debit",
+                  "marketplace_billing"
+                ]
+              },
+              "one_time_token": {
+                "type": "string",
+                "description": "Optional token for ephemeral payment authorization."
+              },
+              "billing_contact": {
+                "type": "object",
+                "description": "Billing contact details.",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "phone": {
+                    "type": "string"
+                  },
+                  "address": {
+                    "type": "object",
+                    "properties": {
+                      "line1": {
+                        "type": "string"
+                      },
+                      "line2": {
+                        "type": "string"
+                      },
+                      "city": {
+                        "type": "string"
+                      },
+                      "state": {
+                        "type": "string"
+                      },
+                      "postal_code": {
+                        "type": "string"
+                      },
+                      "country": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "contract": {
+            "type": "object",
+            "description": "Contractual and legal information for the order.",
+            "properties": {
+              "master_agreement_id": {
+                "type": "string",
+                "description": "Reference to an existing master service agreement."
+              },
+              "accept_terms": {
+                "type": "boolean",
+                "description": "Indicates that customer has accepted terms and conditions."
+              },
+              "signature": {
+                "type": "object",
+                "description": "Electronic signature metadata.",
+                "properties": {
+                  "signed_by": {
+                    "type": "string"
+                  },
+                  "signed_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "signature_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "activation_preferences": {
+            "type": "object",
+            "description": "Activation and scheduling preferences for provisioning.",
+            "properties": {
+              "activation_mode": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "scheduled",
+                  "manual_trigger"
+                ]
+              },
+              "requested_start": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Requested activation time if activation_mode is scheduled."
+              },
+              "time_zone": {
+                "type": "string",
+                "description": "Time zone for requested_start, e.g., UTC or America/New_York."
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Free-form order metadata such as internal reference numbers.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "quote_id",
+          "customer_id"
+        ]
+      },
+      "returns": "An order_id, initial order status, and summary of provisioning steps to be executed."
+    },
+    {
+      "name": "get_order_status",
+      "description": "Retrieve the status and detailed timeline of a connectivity order, including provisioning tasks.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "description": "Order to query."
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional information sections to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "items",
+                "provisioning_tasks",
+                "billing_summary",
+                "audit_log"
+              ]
+            }
+          }
+        },
+        "required": [
+          "order_id"
+        ]
+      },
+      "returns": "Current order status, per-item states, provisioning task states, and optionally billing summary and audit log."
+    },
+    {
+      "name": "retry_or_rollback_order_provisioning",
+      "description": "Handle provisioning failures by retrying failed steps or rolling back partially provisioned connectivity.",
+      "stage": "recover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "description": "Order for which provisioning errored or needs recovery."
+          },
+          "strategy": {
+            "type": "string",
+            "description": "Recovery strategy to apply.",
+            "enum": [
+              "retry_failed_steps",
+              "rollback_all",
+              "rollback_item",
+              "force_complete"
+            ]
+          },
+          "target_items": {
+            "type": "array",
+            "description": "Specific order item IDs affected by the recovery action, when applicable.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable justification for the recovery action."
+          },
+          "options": {
+            "type": "object",
+            "description": "Extra parameters depending on the strategy.",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "description": "Maximum number of retry attempts for failed steps."
+              },
+              "skip_validation": {
+                "type": "boolean",
+                "description": "If true, bypass some pre-checks when retrying or rolling back."
+              },
+              "notify_customer": {
+                "type": "boolean",
+                "description": "If true, send customer notifications about the recovery action."
+              }
+            }
+          }
+        },
+        "required": [
+          "order_id",
+          "strategy"
+        ]
+      },
+      "returns": "Recovery job status, including which items or steps were scheduled for retry or rollback."
+    },
+    {
+      "name": "list_connections",
+      "description": "List and filter provisioned connectivity instances (connections) for a customer.",
+      "stage": "operate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "description": "Customer whose connections will be listed."
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filter options to narrow down connections.",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending_activation",
+                    "active",
+                    "suspended",
+                    "terminated",
+                    "failed"
+                  ]
+                }
+              },
+              "connection_type": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "l2_vpn",
+                    "l3_vpn",
+                    "internet_exchange",
+                    "cloud_onramp",
+                    "direct_connect",
+                    "partner_interconnect"
+                  ]
+                }
+              },
+              "provider_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "order_id": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer"
+          },
+          "page_size": {
+            "type": "integer"
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "status",
+              "bandwidth",
+              "provider"
+            ]
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ]
+          }
+        },
+        "required": [
+          "customer_id"
+        ]
+      },
+      "returns": "A paginated list of connections with high-level attributes, statuses, and identifiers."
+    },
+    {
+      "name": "modify_connection",
+      "description": "Modify an existing connectivity instance, such as bandwidth change, endpoint updates, or billing plan change.",
+      "stage": "operate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "description": "Connection to be modified."
+          },
+          "customer_id": {
+            "type": "string",
+            "description": "Owner of the connection."
+          },
+          "modifications": {
+            "type": "object",
+            "description": "Requested changes for this connection.",
+            "properties": {
+              "bandwidth_change": {
+                "type": "object",
+                "description": "Modify the committed or maximum bandwidth.",
+                "properties": {
+                  "new_bandwidth_mbps": {
+                    "type": "integer"
+                  },
+                  "change_type": {
+                    "type": "string",
+                    "enum": [
+                      "upgrade",
+                      "downgrade"
+                    ]
+                  },
+                  "effective_date": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "endpoint_changes": {
+                "type": "array",
+                "description": "List of endpoint-specific modifications.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "endpoint_id": {
+                      "type": "string"
+                    },
+                    "action": {
+                      "type": "string",
+                      "enum": [
+                        "add",
+                        "update",
+                        "remove"
+                      ]
+                    },
+                    "new_config": {
+                      "type": "object",
+                      "description": "Updated endpoint config for add/update actions.",
+                      "properties": {
+                        "location": {
+                          "type": "object",
+                          "properties": {
+                            "type": {
+                              "type": "string",
+                              "enum": [
+                                "on_prem",
+                                "colo",
+                                "cloud_region"
+                              ]
+                            },
+                            "colo_id": {
+                              "type": "string"
+                            },
+                            "cloud_provider": {
+                              "type": "string"
+                            },
+                            "cloud_region": {
+                              "type": "string"
+                            },
+                            "address": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "vlan": {
+                          "type": "integer",
+                          "minimum": 1,
+                          "maximum": 4094
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "endpoint_id",
+                    "action"
+                  ]
+                }
+              },
+              "routing_changes": {
+                "type": "object",
+                "description": "Modify routing settings, including BGP parameters.",
+                "properties": {
+                  "routing_type": {
+                    "type": "string",
+                    "enum": [
+                      "static",
+                      "bgp"
+                    ]
+                  },
+                  "bgp": {
+                    "type": "object",
+                    "properties": {
+                      "customer_asn": {
+                        "type": "integer"
+                      },
+                      "md5_key": {
+                        "type": "string"
+                      },
+                      "advertised_prefixes": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "billing_plan_change": {
+                "type": "object",
+                "description": "Modify billing model or term.",
+                "properties": {
+                  "new_billing_model": {
+                    "type": "string",
+                    "enum": [
+                      "committed",
+                      "payg"
+                    ]
+                  },
+                  "new_commit_bandwidth_mbps": {
+                    "type": "integer"
+                  },
+                  "new_term_months": {
+                    "type": "integer"
+                  },
+                  "proration_mode": {
+                    "type": "string",
+                    "enum": [
+                      "immediate_prorate",
+                      "next_cycle",
+                      "manual_adjustment"
+                    ]
+                  }
+                }
+              }
+            }
+          },
+          "change_control": {
+            "type": "object",
+            "description": "Change control and maintenance window settings.",
+            "properties": {
+              "change_ticket_id": {
+                "type": "string"
+              },
+              "maintenance_window": {
+                "type": "object",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "time_zone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "requires_approval": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "required": [
+          "connection_id",
+          "customer_id",
+          "modifications"
+        ]
+      },
+      "returns": "A modification request identifier, its initial status, and expected impact/activation timings."
+    },
+    {
+      "name": "cancel_or_suspend_connection",
+      "description": "Cancel a pending connection or suspend/terminate an active connectivity instance.",
+      "stage": "operate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "description": "Connection to cancel, suspend, or terminate."
+          },
+          "customer_id": {
+            "type": "string",
+            "description": "Owner of the connection."
+          },
+          "action": {
+            "type": "string",
+            "description": "Type of lifecycle action to perform.",
+            "enum": [
+              "cancel_pending",
+              "suspend",
+              "resume",
+              "terminate"
+            ]
+          },
+          "effective_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the action should take effect; omitted for immediate actions."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason or justification for the lifecycle change."
+          },
+          "billing_behavior": {
+            "type": "string",
+            "description": "How billing should be handled in case of terminate/cancel.",
+            "enum": [
+              "immediate",
+              "end_of_term",
+              "end_of_billing_cycle"
+            ]
+          },
+          "notify_contacts": {
+            "type": "array",
+            "description": "List of contact emails to notify about this action.",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "connection_id",
+          "customer_id",
+          "action"
+        ]
+      },
+      "returns": "Confirmation of the requested lifecycle action with resulting or scheduled connection status."
+    },
+    {
+      "name": "adjust_order_billing_after_provisioning",
+      "description": "Perform post-provisioning billing adjustments for an order, such as credits, surcharges, or dispute resolutions.",
+      "stage": "post_checkout",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "description": "Order requiring billing adjustment."
+          },
+          "customer_id": {
+            "type": "string",
+            "description": "Customer associated with the order."
+          },
+          "adjustments": {
+            "type": "array",
+            "description": "List of billing adjustments to apply.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "credit",
+                    "debit",
+                    "refund",
+                    "chargeback_hold"
+                  ]
+                },
+                "scope": {
+                  "type": "string",
+                  "description": "Scope of the adjustment.",
+                  "enum": [
+                    "order_level",
+                    "item_level",
+                    "connection_level"
+                  ]
+                },
+                "order_item_id": {
+                  "type": "string",
+                  "description": "Order item ID when scope is item_level."
+                },
+                "connection_id": {
+                  "type": "string",
+                  "description": "Connection ID when scope is connection_level."
+                },
+                "amount": {
+                  "type": "number",
+                  "description": "Adjustment amount (positive numeric)."
+                },
+                "currency": {
+                  "type": "string",
+                  "description": "Currency code, e.g., USD."
+                },
+                "reason_code": {
+                  "type": "string",
+                  "description": "Machine-readable reason, e.g., LATENCY_SLA_BREACH."
+                },
+                "description": {
+                  "type": "string",
+                  "description": "Human-readable explanation for the adjustment."
+                }
+              },
+              "required": [
+                "type",
+                "scope",
+                "amount"
+              ]
+            }
+          },
+          "apply_immediately": {
+            "type": "boolean",
+            "description": "If true, adjustments are applied immediately rather than on next invoice."
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Additional metadata (e.g., dispute ticket ID, analyst ID).",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "order_id",
+          "customer_id",
+          "adjustments"
+        ]
+      },
+      "returns": "Summary of posted billing adjustments, references to affected invoices, and any pending approvals."
+    },
+    {
+      "name": "bulk_import_connectivity_orders",
+      "description": "Bulk-import multiple connectivity_orders from an upstream source with validation and idempotency keys.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "import_source": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "json",
+                  "parquet",
+                  "kafka",
+                  "s3",
+                  "api"
+                ]
+              },
+              "location": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "format_options": {
+                "type": "object",
+                "properties": {
+                  "delimiter": {
+                    "type": "string"
+                  },
+                  "encoding": {
+                    "type": "string"
+                  },
+                  "header_row": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "required": [
+              "type",
+              "location"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "description": "Field mapping from source to canonical schema",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_id": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "batch_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "default": 500
+          },
+          "on_error": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "abort",
+              "quarantine"
+            ],
+            "default": "quarantine"
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "import_source",
+          "actor"
+        ]
+      },
+      "returns": "A bulk-import job descriptor with counts of accepted, rejected, and quarantined connectivity_orders, plus a job_id for follow-up."
+    },
+    {
+      "name": "bulk_update_connectivity_orders",
+      "description": "Apply a partial update to a batch of connectivity_orders matched by filter or id list.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/order_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "patch": {
+            "type": "object",
+            "description": "Fields to patch on each matched item",
+            "properties": {
+              "set": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "unset": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "add_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "remove_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "preconditions": {
+            "type": "object",
+            "description": "Optional optimistic-concurrency preconditions",
+            "properties": {
+              "if_match_version": {
+                "type": "string"
+              },
+              "expected_status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "max_items": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1000
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "patch",
+          "actor"
+        ]
+      },
+      "returns": "Summary of matched, updated, and skipped connectivity_orders with per-item error details."
+    },
+    {
+      "name": "bulk_archive_connectivity_orders",
+      "description": "Archive (soft-delete) a batch of connectivity_orders with retention metadata and audit reasons.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/order_id"
+            },
+            "minItems": 1
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retain_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "legal_hold": {
+            "type": "boolean",
+            "default": false
+          },
+          "tombstone_metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "ids",
+          "reason",
+          "actor"
+        ]
+      },
+      "returns": "Per-id archive results with new lifecycle state."
+    },
+    {
+      "name": "bulk_export_connectivity_orders",
+      "description": "Export a filtered set of connectivity_orders to a downstream destination (S3, GCS, blob, SFTP).",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Projection; empty means all fields"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "csv",
+              "parquet",
+              "ndjson"
+            ],
+            "default": "json"
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp",
+                  "http"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "compression": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "gzip",
+                  "zstd"
+                ],
+                "default": "none"
+              }
+            },
+            "required": [
+              "type",
+              "uri"
+            ]
+          },
+          "chunk_size_mb": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1024,
+            "default": 64
+          },
+          "include_audit_columns": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "sse-s3",
+                  "sse-kms",
+                  "client-side"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "destination",
+          "actor"
+        ]
+      },
+      "returns": "Export job handle including job_id, expected object URIs, row count, and signed download URLs when applicable."
+    },
+    {
+      "name": "search_connectivity_orders_advanced",
+      "description": "Advanced faceted search across connectivity_orders with full-text, structured filters, aggregations, and sort.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Full-text query string with Lucene-like syntax"
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "contains",
+                    "starts_with",
+                    "exists"
+                  ]
+                },
+                "value": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "array",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "aggregations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "terms",
+                    "histogram",
+                    "date_histogram",
+                    "stats",
+                    "cardinality"
+                  ]
+                },
+                "field": {
+                  "type": "string"
+                },
+                "interval": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "field"
+              ]
+            }
+          },
+          "highlight_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": []
+      },
+      "returns": "Search response with connectivity_orders hits, total count, aggregation buckets, and a next-cursor."
+    },
+    {
+      "name": "create_order_subscription",
+      "description": "Create a subscription that fires webhooks or notifications on order lifecycle events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "created",
+                "updated",
+                "status_changed",
+                "deleted",
+                "escalated",
+                "resolved",
+                "custom"
+              ]
+            },
+            "minItems": 1
+          },
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "target": {
+            "type": "object",
+            "description": "Notification target descriptor",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "email",
+                  "sms",
+                  "webhook",
+                  "push",
+                  "slack",
+                  "teams",
+                  "pagerduty"
+                ]
+              },
+              "address": {
+                "type": "string"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "secret_ref": {
+                "type": "string",
+                "description": "Reference to a stored secret"
+              }
+            },
+            "required": [
+              "type",
+              "address"
+            ]
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "retry_policy": {
+                "type": "object",
+                "properties": {
+                  "max_attempts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  },
+                  "backoff": {
+                    "type": "string",
+                    "enum": [
+                      "linear",
+                      "exponential",
+                      "fixed"
+                    ],
+                    "default": "exponential"
+                  },
+                  "initial_delay_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  }
+                }
+              },
+              "rate_limit_per_minute": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "batch_size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            }
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "events",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "The created subscription including subscription_id, active state, and last_delivery info (initially null)."
+    },
+    {
+      "name": "list_order_subscriptions",
+      "description": "List existing order subscriptions with optional filters and pagination.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "target_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of subscription objects including delivery health stats."
+    },
+    {
+      "name": "deactivate_order_subscription",
+      "description": "Deactivate or delete a order subscription and optionally flush pending deliveries.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "delete"
+            ],
+            "default": "pause"
+          },
+          "flush_pending": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "subscription_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated subscription state and the number of pending deliveries flushed or kept."
+    },
+    {
+      "name": "get_order_audit_log",
+      "description": "Return the audit/change log for a single order with field-level diffs and actor info.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "include_field_diff": {
+            "type": "boolean",
+            "default": true
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Chronological list of audit events with before/after diffs, actor, and source IP/system."
+    },
+    {
+      "name": "search_audit_events",
+      "description": "Search audit events across connectivity_orders for compliance and forensic review.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "actor_user_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "object_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/order_id"
+                }
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              },
+              "source_systems": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated audit-event hits with cross-entity references."
+    },
+    {
+      "name": "schedule_order_job",
+      "description": "Create a recurring schedule that triggers a named operation on a target set of connectivity_orders.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "description": "Named operation to invoke (e.g., refresh, recompute, export, reconcile)"
+          },
+          "target_selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/order_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Parameters passed to each invocation"
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Schedule definition",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "once",
+                  "cron",
+                  "interval",
+                  "calendar"
+                ]
+              },
+              "cron": {
+                "type": "string",
+                "description": "Cron expression (UTC by default)"
+              },
+              "interval_seconds": {
+                "type": "integer",
+                "minimum": 30
+              },
+              "start_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "max_runs": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "jitter_seconds": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "concurrency_policy": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "forbid",
+              "replace"
+            ],
+            "default": "forbid"
+          },
+          "notify_on": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure",
+                "skipped"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "operation",
+          "schedule",
+          "actor"
+        ]
+      },
+      "returns": "The created scheduled-job descriptor with job_id, next_run_at, and current status."
+    },
+    {
+      "name": "list_order_jobs",
+      "description": "List scheduled or in-flight jobs related to connectivity_orders with status filtering and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "skipped"
+                  ]
+                }
+              },
+              "operation_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "include_runs": {
+            "type": "boolean",
+            "default": false
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of order jobs and their last run summaries."
+    },
+    {
+      "name": "cancel_order_job",
+      "description": "Cancel a scheduled or in-flight order job, optionally interrupting running steps.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "job_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated job status with cancellation timestamp and any side effects."
+    },
+    {
+      "name": "simulate_order_change",
+      "description": "Simulate a proposed change against a order (or batch) without committing; returns expected diffs and warnings.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "proposed_change": {
+            "type": "object",
+            "description": "Polymorphic change object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "patch",
+                  "replace",
+                  "transition",
+                  "policy_apply"
+                ]
+              },
+              "patch": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "replace": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "transition_to": {
+                "type": "string"
+              },
+              "policy_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "evaluation_options": {
+            "type": "object",
+            "properties": {
+              "evaluate_rules": {
+                "type": "boolean",
+                "default": true
+              },
+              "evaluate_dependencies": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_cost_impact": {
+                "type": "boolean",
+                "default": false
+              },
+              "include_sla_impact": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "proposed_change",
+          "actor"
+        ]
+      },
+      "returns": "Simulation result with predicted diffs, rule violations, cost/SLA impact, and a confidence score."
+    },
+    {
+      "name": "request_order_approval",
+      "description": "Open an approval request for a sensitive order change requiring reviewer sign-off.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "change_summary": {
+            "type": "string"
+          },
+          "change_payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "user_id": {
+                  "type": "string"
+                },
+                "role_required": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "user_id"
+              ]
+            },
+            "minItems": 1
+          },
+          "quorum": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "escalation_policy_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "approvers",
+          "actor"
+        ]
+      },
+      "returns": "Created approval request with approval_request_id, current state, and notification targets."
+    },
+    {
+      "name": "submit_order_approval_decision",
+      "description": "Submit an approve, reject, or request-changes decision against a order approval request.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_request_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "request_changes"
+            ]
+          },
+          "comment": {
+            "type": "string"
+          },
+          "signed_evidence": {
+            "type": "object",
+            "properties": {
+              "signature": {
+                "type": "string"
+              },
+              "signed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "totp",
+                  "webauthn",
+                  "sso",
+                  "manual"
+                ]
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "approval_request_id",
+          "decision",
+          "actor"
+        ]
+      },
+      "returns": "Updated approval request state including quorum progress and final decision (if reached)."
+    },
+    {
+      "name": "add_order_comment",
+      "description": "Append a comment or annotation to a order, optionally attaching files or mentioning users.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "body": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "internal",
+              "tenant",
+              "public"
+            ],
+            "default": "internal"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_name": {
+                  "type": "string"
+                },
+                "content_type": {
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "type": "integer"
+                },
+                "uri": {
+                  "type": "string"
+                },
+                "checksum_sha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_name",
+                "uri"
+              ]
+            }
+          },
+          "parent_comment_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "body",
+          "actor"
+        ]
+      },
+      "returns": "The created comment object with comment_id, timestamps, and visibility-resolved permissions."
+    },
+    {
+      "name": "list_order_comments",
+      "description": "List comments and annotations attached to a order, with optional thread expansion.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "include_threads": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_attachments": {
+            "type": "boolean",
+            "default": true
+          },
+          "visibility_in": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "internal",
+                "tenant",
+                "public"
+              ]
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Paginated comment list with thread tree and attachment metadata."
+    },
+    {
+      "name": "snapshot_order",
+      "description": "Create a point-in-time immutable snapshot of a order for forensic, rollback, or compliance use.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "label": {
+            "type": "string"
+          },
+          "include_related": {
+            "type": "array",
+            "description": "Optional related-entity inclusion list",
+            "items": {
+              "type": "string"
+            }
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "kms",
+                  "client"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "retention": {
+            "type": "object",
+            "properties": {
+              "policy": {
+                "type": "string",
+                "enum": [
+                  "short",
+                  "standard",
+                  "long",
+                  "indefinite"
+                ]
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "actor"
+        ]
+      },
+      "returns": "Snapshot descriptor with snapshot_id, checksum, byte size, and retention expiry."
+    },
+    {
+      "name": "restore_order_snapshot",
+      "description": "Restore a order from a previously created snapshot, optionally as a new copy.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "overwrite",
+                  "new_copy",
+                  "merge"
+                ]
+              },
+              "target_id": {
+                "$ref": "#/shared_entities/order_id"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "fail",
+              "skip_existing",
+              "overwrite"
+            ],
+            "default": "fail"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "Restore job descriptor including resulting id and any per-field conflicts that were resolved."
+    },
+    {
+      "name": "get_order_metrics",
+      "description": "Compute KPI metrics over connectivity_orders (counts, MTTR, SLA compliance, error rates) for a time window.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "count",
+                "open_count",
+                "closed_count",
+                "mttr_seconds",
+                "mttd_seconds",
+                "sla_compliance_pct",
+                "error_rate",
+                "p50_latency_ms",
+                "p95_latency_ms",
+                "p99_latency_ms",
+                "throughput_per_minute",
+                "backlog_age_seconds"
+              ]
+            },
+            "minItems": 1
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "1m",
+              "5m",
+              "15m",
+              "1h",
+              "1d",
+              "1w"
+            ],
+            "default": "1h"
+          }
+        },
+        "required": [
+          "metrics"
+        ]
+      },
+      "returns": "Time-bucketed metric series and aggregate KPIs for the matched connectivity_orders."
+    },
+    {
+      "name": "build_order_dashboard",
+      "description": "Persist a named dashboard composed of widgets (charts, tables, single-stat) over connectivity_orders data.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "widgets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "line",
+                    "bar",
+                    "pie",
+                    "table",
+                    "single_stat",
+                    "heatmap"
+                  ]
+                },
+                "query": {
+                  "type": "object",
+                  "properties": {
+                    "metrics": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "filter": {
+                      "type": "object",
+                      "description": "Filter constraints",
+                      "properties": {
+                        "text": {
+                          "type": "string",
+                          "description": "Free-text search across indexed fields"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "labels": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "Key/value labels to match"
+                        },
+                        "created_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "updated_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "owner_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "group_by": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "time_range": {
+                      "type": "object",
+                      "description": "Time window for filtering or scoping the operation",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "end": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "timezone": {
+                          "type": "string",
+                          "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "metrics"
+                  ]
+                },
+                "position": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "integer"
+                    },
+                    "y": {
+                      "type": "integer"
+                    },
+                    "w": {
+                      "type": "integer"
+                    },
+                    "h": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "title",
+                "type",
+                "query"
+              ]
+            },
+            "minItems": 1
+          },
+          "refresh_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "default": 60
+          },
+          "shared_with": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "widgets",
+          "actor"
+        ]
+      },
+      "returns": "Created dashboard descriptor with dashboard_id, shareable URL, and computed first-render preview."
+    },
+    {
+      "name": "upsert_order_policy",
+      "description": "Create or update a policy/rule used to govern order behavior, validation, or routing.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "expression": {
+                  "type": "string",
+                  "description": "CEL or JEXL expression"
+                },
+                "action": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "allow",
+                        "deny",
+                        "route",
+                        "transform",
+                        "notify",
+                        "tag"
+                      ]
+                    },
+                    "params": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "expression",
+                "action"
+              ]
+            },
+            "minItems": 1
+          },
+          "version_strategy": {
+            "type": "string",
+            "enum": [
+              "bump_minor",
+              "bump_major",
+              "replace"
+            ],
+            "default": "bump_minor"
+          },
+          "effective_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "rules",
+          "actor"
+        ]
+      },
+      "returns": "Persisted policy with policy_id, version, rule count, and validation warnings (if any)."
+    },
+    {
+      "name": "list_order_policies",
+      "description": "List policies governing connectivity_orders with version, scope, and lifecycle filters.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "scope_label": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          },
+          "include_rule_summary": {
+            "type": "boolean",
+            "default": true
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated policy entries with rule counts and last evaluation metrics."
+    },
+    {
+      "name": "link_order_dependencies",
+      "description": "Establish or update dependency links between a order and related artefacts.",
+      "stage": "depends",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_type": {
+                  "type": "string"
+                },
+                "target_id": {
+                  "type": "string"
+                },
+                "relation": {
+                  "type": "string",
+                  "enum": [
+                    "depends_on",
+                    "blocks",
+                    "related_to",
+                    "parent_of",
+                    "child_of"
+                  ]
+                },
+                "weight": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "default": 1.0
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "target_type",
+                "target_id",
+                "relation"
+              ]
+            },
+            "minItems": 1
+          },
+          "replace_existing": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "dependencies",
+          "actor"
+        ]
+      },
+      "returns": "Updated dependency graph summary with added/removed/updated edges."
+    }
+  ]
+}

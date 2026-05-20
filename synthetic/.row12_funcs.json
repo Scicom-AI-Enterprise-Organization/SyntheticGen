@@ -1,0 +1,475 @@
+{
+  "assess_subscriber_compliance_profile": {
+    "name": "assess_subscriber_compliance_profile",
+    "description": "Assess subscriber compliance and risk profile before any charging operation.",
+    "stage": "precheck",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "subscriber_id": {
+          "$ref": "#/shared_entities/subscriber_id"
+        },
+        "regulatory_region": {
+          "$ref": "#/shared_entities/regulatory_region"
+        },
+        "request_context": {
+          "type": "object",
+          "description": "Context of the requested operation triggering the assessment",
+          "properties": {
+            "operation_type": {
+              "type": "string",
+              "enum": [
+                "initial_activation",
+                "topup",
+                "usage_charging",
+                "bundle_purchase",
+                "refund",
+                "dispute"
+              ]
+            },
+            "channel": {
+              "type": "string",
+              "enum": [
+                "ussd",
+                "ivr",
+                "web",
+                "app",
+                "api",
+                "retail"
+              ]
+            },
+            "initiator": {
+              "type": "string",
+              "enum": [
+                "subscriber",
+                "operator",
+                "system",
+                "partner"
+              ]
+            },
+            "ip_address": {
+              "type": "string",
+              "format": "ipv4"
+            },
+            "user_agent": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "operation_type",
+            "channel",
+            "initiator"
+          ]
+        },
+        "include_history": {
+          "type": "boolean",
+          "description": "Whether to include summarized historical compliance events"
+        }
+      },
+      "required": [
+        "subscriber_id",
+        "regulatory_region",
+        "request_context"
+      ]
+    },
+    "returns": "Subscriber compliance profile including risk score, KYC status, active restrictions, and flags that must be honored by downstream charging functions."
+  },
+  "check_prepaid_balance_and_limits": {
+    "name": "check_prepaid_balance_and_limits",
+    "description": "Check prepaid balance, thresholds, and regulatory spending limits for a subscriber.",
+    "stage": "precheck",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "subscriber_id": {
+          "$ref": "#/shared_entities/subscriber_id"
+        },
+        "regulatory_region": {
+          "$ref": "#/shared_entities/regulatory_region"
+        },
+        "check_scope": {
+          "type": "object",
+          "properties": {
+            "include_wallets": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "main",
+                  "data",
+                  "promo",
+                  "roaming",
+                  "content"
+                ]
+              }
+            },
+            "include_regulatory_limits": {
+              "type": "boolean",
+              "default": true
+            },
+            "time_window": {
+              "type": "object",
+              "description": "Optional period to evaluate cumulative usage against regulatory caps",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "to": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          }
+        },
+        "requested_charge": {
+          "type": "object",
+          "description": "Hypothetical charge to test against balances and limits",
+          "properties": {
+            "expected_debit": {
+              "$ref": "#/shared_entities/money"
+            },
+            "wallet": {
+              "type": "string",
+              "enum": [
+                "main",
+                "data",
+                "promo",
+                "roaming",
+                "content"
+              ]
+            },
+            "event_type": {
+              "type": "string",
+              "enum": [
+                "voice",
+                "sms",
+                "data",
+                "bundle_activation",
+                "roaming_data",
+                "roaming_voice",
+                "content_purchase"
+              ]
+            }
+          },
+          "required": [
+            "expected_debit",
+            "wallet"
+          ]
+        }
+      },
+      "required": [
+        "subscriber_id",
+        "regulatory_region",
+        "requested_charge"
+      ]
+    },
+    "returns": "Current balances per wallet, regulatory limit usage, and a decision whether the requested charge is allowed, requires warning, or must be blocked."
+  },
+  "evaluate_charging_regulatory_rules": {
+    "name": "evaluate_charging_regulatory_rules",
+    "description": "Evaluate applicable regulatory rules for a given usage event or top-up before charging.",
+    "stage": "rule_evaluation",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "subscriber_id": {
+          "$ref": "#/shared_entities/subscriber_id"
+        },
+        "regulatory_region": {
+          "$ref": "#/shared_entities/regulatory_region"
+        },
+        "usage_event": {
+          "$ref": "#/shared_entities/usage_event"
+        },
+        "tariff_plan_id": {
+          "type": "string",
+          "description": "Current tariff or prepaid bundle plan ID"
+        },
+        "prior_assessment": {
+          "type": "object",
+          "description": "Optional results from prior compliance profile assessment",
+          "properties": {
+            "risk_score": {
+              "type": "number"
+            },
+            "kyc_status": {
+              "type": "string",
+              "enum": [
+                "unknown",
+                "partial",
+                "verified",
+                "blocked"
+              ]
+            },
+            "active_restrictions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "evaluation_options": {
+          "type": "object",
+          "properties": {
+            "include_tariff_overrides": {
+              "type": "boolean",
+              "default": true
+            },
+            "include_roaming_caps": {
+              "type": "boolean",
+              "default": true
+            },
+            "include_zero_rate_rules": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        }
+      },
+      "required": [
+        "subscriber_id",
+        "regulatory_region",
+        "usage_event",
+        "tariff_plan_id"
+      ]
+    },
+    "returns": "Set of evaluated rules including price caps, zero-rating, restricted destinations, and an overall policy decision (allow, allow_with_warning, block)."
+  },
+  "apply_compliant_prepaid_charge": {
+    "name": "apply_compliant_prepaid_charge",
+    "description": "Apply a prepaid debit in a compliant manner for an active charging session.",
+    "stage": "charge",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "$ref": "#/shared_entities/session_id"
+        },
+        "charge_breakdown": {
+          "type": "object",
+          "description": "Rated amounts for the event before final caps and adjustments",
+          "properties": {
+            "rated_amount": {
+              "$ref": "#/shared_entities/money"
+            },
+            "tax_components": {
+              "type": "array",
+              "description": "List of tax components applied to the charge",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "tax_type": {
+                    "type": "string",
+                    "enum": [
+                      "vat",
+                      "gst",
+                      "service_tax",
+                      "other"
+                    ]
+                  },
+                  "amount": {
+                    "$ref": "#/shared_entities/money"
+                  }
+                },
+                "required": [
+                  "tax_type",
+                  "amount"
+                ]
+              }
+            },
+            "wallet_allocation": {
+              "type": "array",
+              "description": "How the charge will be distributed across wallets",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "wallet": {
+                    "type": "string",
+                    "enum": [
+                      "main",
+                      "data",
+                      "promo",
+                      "roaming",
+                      "content"
+                    ]
+                  },
+                  "debit": {
+                    "$ref": "#/shared_entities/money"
+                  }
+                },
+                "required": [
+                  "wallet",
+                  "debit"
+                ]
+              }
+            }
+          },
+          "required": [
+            "rated_amount"
+          ]
+        },
+        "compliance_flags": {
+          "type": "object",
+          "description": "Compliance decisions that must be enforced when debiting",
+          "properties": {
+            "block_reason": {
+              "type": "string"
+            },
+            "require_consent": {
+              "type": "boolean"
+            },
+            "requires_manual_review": {
+              "type": "boolean"
+            }
+          }
+        },
+        "subscriber_consent": {
+          "type": "object",
+          "description": "Optional subscriber consent evidence if required by compliance_flags",
+          "properties": {
+            "consent_obtained": {
+              "type": "boolean"
+            },
+            "consent_channel": {
+              "type": "string",
+              "enum": [
+                "sms",
+                "ivr",
+                "web",
+                "app",
+                "recorded_call"
+              ]
+            },
+            "consent_timestamp": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "consent_reference": {
+              "type": "string",
+              "description": "External reference ID for consent record"
+            }
+          }
+        }
+      },
+      "required": [
+        "session_id",
+        "charge_breakdown"
+      ]
+    },
+    "returns": "Result of the debit operation including charge_id, remaining balances, and compliance status (success, blocked, pending_review)."
+  },
+  "log_prepaid_compliance_event": {
+    "name": "log_prepaid_compliance_event",
+    "description": "Log a detailed compliance event into the audit trail for the charging operation.",
+    "stage": "audit",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "session_id": {
+          "$ref": "#/shared_entities/session_id"
+        },
+        "subscriber_id": {
+          "$ref": "#/shared_entities/subscriber_id"
+        },
+        "event_category": {
+          "type": "string",
+          "enum": [
+            "precheck",
+            "rule_evaluation",
+            "charging",
+            "limit_breach",
+            "manual_override",
+            "refund",
+            "dispute",
+            "system_error"
+          ]
+        },
+        "event_details": {
+          "type": "object",
+          "description": "Structured details of the compliance event",
+          "properties": {
+            "decision": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "allow_with_warning",
+                "block",
+                "escalate",
+                "rollback"
+              ]
+            },
+            "reason_codes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "regulatory_references": {
+              "type": "array",
+              "description": "List of regulatory clauses or documents that influenced this decision",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "framework": {
+                    "type": "string",
+                    "description": "e.g., 'GDPR', 'Local-Consumer-Act'"
+                  },
+                  "clause": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "framework",
+                  "clause"
+                ]
+              }
+            },
+            "operator_action": {
+              "type": "object",
+              "description": "If an operator manually intervened",
+              "properties": {
+                "operator_id": {
+                  "type": "string"
+                },
+                "action_type": {
+                  "type": "string",
+                  "enum": [
+                    "override_allow",
+                    "override_block",
+                    "manual_refund",
+                    "note_added"
+                  ]
+                },
+                "note": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "required": [
+            "decision"
+          ]
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "idempotency_key": {
+          "type": "string",
+          "description": "Key to avoid duplicate logs for the same action"
+        }
+      },
+      "required": [
+        "session_id",
+        "subscriber_id",
+        "event_category",
+        "event_details",
+        "timestamp"
+      ]
+    },
+    "returns": "Audit log entry identifier and confirmation of successful persistence for regulatory review."
+  }
+}

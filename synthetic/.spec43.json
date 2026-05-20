@@ -1,0 +1,1131 @@
+{
+  "workflow_name": "sase_incident_management",
+  "description": "End-to-end incident management workflow for a SASE (Secure Access Service Edge) connectivity service, including detection, triage, mitigation, rollback, and closure.",
+  "domain": "taas_connectivity/sase_service",
+  "shared_entities": {
+    "incident_id": {
+      "type": "string",
+      "description": "Unique identifier of a SASE incident"
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Unique identifier of the customer tenant within the SASE platform"
+    },
+    "policy_id": {
+      "type": "string",
+      "description": "Identifier of a SASE security or connectivity policy"
+    },
+    "site_id": {
+      "type": "string",
+      "description": "Identifier of a branch, data center, or remote site in the SASE fabric"
+    },
+    "user_id": {
+      "type": "string",
+      "description": "Identifier of an end user or identity in the SASE directory"
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Identifier of a network or application session in the SASE fabric"
+    },
+    "playbook_id": {
+      "type": "string",
+      "description": "Identifier of an incident response playbook"
+    },
+    "change_request_id": {
+      "type": "string",
+      "description": "Identifier of a configuration change request created during incident handling"
+    },
+    "incident_severity": {
+      "type": "string",
+      "description": "Normalized severity level",
+      "enum": [
+        "informational",
+        "low",
+        "medium",
+        "high",
+        "critical"
+      ]
+    },
+    "sase_scope": {
+      "type": "object",
+      "description": "Scope of an incident or action within the SASE fabric",
+      "properties": {
+        "tenant_id": {
+          "type": "string"
+        },
+        "site_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of affected sites"
+        },
+        "user_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "List of affected users"
+        },
+        "policy_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Relevant SASE policies"
+        },
+        "session_ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Relevant sessions"
+        }
+      }
+    },
+    "timeline_entry": {
+      "type": "object",
+      "description": "Entry in an incident timeline or audit log",
+      "properties": {
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "system",
+            "sensor",
+            "user",
+            "automation",
+            "api"
+          ]
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "User, system, or integration ID responsible for the action"
+        },
+        "event_type": {
+          "type": "string",
+          "description": "Short code representing the type of event, e.g., INCIDENT_CREATED"
+        },
+        "details": {
+          "type": "object",
+          "description": "Arbitrary event metadata"
+        }
+      },
+      "required": [
+        "timestamp",
+        "source",
+        "event_type"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "detect_sase_incident",
+      "description": "Normalize and create an incident from raw SASE alerts and telemetry events.",
+      "stage": "detect",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "type": "string",
+            "description": "Tenant where the incident is detected"
+          },
+          "ingest_source": {
+            "type": "string",
+            "description": "Source of the detection data",
+            "enum": [
+              "sase_sdwan",
+              "sase_secure_web_gateway",
+              "sase_casb",
+              "sase_ztn",
+              "siem",
+              "nms",
+              "other"
+            ]
+          },
+          "raw_events": {
+            "type": "array",
+            "description": "Raw events or alerts that triggered the detection",
+            "items": {
+              "type": "object",
+              "properties": {
+                "event_id": {
+                  "type": "string"
+                },
+                "received_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "source_type": {
+                  "type": "string"
+                },
+                "severity": {
+                  "$ref": "#/shared_entities/incident_severity"
+                },
+                "payload": {
+                  "type": "object",
+                  "description": "Opaque event body from the source system"
+                }
+              },
+              "required": [
+                "event_id",
+                "received_at",
+                "payload"
+              ]
+            }
+          },
+          "deduplication_key": {
+            "type": "string",
+            "description": "Key used to correlate similar incidents for deduplication"
+          },
+          "suspected_scope": {
+            "$ref": "#/shared_entities/sase_scope"
+          },
+          "auto_create_if_similar_open": {
+            "type": "boolean",
+            "description": "If false, and a similar open incident exists, do not create a new one",
+            "default": true
+          }
+        },
+        "required": [
+          "tenant_id",
+          "ingest_source",
+          "raw_events"
+        ]
+      },
+      "returns": "Created or correlated incident with incident_id, initial severity, status, and deduplication metadata."
+    },
+    {
+      "name": "get_incident_details",
+      "description": "Retrieve full details for a SASE incident, including current status, scope, and timeline.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional related data to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "timeline",
+                "raw_events",
+                "related_incidents",
+                "policy_snapshots",
+                "mitigation_actions"
+              ]
+            }
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Optional tenant scoping for multi-tenant environments"
+          }
+        },
+        "required": [
+          "incident_id"
+        ]
+      },
+      "returns": "Complete incident object including status, severity, scope, related policies, timeline entries, and active mitigations."
+    },
+    {
+      "name": "list_incidents",
+      "description": "List and filter SASE incidents across tenants, time, severity, and status.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "new",
+                    "triage",
+                    "in_progress",
+                    "mitigated",
+                    "monitoring",
+                    "resolved",
+                    "closed",
+                    "cancelled"
+                  ]
+                }
+              },
+              "severity": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/incident_severity"
+                }
+              },
+              "categories": {
+                "type": "array",
+                "description": "High-level incident categories",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "connectivity_degradation",
+                    "site_outage",
+                    "latency_spike",
+                    "security_threat",
+                    "data_exfiltration",
+                    "policy_misconfiguration",
+                    "authentication_issue",
+                    "other"
+                  ]
+                }
+              },
+              "created_after": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_before": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "has_active_mitigation": {
+                "type": "boolean"
+              },
+              "affected_site_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "affected_user_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ingest_sources": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "playbook_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "severity",
+              "status",
+              "tenant_id"
+            ],
+            "default": "created_at"
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50
+          }
+        }
+      },
+      "returns": "Paginated list of incidents along with total count and pagination cursors."
+    },
+    {
+      "name": "triage_incident",
+      "description": "Perform triage on an incident, updating severity, classification, and enrichment data.",
+      "stage": "triage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "triage_summary": {
+            "type": "string",
+            "description": "Human-readable summary of triage findings"
+          },
+          "updated_severity": {
+            "$ref": "#/shared_entities/incident_severity"
+          },
+          "classification": {
+            "type": "object",
+            "description": "Normalized classification of the incident",
+            "properties": {
+              "category": {
+                "type": "string",
+                "enum": [
+                  "connectivity",
+                  "performance",
+                  "security",
+                  "configuration",
+                  "authentication",
+                  "availability",
+                  "other"
+                ]
+              },
+              "sub_category": {
+                "type": "string",
+                "description": "More specific classification, e.g., 'malware_c2', 'bgp_flap'"
+              },
+              "root_cause_suspected": {
+                "type": "string",
+                "description": "Free-form suspected root cause"
+              }
+            }
+          },
+          "scope_correction": {
+            "$ref": "#/shared_entities/sase_scope"
+          },
+          "enrichment": {
+            "type": "object",
+            "description": "Additional triage metadata and external references",
+            "properties": {
+              "ioc_indicators": {
+                "type": "array",
+                "description": "Indicators of compromise observed",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "ip",
+                        "domain",
+                        "url",
+                        "hash",
+                        "user",
+                        "device"
+                      ]
+                    },
+                    "value": {
+                      "type": "string"
+                    },
+                    "malicious_confidence": {
+                      "type": "string",
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "unknown"
+                      ]
+                    },
+                    "source": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "value"
+                  ]
+                }
+              },
+              "external_references": {
+                "type": "array",
+                "description": "Links to external tickets or tools (e.g., JIRA, ServiceNow)",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "system": {
+                      "type": "string"
+                    },
+                    "reference_id": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "system",
+                    "reference_id"
+                  ]
+                }
+              }
+            }
+          },
+          "status_after_triage": {
+            "type": "string",
+            "enum": [
+              "triage",
+              "in_progress",
+              "monitoring",
+              "cancelled"
+            ],
+            "description": "New status after triage, if any"
+          }
+        },
+        "required": [
+          "incident_id",
+          "triage_summary"
+        ]
+      },
+      "returns": "Updated incident with new severity, classification, scope, and enrichment metadata."
+    },
+    {
+      "name": "run_sase_connectivity_diagnostics",
+      "description": "Run targeted diagnostics for connectivity and security posture related to the incident scope.",
+      "stage": "diagnose",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string",
+            "description": "Incident for which diagnostics should be run"
+          },
+          "scope": {
+            "$ref": "#/shared_entities/sase_scope"
+          },
+          "diagnostics_profile": {
+            "type": "string",
+            "description": "Predefined diagnostics profile to run",
+            "enum": [
+              "connectivity_health",
+              "latency_and_loss",
+              "policy_conflict",
+              "ztn_access",
+              "full_stack"
+            ]
+          },
+          "custom_checks": {
+            "type": "array",
+            "description": "Optional additional checks to run",
+            "items": {
+              "type": "object",
+              "properties": {
+                "check_type": {
+                  "type": "string",
+                  "enum": [
+                    "ping",
+                    "traceroute",
+                    "path_selection",
+                    "policy_evaluation",
+                    "tls_inspection",
+                    "dns_resolution"
+                  ]
+                },
+                "target": {
+                  "type": "string",
+                  "description": "IP, domain, or internal ID depending on check type"
+                },
+                "parameters": {
+                  "type": "object",
+                  "description": "Check-specific parameters"
+                }
+              },
+              "required": [
+                "check_type"
+              ]
+            }
+          },
+          "timeout_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 1800,
+            "default": 300
+          },
+          "async": {
+            "type": "boolean",
+            "description": "If true, return immediately with a diagnostics job ID",
+            "default": false
+          }
+        },
+        "required": [
+          "incident_id",
+          "scope",
+          "diagnostics_profile"
+        ]
+      },
+      "returns": "Diagnostics results or a diagnostics_job_id for asynchronous execution, with summarized health and detected anomalies."
+    },
+    {
+      "name": "propose_sase_mitigation_plan",
+      "description": "Generate a recommended mitigation plan including policy changes, traffic steering, and session controls.",
+      "stage": "plan_mitigation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "scope": {
+            "$ref": "#/shared_entities/sase_scope"
+          },
+          "constraints": {
+            "type": "object",
+            "description": "Business and technical constraints for the mitigation",
+            "properties": {
+              "avoid_full_outage": {
+                "type": "boolean",
+                "default": true
+              },
+              "traffic_classes_to_preserve": {
+                "type": "array",
+                "description": "Sensitive or critical applications that must remain available",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "max_policy_changes": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
+                "default": 10
+              },
+              "requires_approval": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "preferred_playbook_ids": {
+            "type": "array",
+            "description": "Optional list of preferred playbooks to consider when proposing a plan",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "incident_id",
+          "tenant_id",
+          "scope"
+        ]
+      },
+      "returns": "Structured mitigation plan including candidate playbook_id, proposed actions, risk assessment, and estimated impact."
+    },
+    {
+      "name": "apply_sase_mitigation_playbook",
+      "description": "Execute an approved SASE mitigation playbook, creating associated change requests and tracking action status.",
+      "stage": "mitigate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "playbook_id": {
+            "type": "string"
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "dry_run",
+              "staged",
+              "immediate"
+            ],
+            "description": "Dry-run evaluates impact only; staged schedules phased changes; immediate executes now."
+          },
+          "approval_context": {
+            "type": "object",
+            "description": "Approval metadata for audit and compliance",
+            "properties": {
+              "approved_by": {
+                "type": "string",
+                "description": "User or system ID that approved the playbook execution"
+              },
+              "approval_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "change_ticket_reference": {
+                "type": "string",
+                "description": "ID of an external change ticket (e.g., ITSM system)"
+              },
+              "risk_acceptance_document": {
+                "type": "string",
+                "description": "Optional link or ID for a risk acceptance record"
+              }
+            }
+          },
+          "override_parameters": {
+            "type": "object",
+            "description": "Optional overrides for playbook parameters",
+            "properties": {
+              "target_policy_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "target_site_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "target_user_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "custom_action_params": {
+                "type": "object",
+                "description": "Arbitrary per-action overrides keyed by action ID"
+              }
+            }
+          },
+          "async": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, returns a mitigation_execution_id and runs asynchronously"
+          }
+        },
+        "required": [
+          "incident_id",
+          "playbook_id",
+          "execution_mode"
+        ]
+      },
+      "returns": "Mitigation execution record including mitigation_execution_id, created change_request_ids, and initial execution status."
+    },
+    {
+      "name": "rollback_sase_mitigation",
+      "description": "Rollback previously applied mitigation changes for an incident, restoring prior SASE configuration state.",
+      "stage": "rollback",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "change_request_id": {
+            "type": "string",
+            "description": "Specific change request to rollback; if omitted, all rollback-eligible changes for the incident will be considered."
+          },
+          "rollback_scope": {
+            "type": "object",
+            "description": "Optional scope limiting what is rolled back",
+            "properties": {
+              "policy_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "site_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "user_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for rollback (e.g., regression, business impact)."
+          },
+          "force": {
+            "type": "boolean",
+            "description": "If true, attempt rollback even if validation checks fail.",
+            "default": false
+          }
+        },
+        "required": [
+          "incident_id",
+          "reason"
+        ]
+      },
+      "returns": "Rollback result including restored configuration references, any partial failures, and updated incident timeline entries."
+    },
+    {
+      "name": "retry_sase_action",
+      "description": "Retry a failed SASE automation action related to an incident, with optional parameter overrides.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "action_reference": {
+            "type": "object",
+            "description": "Reference to the failed action that should be retried",
+            "properties": {
+              "mitigation_execution_id": {
+                "type": "string"
+              },
+              "action_id": {
+                "type": "string",
+                "description": "Identifier of the specific action within the mitigation execution"
+              },
+              "attempt_number": {
+                "type": "integer",
+                "description": "Optional previous attempt number to retry from"
+              }
+            },
+            "required": [
+              "action_id"
+            ]
+          },
+          "override_parameters": {
+            "type": "object",
+            "description": "Overrides to adjust action behavior on retry",
+            "properties": {
+              "timeout_seconds": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 3600
+              },
+              "backoff_strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "fixed",
+                  "exponential"
+                ]
+              },
+              "max_retries": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "action_payload": {
+                "type": "object",
+                "description": "Action-specific payload overrides"
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why the action is being retried (e.g., transient failure, dependency resolved)."
+          }
+        },
+        "required": [
+          "incident_id",
+          "action_reference",
+          "reason"
+        ]
+      },
+      "returns": "New action execution record with status, logs, and linkage to previous failed attempts."
+    },
+    {
+      "name": "update_incident_status",
+      "description": "Update the lifecycle status of an incident, including monitoring parameters and resolution details.",
+      "stage": "status",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "new_status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "triage",
+              "in_progress",
+              "mitigated",
+              "monitoring",
+              "resolved",
+              "closed",
+              "cancelled"
+            ]
+          },
+          "status_reason": {
+            "type": "string",
+            "description": "Short reason for status transition"
+          },
+          "resolution_details": {
+            "type": "object",
+            "description": "Details required when transitioning to resolved or closed states",
+            "properties": {
+              "resolution_type": {
+                "type": "string",
+                "enum": [
+                  "configuration_change",
+                  "infrastructure_fix",
+                  "false_positive",
+                  "user_error",
+                  "third_party_issue",
+                  "no_issue_found",
+                  "other"
+                ]
+              },
+              "root_cause": {
+                "type": "string"
+              },
+              "preventive_actions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "linked_incident_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "monitoring_window": {
+            "type": "object",
+            "description": "Optional monitoring configuration when transitioning to 'monitoring' state",
+            "properties": {
+              "duration_minutes": {
+                "type": "integer",
+                "minimum": 5,
+                "maximum": 1440
+              },
+              "success_criteria": {
+                "type": "object",
+                "properties": {
+                  "max_packet_loss_percent": {
+                    "type": "number"
+                  },
+                  "max_latency_ms": {
+                    "type": "number"
+                  },
+                  "max_security_alerts": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          },
+          "updated_by": {
+            "type": "string",
+            "description": "User or system performing the status update"
+          }
+        },
+        "required": [
+          "incident_id",
+          "new_status"
+        ]
+      },
+      "returns": "Incident record with updated status, timelines, and any associated monitoring or resolution data."
+    },
+    {
+      "name": "cancel_incident",
+      "description": "Cancel an incident that is deemed not actionable or created in error, with audit-compliant reasoning.",
+      "stage": "cancel",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "cancel_reason": {
+            "type": "string",
+            "description": "High-level reason (e.g., duplicate, false alarm, test)."
+          },
+          "detailed_explanation": {
+            "type": "string",
+            "description": "Detailed textual explanation for audit trails."
+          },
+          "linked_primary_incident_id": {
+            "type": "string",
+            "description": "If cancelled as a duplicate, reference to the primary incident."
+          },
+          "retain_active_mitigations": {
+            "type": "boolean",
+            "description": "If true, do not rollback currently active mitigations.",
+            "default": false
+          }
+        },
+        "required": [
+          "incident_id",
+          "cancel_reason"
+        ]
+      },
+      "returns": "Cancellation confirmation with updated incident status and any rollback actions taken."
+    },
+    {
+      "name": "get_sase_incident_timeline",
+      "description": "Retrieve the chronological timeline of events, actions, and changes for an incident.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "sources": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "system",
+                    "sensor",
+                    "user",
+                    "automation",
+                    "api"
+                  ]
+                }
+              },
+              "event_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "from_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to_time": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 500,
+            "default": 100
+          }
+        },
+        "required": [
+          "incident_id"
+        ]
+      },
+      "returns": "Paginated list of timeline entries, each including timestamps, actors, event types, and structured details."
+    },
+    {
+      "name": "link_policies_and_sessions_to_incident",
+      "description": "Associate specific SASE policies and live sessions with an incident for better context and automated targeting.",
+      "stage": "enrich",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "type": "string"
+          },
+          "policies": {
+            "type": "array",
+            "description": "Policies to link to the incident",
+            "items": {
+              "type": "object",
+              "properties": {
+                "policy_id": {
+                  "type": "string"
+                },
+                "policy_type": {
+                  "type": "string",
+                  "enum": [
+                    "access_control",
+                    "traffic_steering",
+                    "qos",
+                    "dlp",
+                    "casb",
+                    "ztn",
+                    "other"
+                  ]
+                },
+                "snapshot_version": {
+                  "type": "string",
+                  "description": "Version or commit ID of the policy at time of linking"
+                },
+                "role_in_incident": {
+                  "type": "string",
+                  "enum": [
+                    "suspected_cause",
+                    "mitigation",
+                    "unrelated",
+                    "unknown"
+                  ]
+                }
+              },
+              "required": [
+                "policy_id"
+              ]
+            }
+          },
+          "sessions": {
+            "type": "array",
+            "description": "Sessions to link to the incident",
+            "items": {
+              "type": "object",
+              "properties": {
+                "session_id": {
+                  "type": "string"
+                },
+                "user_id": {
+                  "type": "string"
+                },
+                "site_id": {
+                  "type": "string"
+                },
+                "application": {
+                  "type": "string"
+                },
+                "session_role": {
+                  "type": "string",
+                  "enum": [
+                    "affected",
+                    "suspected_source",
+                    "mitigation_control",
+                    "monitoring_only"
+                  ]
+                }
+              },
+              "required": [
+                "session_id"
+              ]
+            }
+          },
+          "overwrite_existing_links": {
+            "type": "boolean",
+            "description": "If true, existing links of the same type will be replaced.",
+            "default": false
+          }
+        },
+        "required": [
+          "incident_id"
+        ]
+      },
+      "returns": "Updated incident context including newly linked policies and sessions, and any conflicts with existing links."
+    }
+  ]
+}

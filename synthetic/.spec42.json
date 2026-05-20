@@ -1,0 +1,1229 @@
+{
+  "workflow_name": "enterprise_fault_management",
+  "description": "End-to-end workflow for managing enterprise telco faults from detection through triage, remediation, communication, and closure.",
+  "domain": "telco_b2b/enterprise_sales",
+  "shared_entities": {
+    "account_id": {
+      "type": "string",
+      "description": "Unique identifier for an enterprise customer account"
+    },
+    "site_id": {
+      "type": "string",
+      "description": "Unique identifier for a customer site or location"
+    },
+    "service_id": {
+      "type": "string",
+      "description": "Unique identifier for a specific service instance (e.g., MPLS, DIA, SD-WAN) for a customer"
+    },
+    "circuit_id": {
+      "type": "string",
+      "description": "Unique identifier for a physical or logical circuit"
+    },
+    "fault_id": {
+      "type": "string",
+      "description": "Unique identifier for a fault case in the fault management system"
+    },
+    "incident_ticket_id": {
+      "type": "string",
+      "description": "Identifier for an associated support/incident ticket in an external or internal system"
+    },
+    "sla_profile_id": {
+      "type": "string",
+      "description": "Identifier of the SLA profile associated with the account or service"
+    },
+    "work_order_id": {
+      "type": "string",
+      "description": "Identifier of a field or engineering work order associated with a fault"
+    },
+    "user_id": {
+      "type": "string",
+      "description": "Identifier of an internal user (NOC, service manager, sales engineer)"
+    },
+    "notification_id": {
+      "type": "string",
+      "description": "Identifier of a customer notification event related to a fault"
+    }
+  },
+  "functions": [
+    {
+      "name": "detect_fault",
+      "description": "Ingest and normalize a new fault event detected by network monitoring systems, correlate it with customer entities, and create an initial fault record.",
+      "stage": "detect",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source_event": {
+            "type": "object",
+            "description": "Raw event details from monitoring or probes",
+            "properties": {
+              "source_system": {
+                "type": "string",
+                "description": "Originating system of the event",
+                "enum": [
+                  "nms",
+                  "probe",
+                  "sdwan_controller",
+                  "oss",
+                  "manual"
+                ]
+              },
+              "event_type": {
+                "type": "string",
+                "description": "Type of detected issue",
+                "enum": [
+                  "loss_of_signal",
+                  "high_latency",
+                  "packet_loss",
+                  "flapping",
+                  "power_failure",
+                  "configuration_error",
+                  "unknown"
+                ]
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "critical",
+                  "major",
+                  "minor",
+                  "warning",
+                  "info"
+                ]
+              },
+              "generated_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timestamp when the event was generated"
+              },
+              "attributes": {
+                "type": "object",
+                "description": "Additional attributes from the monitoring system",
+                "properties": {
+                  "circuit_id": {
+                    "type": "string"
+                  },
+                  "device_name": {
+                    "type": "string"
+                  },
+                  "interface_name": {
+                    "type": "string"
+                  },
+                  "alarm_id": {
+                    "type": "string"
+                  },
+                  "raw_payload": {
+                    "type": "object",
+                    "description": "Opaque raw payload from the source system"
+                  }
+                }
+              }
+            },
+            "required": [
+              "source_system",
+              "event_type",
+              "severity"
+            ]
+          },
+          "correlation_context": {
+            "type": "object",
+            "description": "Optional hints to help correlate the event with customer entities.",
+            "properties": {
+              "account_id": {
+                "type": "string"
+              },
+              "site_id": {
+                "type": "string"
+              },
+              "service_id": {
+                "type": "string"
+              },
+              "circuit_id": {
+                "type": "string"
+              }
+            }
+          },
+          "ingest_options": {
+            "type": "object",
+            "description": "Options controlling how the fault is ingested",
+            "properties": {
+              "auto_correlate": {
+                "type": "boolean",
+                "description": "Whether to automatically correlate with existing open faults",
+                "default": true
+              },
+              "auto_suppress_duplicates": {
+                "type": "boolean",
+                "description": "Suppress event if an equivalent active fault already exists",
+                "default": true
+              },
+              "create_incident_ticket": {
+                "type": "boolean",
+                "description": "Automatically create an external incident ticket",
+                "default": false
+              }
+            }
+          }
+        },
+        "required": [
+          "source_event"
+        ]
+      },
+      "returns": "New or correlated fault_id with initial status and correlation summary"
+    },
+    {
+      "name": "get_fault_details",
+      "description": "Retrieve detailed information for a specific fault including correlated services, SLA, events, and related tickets.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "fault_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional sections to include in the response",
+            "items": {
+              "type": "string",
+              "enum": [
+                "account",
+                "site",
+                "service",
+                "circuit",
+                "events",
+                "sla",
+                "work_orders",
+                "notifications",
+                "timeline",
+                "related_faults"
+              ]
+            }
+          }
+        },
+        "required": [
+          "fault_id"
+        ]
+      },
+      "returns": "Complete fault representation including status, impact, correlations, and optionally related entities."
+    },
+    {
+      "name": "list_faults",
+      "description": "List and filter faults across enterprise customers, with pagination and sorting.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "description": "Filter criteria for selecting faults",
+            "properties": {
+              "account_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "service_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "site_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "severity": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "critical",
+                    "major",
+                    "minor",
+                    "warning",
+                    "info"
+                  ]
+                }
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "new",
+                    "under_investigation",
+                    "awaiting_customer",
+                    "awaiting_third_party",
+                    "work_in_progress",
+                    "monitoring",
+                    "resolved",
+                    "closed",
+                    "cancelled"
+                  ]
+                }
+              },
+              "opened_after": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "opened_before": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "breach_risk": {
+                "type": "string",
+                "description": "Filter by SLA breach risk",
+                "enum": [
+                  "none",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "has_open_work_order": {
+                "type": "boolean"
+              },
+              "incident_ticket_exists": {
+                "type": "boolean"
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "opened_at",
+              "updated_at",
+              "severity",
+              "sla_breach_eta"
+            ]
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50
+          }
+        }
+      },
+      "returns": "Paginated list of faults with summary fields and paging metadata."
+    },
+    {
+      "name": "classify_and_triage_fault",
+      "description": "Classify the fault, assess business impact, and assign it to the appropriate NOC or engineering team.",
+      "stage": "triage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "fault_id": {
+            "type": "string"
+          },
+          "classification": {
+            "type": "object",
+            "description": "Technical and commercial classification of the fault",
+            "properties": {
+              "problem_domain": {
+                "type": "string",
+                "enum": [
+                  "access",
+                  "core",
+                  "cpe",
+                  "cloud_edge",
+                  "configuration",
+                  "third_party",
+                  "unknown"
+                ]
+              },
+              "root_cause_category": {
+                "type": "string",
+                "enum": [
+                  "provider_network",
+                  "customer_premise",
+                  "power",
+                  "hardware_failure",
+                  "software_bug",
+                  "human_error",
+                  "environmental",
+                  "tbd"
+                ]
+              },
+              "suspected_layer": {
+                "type": "string",
+                "enum": [
+                  "layer1",
+                  "layer2",
+                  "layer3",
+                  "overlay",
+                  "application"
+                ]
+              }
+            },
+            "required": [
+              "problem_domain"
+            ]
+          },
+          "impact_assessment": {
+            "type": "object",
+            "description": "Assessment of how the fault impacts the customer",
+            "properties": {
+              "impact_level": {
+                "type": "string",
+                "enum": [
+                  "no_impact",
+                  "degraded",
+                  "partial_outage",
+                  "full_outage"
+                ]
+              },
+              "affected_services": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "service_id": {
+                      "type": "string"
+                    },
+                    "service_type": {
+                      "type": "string",
+                      "enum": [
+                        "mpls",
+                        "internet",
+                        "sdwan",
+                        "voice",
+                        "security",
+                        "other"
+                      ]
+                    },
+                    "priority": {
+                      "type": "string",
+                      "enum": [
+                        "gold",
+                        "silver",
+                        "bronze"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "service_id"
+                  ]
+                }
+              },
+              "business_criticality": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "mission_critical"
+                ]
+              },
+              "estimated_impact_start": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "assignment": {
+            "type": "object",
+            "description": "Assignment details for who will handle the fault",
+            "properties": {
+              "assignee_type": {
+                "type": "string",
+                "enum": [
+                  "noc_queue",
+                  "engineering_team",
+                  "field_technician",
+                  "service_manager"
+                ]
+              },
+              "assignee_id": {
+                "type": "string",
+                "description": "Queue or user/team identifier"
+              },
+              "urgency": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "normal",
+                  "high",
+                  "immediate"
+                ]
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "assignee_type"
+            ]
+          },
+          "performed_by": {
+            "type": "string",
+            "description": "user_id of the operator performing the triage"
+          }
+        },
+        "required": [
+          "fault_id",
+          "classification",
+          "assignment"
+        ]
+      },
+      "returns": "Updated fault with classification, impact, and assignment details."
+    },
+    {
+      "name": "check_sla_and_breach_risk",
+      "description": "Evaluate SLA obligations and compute breach risk, timers, and penalties for a given fault.",
+      "stage": "assess_sla",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "fault_id": {
+            "type": "string"
+          },
+          "sla_profile_override": {
+            "type": "object",
+            "description": "Optional override of the default SLA profile for what-if analysis.",
+            "properties": {
+              "sla_profile_id": {
+                "type": "string"
+              },
+              "targets": {
+                "type": "object",
+                "description": "Custom SLA targets for this evaluation only",
+                "properties": {
+                  "response_time_minutes": {
+                    "type": "integer"
+                  },
+                  "restoration_time_minutes": {
+                    "type": "integer"
+                  },
+                  "update_interval_minutes": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          },
+          "include_history": {
+            "type": "boolean",
+            "description": "Whether to include historical SLA performance for this account/service.",
+            "default": false
+          }
+        },
+        "required": [
+          "fault_id"
+        ]
+      },
+      "returns": "SLA evaluation including breach timers, current risk level, and potential penalties."
+    },
+    {
+      "name": "create_or_update_incident_ticket",
+      "description": "Create or update an associated incident ticket in the external ITSM or internal ticketing system for a fault.",
+      "stage": "integration",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "fault_id": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "create",
+              "update"
+            ]
+          },
+          "ticket_payload": {
+            "type": "object",
+            "description": "Fields to send to the external ticketing system",
+            "properties": {
+              "summary": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "priority": {
+                "type": "string",
+                "enum": [
+                  "p1",
+                  "p2",
+                  "p3",
+                  "p4"
+                ]
+              },
+              "impact": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "urgency": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              },
+              "assignment_group": {
+                "type": "string"
+              },
+              "custom_fields": {
+                "type": "object",
+                "description": "Arbitrary key-value fields specific to the ITSM integration",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              }
+            }
+          },
+          "incident_ticket_id": {
+            "type": "string",
+            "description": "Required when operation is update"
+          },
+          "performed_by": {
+            "type": "string",
+            "description": "user_id performing the operation"
+          }
+        },
+        "required": [
+          "fault_id",
+          "operation",
+          "ticket_payload"
+        ]
+      },
+      "returns": "Incident_ticket_id and synchronization status with the external system."
+    },
+    {
+      "name": "plan_and_dispatch_remediation",
+      "description": "Create and dispatch a remediation plan for a fault, including remote actions and optional field work orders.",
+      "stage": "remediate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "fault_id": {
+            "type": "string"
+          },
+          "remediation_plan": {
+            "type": "object",
+            "description": "Structured remediation steps and responsibilities",
+            "properties": {
+              "plan_type": {
+                "type": "string",
+                "enum": [
+                  "remote_only",
+                  "field_only",
+                  "hybrid",
+                  "monitor_only"
+                ]
+              },
+              "steps": {
+                "type": "array",
+                "description": "Ordered list of remediation steps",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "step_id": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "action_type": {
+                      "type": "string",
+                      "enum": [
+                        "reset_port",
+                        "apply_config_template",
+                        "route_reoptimization",
+                        "capacity_shift",
+                        "dispatch_technician",
+                        "request_customer_action",
+                        "other"
+                      ]
+                    },
+                    "parameters": {
+                      "type": "object",
+                      "description": "Action-specific parameters",
+                      "additionalProperties": {
+                        "type": [
+                          "string",
+                          "number",
+                          "boolean",
+                          "object",
+                          "array"
+                        ]
+                      }
+                    },
+                    "depends_on": {
+                      "type": "array",
+                      "description": "IDs of steps that must be completed before this step",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "required_role": {
+                      "type": "string",
+                      "enum": [
+                        "noc_engineer",
+                        "senior_engineer",
+                        "field_technician",
+                        "service_manager"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "step_id",
+                    "description",
+                    "action_type"
+                  ]
+                }
+              },
+              "field_work_order": {
+                "type": "object",
+                "description": "Optional work order details when field activity is required",
+                "properties": {
+                  "site_id": {
+                    "type": "string"
+                  },
+                  "preferred_window": {
+                    "type": "object",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "access_requirements": {
+                    "type": "object",
+                    "properties": {
+                      "contact_name": {
+                        "type": "string"
+                      },
+                      "contact_phone": {
+                        "type": "string"
+                      },
+                      "security_clearance_level": {
+                        "type": "string"
+                      },
+                      "badging_required": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+              "plan_type",
+              "steps"
+            ]
+          },
+          "auto_dispatch": {
+            "type": "boolean",
+            "description": "Whether to automatically dispatch work orders and remote scripts.",
+            "default": true
+          },
+          "performed_by": {
+            "type": "string",
+            "description": "user_id initiating the remediation plan"
+          }
+        },
+        "required": [
+          "fault_id",
+          "remediation_plan"
+        ]
+      },
+      "returns": "Created remediation plan with associated work_order_ids and execution status for initial steps."
+    },
+    {
+      "name": "update_fault_status",
+      "description": "Update the lifecycle status of a fault, with optional reason codes and status transitions validation.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "fault_id": {
+            "type": "string"
+          },
+          "new_status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "under_investigation",
+              "awaiting_customer",
+              "awaiting_third_party",
+              "work_in_progress",
+              "monitoring",
+              "resolved",
+              "closed",
+              "cancelled"
+            ]
+          },
+          "reason": {
+            "type": "object",
+            "description": "Structured reason for the status change",
+            "properties": {
+              "reason_code": {
+                "type": "string",
+                "enum": [
+                  "initial_triage_complete",
+                  "awaiting_customer_access",
+                  "awaiting_customer_feedback",
+                  "awaiting_vendor",
+                  "work_completed",
+                  "issue_stable",
+                  "false_alarm",
+                  "duplicate_fault",
+                  "customer_request",
+                  "other"
+                ]
+              },
+              "details": {
+                "type": "string"
+              }
+            }
+          },
+          "status_metadata": {
+            "type": "object",
+            "description": "Additional metadata related to the transition",
+            "properties": {
+              "expected_next_update": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "monitoring_window_minutes": {
+                "type": "integer"
+              }
+            }
+          },
+          "performed_by": {
+            "type": "string",
+            "description": "user_id making the status update"
+          },
+          "validate_transition": {
+            "type": "boolean",
+            "description": "If true, validate that the transition is allowed by workflow rules.",
+            "default": true
+          }
+        },
+        "required": [
+          "fault_id",
+          "new_status"
+        ]
+      },
+      "returns": "Updated fault status, transition history entry, and any validation warnings."
+    },
+    {
+      "name": "send_customer_notification",
+      "description": "Send proactive or reactive fault-related notifications to enterprise customer contacts.",
+      "stage": "communicate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "fault_id": {
+            "type": "string"
+          },
+          "notification_type": {
+            "type": "string",
+            "enum": [
+              "initial_outage",
+              "progress_update",
+              "planned_activity",
+              "resolution",
+              "post_mortem",
+              "sla_breach_warning"
+            ]
+          },
+          "channel_preferences": {
+            "type": "object",
+            "description": "Preferred and fallback channels",
+            "properties": {
+              "primary_channel": {
+                "type": "string",
+                "enum": [
+                  "email",
+                  "sms",
+                  "portal",
+                  "phone_bridge"
+                ]
+              },
+              "fallback_channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "portal"
+                  ]
+                }
+              },
+              "respect_account_preferences": {
+                "type": "boolean",
+                "default": true
+              }
+            },
+            "required": [
+              "primary_channel"
+            ]
+          },
+          "audience": {
+            "type": "object",
+            "description": "Selection of who should receive the notification",
+            "properties": {
+              "account_id": {
+                "type": "string"
+              },
+              "site_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "contact_roles": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "technical_contact",
+                    "business_owner",
+                    "billing_contact",
+                    "service_manager"
+                  ]
+                }
+              },
+              "explicit_emails": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "email"
+                }
+              }
+            }
+          },
+          "content": {
+            "type": "object",
+            "description": "Notification content and templates",
+            "properties": {
+              "use_template": {
+                "type": "boolean",
+                "default": true
+              },
+              "template_id": {
+                "type": "string"
+              },
+              "subject_override": {
+                "type": "string"
+              },
+              "body_override": {
+                "type": "string"
+              },
+              "placeholders": {
+                "type": "object",
+                "description": "Template placeholder values",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "performed_by": {
+            "type": "string",
+            "description": "user_id initiating the notification (or system for automated)"
+          }
+        },
+        "required": [
+          "fault_id",
+          "notification_type",
+          "channel_preferences"
+        ]
+      },
+      "returns": "Notification_id per channel, delivery status, and any contact-level failures."
+    },
+    {
+      "name": "retry_or_rollback_action",
+      "description": "Retry a failed remediation or integration action or roll back a completed change if it caused regressions.",
+      "stage": "recover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "fault_id": {
+            "type": "string"
+          },
+          "target_action": {
+            "type": "object",
+            "description": "The action that needs to be retried or rolled back",
+            "properties": {
+              "action_type": {
+                "type": "string",
+                "enum": [
+                  "remediation_step",
+                  "work_order",
+                  "incident_sync",
+                  "config_change"
+                ]
+              },
+              "action_id": {
+                "type": "string",
+                "description": "Identifier of the specific step or integration call"
+              },
+              "original_executed_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "action_type",
+              "action_id"
+            ]
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "retry",
+              "rollback"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for retrying or rolling back the action"
+          },
+          "rollback_strategy": {
+            "type": "object",
+            "description": "Strategy to use when performing a rollback",
+            "properties": {
+              "strategy_type": {
+                "type": "string",
+                "enum": [
+                  "full_revert",
+                  "partial_revert",
+                  "manual_intervention"
+                ]
+              },
+              "parameters": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              }
+            }
+          },
+          "performed_by": {
+            "type": "string",
+            "description": "user_id requesting the retry/rollback"
+          }
+        },
+        "required": [
+          "fault_id",
+          "target_action",
+          "operation"
+        ]
+      },
+      "returns": "Result of retry or rollback execution, including new action_id if re-executed and any error details."
+    },
+    {
+      "name": "merge_or_link_faults",
+      "description": "Merge duplicate faults into a primary record or link related faults across accounts/services.",
+      "stage": "correlate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "primary_fault_id": {
+            "type": "string",
+            "description": "The primary fault that others will be merged into or linked to"
+          },
+          "related_fault_ids": {
+            "type": "array",
+            "description": "List of fault_ids to merge or link",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "merge",
+              "link"
+            ]
+          },
+          "link_type": {
+            "type": "string",
+            "description": "Type of relationship when mode is link",
+            "enum": [
+              "same_root_cause",
+              "same_site",
+              "same_service",
+              "parent_child",
+              "other"
+            ]
+          },
+          "propagate_updates": {
+            "type": "boolean",
+            "description": "Whether status and notifications should be propagated from primary to related faults.",
+            "default": true
+          },
+          "performed_by": {
+            "type": "string",
+            "description": "user_id performing the merge/link"
+          }
+        },
+        "required": [
+          "primary_fault_id",
+          "related_fault_ids",
+          "mode"
+        ]
+      },
+      "returns": "Merge or link confirmation, with mapping of old fault_ids and updated relationships."
+    },
+    {
+      "name": "close_fault_with_postmortem",
+      "description": "Formally close a resolved fault, capturing root cause analysis, preventive actions, and commercial adjustments.",
+      "stage": "close",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "fault_id": {
+            "type": "string"
+          },
+          "closure_summary": {
+            "type": "object",
+            "description": "Summary of what happened and how it was resolved",
+            "properties": {
+              "root_cause": {
+                "type": "string"
+              },
+              "resolution_steps": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "time_to_detect_minutes": {
+                "type": "integer"
+              },
+              "time_to_restore_minutes": {
+                "type": "integer"
+              },
+              "time_to_communicate_minutes": {
+                "type": "integer"
+              }
+            }
+          },
+          "preventive_actions": {
+            "type": "array",
+            "description": "Actions to prevent recurrence",
+            "items": {
+              "type": "object",
+              "properties": {
+                "action_id": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "owner_team": {
+                  "type": "string",
+                  "enum": [
+                    "noc",
+                    "engineering",
+                    "product",
+                    "field_ops",
+                    "account_team"
+                  ]
+                },
+                "due_date": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "in_progress",
+                    "completed",
+                    "cancelled"
+                  ]
+                }
+              },
+              "required": [
+                "description",
+                "owner_team"
+              ]
+            }
+          },
+          "commercial_adjustments": {
+            "type": "object",
+            "description": "Optional credits or penalties applied due to the fault",
+            "properties": {
+              "sla_breached": {
+                "type": "boolean"
+              },
+              "credit_amount": {
+                "type": "number",
+                "description": "Monetary credit to customer, if applicable"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "notes": {
+                "type": "string"
+              }
+            }
+          },
+          "incident_ticket_id": {
+            "type": "string",
+            "description": "If provided, will attempt to close associated incident ticket as well"
+          },
+          "performed_by": {
+            "type": "string",
+            "description": "user_id closing the fault"
+          },
+          "force_close": {
+            "type": "boolean",
+            "description": "If true, close even if there are open work orders or actions.",
+            "default": false
+          }
+        },
+        "required": [
+          "fault_id",
+          "closure_summary"
+        ]
+      },
+      "returns": "Final fault state, closure audit record, and any resulting commercial adjustment references."
+    }
+  ]
+}

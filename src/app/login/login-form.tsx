@@ -1,296 +1,251 @@
 "use client";
 
 import { useState } from "react";
-import Image from "next/image";
-import { motion } from "framer-motion";
+import { useRouter } from "next/navigation";
 import { signIn } from "next-auth/react";
 import {
-  Mail,
-  Lock,
+  AlertCircle,
+  Check,
   Eye,
   EyeOff,
-  Check,
-  Building2,
   KeyRound,
-  ShieldCheck,
+  Loader2,
+  Lock,
+  Mail,
 } from "lucide-react";
-import { GoogleIcon } from "@/components/auth/provider-icons";
+import { Button } from "@/components/ui/button";
+import { SsoButtons } from "./sso-buttons";
 
-interface LoginFormProps {
-  callbackUrl: string;
-  error?: string;
-  providers: {
-    azure: boolean;
-    google: boolean;
-    keycloak: boolean;
-    saml: boolean;
-  };
+const ERROR_MESSAGES: Record<string, string> = {
+  CredentialsSignin: "Invalid email or password.",
+  OAuthSignin: "Could not start SSO sign-in. Please try again.",
+  OAuthCallback: "SSO callback failed. Please try again.",
+  OAuthAccountNotLinked:
+    "This email is already linked to another sign-in method.",
+  Callback: "Authentication callback failed. Please try again.",
+  AccessDenied: "Access denied.",
+  SessionRequired: "Please sign in to continue.",
+};
+
+interface Providers {
+  azure: boolean;
+  google: boolean;
+  keycloak: boolean;
+  saml: boolean;
 }
 
-export function LoginForm({ callbackUrl, error, providers }: LoginFormProps) {
+export function LoginForm({
+  callbackUrl,
+  providers,
+  initialError,
+}: {
+  callbackUrl: string;
+  providers: Providers;
+  initialError?: string;
+}) {
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [rememberMe, setRememberMe] = useState(true);
-  const [pending, setPending] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
+  const [error, setError] = useState(
+    initialError
+      ? ERROR_MESSAGES[initialError] ?? `Sign in failed: ${initialError}`
+      : "",
+  );
+  const [loading, setLoading] = useState(false);
+  const [showForgot, setShowForgot] = useState(false);
 
-  async function onSubmit(e: React.FormEvent) {
+  const anySso =
+    providers.azure || providers.google || providers.keycloak || providers.saml;
+
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    setFormError(null);
-    if (!email.trim()) {
-      setFormError("Email is required");
+    setError("");
+
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setError("Email is required");
       return;
     }
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) {
-      setFormError("Enter a valid email address");
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
+      setError("Enter a valid email address");
       return;
     }
     if (!password) {
-      setFormError("Password is required");
+      setError("Password is required");
       return;
     }
-    setPending(true);
-    const res = await signIn("credentials", {
-      email,
-      password,
-      redirect: false,
-      callbackUrl,
-    });
-    setPending(false);
-    if (res?.error) {
-      setFormError("Invalid email or password");
-    } else if (res?.url) {
-      window.location.href = res.url;
+
+    setLoading(true);
+    try {
+      const res = await signIn("credentials", {
+        email: trimmedEmail.toLowerCase(),
+        password,
+        redirect: false,
+      });
+      if (!res) {
+        setError("No response from server.");
+        return;
+      }
+      if (res.error) {
+        setError("Invalid email or password.");
+        return;
+      }
+      router.replace(callbackUrl);
+      router.refresh();
+    } finally {
+      setLoading(false);
     }
   }
 
-  const ssoButtons = [
-    providers.google && {
-      key: "google",
-      label: "Google",
-      icon: <GoogleIcon className="h-4 w-4" />,
-      onClick: () => signIn("google", { callbackUrl }),
-    },
-    providers.azure && {
-      key: "azure",
-      label: "Azure AD",
-      icon: <KeyRound className="h-4 w-4 text-[#0078D4]" />,
-      onClick: () => signIn("microsoft-entra-id", { callbackUrl }),
-    },
-    providers.keycloak && {
-      key: "keycloak",
-      label: "Keycloak",
-      icon: <Building2 className="h-4 w-4" />,
-      onClick: () => signIn("keycloak", { callbackUrl }),
-    },
-    providers.saml && {
-      key: "saml",
-      label: "SAML SSO",
-      icon: <ShieldCheck className="h-4 w-4" />,
-      onClick: () => (window.location.href = "/api/auth/saml/login"),
-    },
-  ].filter(Boolean) as Array<{
-    key: string;
-    label: string;
-    icon: React.ReactNode;
-    onClick: () => void;
-  }>;
-
   return (
-    <div className="grid min-h-screen w-full lg:grid-cols-2">
-      {/* Left — Hero */}
-      <div className="relative hidden overflow-hidden lg:block">
-        <Image
-          src="/images/hero-bg-light.jpg"
-          alt=""
-          fill
-          priority
-          className="object-cover dark:hidden"
-        />
-        <Image
-          src="/images/hero-bg.jpg"
-          alt=""
-          fill
-          priority
-          className="hidden object-cover dark:block"
-        />
-        <div className="absolute inset-0 bg-black/40" />
-        <div className="relative z-10 flex h-full flex-col justify-between p-10">
-          <div className="text-xl font-bold tracking-tight text-white">SyntheticGen</div>
-          <div>
-            <h2 className="text-3xl font-bold text-white">Welcome back</h2>
-            <p className="mt-3 max-w-sm text-sm text-white/80">
-              Sign in to manage projects, kick off generation runs, and review
-              localized synthetic datasets.
-            </p>
-            <div className="mt-8 flex gap-6">
-              <Stat value="Any locale" label="Multilingual + code-switching" />
-              <Stat value="Formality lock" label="Per-locale register enforcement" />
-            </div>
-          </div>
+    <>
+      <div className="mb-6 flex justify-center">
+        <div className="flex size-12 items-center justify-center rounded-xl bg-primary/10">
+          <Lock className="size-6 text-primary" />
         </div>
       </div>
 
-      {/* Right — Form */}
-      <div className="flex flex-col items-center justify-center bg-background px-6 py-10 sm:px-10">
-        <motion.div
-          initial={{ y: 12, opacity: 0 }}
-          animate={{ y: 0, opacity: 1 }}
-          transition={{ duration: 0.4 }}
-          className="w-full max-w-sm"
-        >
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">
-            Sign in
-          </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Enter your credentials to continue.
-          </p>
-
-          {error && (
-            <div className="mt-5 rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
-              {error === "OAuthAccountNotLinked"
-                ? "This email is already linked to another sign-in method."
-                : "Sign-in failed. Please try again."}
-            </div>
-          )}
-
-          <form className="mt-6 space-y-4" onSubmit={onSubmit}>
-            <div>
-              <label
-                htmlFor="email"
-                className="mb-1.5 block text-xs font-medium text-foreground"
-              >
-                Email
-              </label>
-              <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2.5 text-sm transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
-                <Mail className="h-4 w-4 text-muted-foreground" />
-                <input
-                  id="email"
-                  type="text"
-                  autoComplete="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="name@company.com"
-                  className="flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground"
-                />
-              </div>
-            </div>
-
-            <div>
-              <div className="mb-1.5 flex items-center justify-between">
-                <label
-                  htmlFor="password"
-                  className="text-xs font-medium text-foreground"
-                >
-                  Password
-                </label>
-                <span className="cursor-pointer text-xs text-primary hover:underline">
-                  Forgot?
-                </span>
-              </div>
-              <div className="flex items-center gap-2 rounded-lg border border-border bg-background px-3 py-2.5 text-sm transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20">
-                <Lock className="h-4 w-4 text-muted-foreground" />
-                <input
-                  id="password"
-                  type={showPassword ? "text" : "password"}
-                  autoComplete="current-password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  className="flex-1 bg-transparent text-foreground outline-none placeholder:text-muted-foreground"
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword((s) => !s)}
-                  className="text-muted-foreground hover:text-foreground"
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                >
-                  {showPassword ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </button>
-              </div>
-            </div>
-
-            <label
-              className="flex cursor-pointer items-center gap-2 text-sm"
-              onClick={() => setRememberMe((r) => !r)}
-            >
-              <span
-                className={`flex h-4 w-4 items-center justify-center rounded border text-[10px] transition-colors ${
-                  rememberMe
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border"
-                }`}
-              >
-                {rememberMe && <Check className="h-3 w-3" />}
-              </span>
-              <span className="text-muted-foreground">Remember me</span>
-            </label>
-
-            {formError && (
-              <p className="text-sm text-destructive" role="alert">
-                {formError}
-              </p>
-            )}
-
-            <motion.button
-              whileHover={{ scale: 1.005 }}
-              whileTap={{ scale: 0.99 }}
-              type="submit"
-              disabled={pending}
-              className="w-full rounded-lg bg-primary py-2.5 text-sm font-medium text-primary-foreground disabled:opacity-60"
-            >
-              {pending ? "Signing in…" : "Sign in"}
-            </motion.button>
-          </form>
-
-          {ssoButtons.length > 0 && (
-            <>
-              <div className="my-5 flex items-center gap-3">
-                <div className="h-px flex-1 bg-border" />
-                <span className="text-xs uppercase tracking-wide text-muted-foreground">
-                  or continue with
-                </span>
-                <div className="h-px flex-1 bg-border" />
-              </div>
-
-              <div className="grid grid-cols-2 gap-2">
-                {ssoButtons.map((b) => (
-                  <motion.button
-                    key={b.key}
-                    type="button"
-                    whileHover={{ scale: 1.01 }}
-                    whileTap={{ scale: 0.99 }}
-                    onClick={b.onClick}
-                    title={b.label}
-                    className="flex items-center justify-center gap-2 rounded-lg border border-border py-2.5 text-xs font-medium text-foreground transition-colors hover:bg-muted"
-                  >
-                    {b.icon}
-                    {b.label}
-                  </motion.button>
-                ))}
-              </div>
-            </>
-          )}
-
-          <p className="mt-6 text-center text-xs text-muted-foreground">
-            By continuing, you agree to the Terms and Privacy Policy.
-          </p>
-        </motion.div>
+      <div className="mb-6 text-center">
+        <h1 className="text-2xl font-bold text-foreground">Welcome back</h1>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Sign in to your account
+        </p>
       </div>
-    </div>
-  );
-}
 
-function Stat({ value, label }: { value: string; label: string }) {
-  return (
-    <div className="text-left">
-      <div className="text-xl font-bold text-white">{value}</div>
-      <div className="mt-0.5 text-xs text-white/60">{label}</div>
-    </div>
+      <form onSubmit={handleSubmit} className="space-y-4">
+        {error && (
+          <div className="flex items-center gap-2 rounded-md bg-destructive/10 p-3 text-sm text-destructive">
+            <AlertCircle className="size-4 shrink-0" />
+            {error}
+          </div>
+        )}
+
+        <div className="space-y-1.5">
+          <label
+            htmlFor="email"
+            className="text-sm font-medium text-foreground"
+          >
+            Email
+          </label>
+          <div className="flex h-11 items-center gap-2 rounded-lg border border-transparent bg-slate-100 px-3 transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20 dark:bg-slate-900">
+            <Mail className="size-4 shrink-0 text-muted-foreground" />
+            <input
+              id="email"
+              type="text"
+              autoFocus
+              autoComplete="email"
+              placeholder="name@company.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="flex-1 border-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+        </div>
+
+        <div className="space-y-1.5">
+          <label
+            htmlFor="password"
+            className="text-sm font-medium text-foreground"
+          >
+            Password
+          </label>
+          <div className="flex h-11 items-center gap-2 rounded-lg border border-transparent bg-slate-100 px-3 transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-primary/20 dark:bg-slate-900">
+            <Lock className="size-4 shrink-0 text-muted-foreground" />
+            <input
+              id="password"
+              type={showPassword ? "text" : "password"}
+              autoComplete="current-password"
+              placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              className="flex-1 border-0 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+            />
+            <button
+              type="button"
+              onClick={() => setShowPassword(!showPassword)}
+              className="text-muted-foreground transition-colors hover:text-foreground"
+              aria-label={showPassword ? "Hide password" : "Show password"}
+            >
+              {showPassword ? (
+                <EyeOff className="size-4" />
+              ) : (
+                <Eye className="size-4" />
+              )}
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between">
+          <label className="flex cursor-pointer items-center gap-2 text-sm">
+            <button
+              type="button"
+              onClick={() => setRememberMe(!rememberMe)}
+              className={`flex size-4 items-center justify-center rounded border transition-colors ${
+                rememberMe
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-background"
+              }`}
+              aria-label="Remember me"
+            >
+              {rememberMe && <Check className="size-3" />}
+            </button>
+            <span className="text-muted-foreground">Remember me</span>
+          </label>
+          <button
+            type="button"
+            onClick={() => setShowForgot(true)}
+            className="text-sm text-primary hover:underline"
+          >
+            Forgot?
+          </button>
+        </div>
+
+        <Button type="submit" className="h-11 w-full" disabled={loading}>
+          {loading && <Loader2 className="size-4 animate-spin" />}
+          {loading ? "Signing in..." : "Sign in"}
+        </Button>
+      </form>
+
+      {anySso && (
+        <>
+          <div className="my-5 flex items-center gap-3">
+            <div className="h-px flex-1 bg-border" />
+            <span className="text-xs text-muted-foreground">
+              or continue with
+            </span>
+            <div className="h-px flex-1 bg-border" />
+          </div>
+          <SsoButtons providers={providers} callbackUrl={callbackUrl} />
+        </>
+      )}
+
+      {showForgot && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => setShowForgot(false)}
+        >
+          <div
+            className="w-full max-w-sm rounded-lg border bg-background p-6 shadow-lg"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center gap-2">
+              <KeyRound className="size-4 text-primary" />
+              <h2 className="text-base font-semibold">Reset password</h2>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Ask an organization admin to generate a password reset link for
+              you from the Organization page.
+            </p>
+            <div className="mt-5 flex justify-end">
+              <Button size="sm" onClick={() => setShowForgot(false)}>
+                Got it
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }

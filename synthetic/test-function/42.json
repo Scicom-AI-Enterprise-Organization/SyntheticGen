@@ -1,0 +1,4432 @@
+{
+  "workflow_name": "conversation_data_governance_flow",
+  "description": "End-to-end data governance workflow for CPaaS/TaaS conversations, covering classification, policy evaluation, redaction, consent management, retention, export, and rollback.",
+  "domain": "taas_cpaas/conversations",
+  "shared_entities": {
+    "conversation_id": {
+      "type": "string",
+      "description": "Unique identifier of a conversation within the CPaaS platform"
+    },
+    "message_id": {
+      "type": "string",
+      "description": "Unique identifier of a single message within a conversation"
+    },
+    "policy_id": {
+      "type": "string",
+      "description": "Unique identifier of a data governance policy"
+    },
+    "governance_job_id": {
+      "type": "string",
+      "description": "Identifier of an asynchronous governance job (e.g., classification, redaction, export)"
+    },
+    "actor": {
+      "type": "object",
+      "description": "Entity performing an action for audit purposes",
+      "properties": {
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "system",
+            "user",
+            "admin",
+            "service_account"
+          ],
+          "description": "Type of actor initiating the action"
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "Identifier of the actor (e.g., user ID, service ID)"
+        },
+        "ip_address": {
+          "type": "string",
+          "description": "Optional IP address of the actor"
+        },
+        "user_agent": {
+          "type": "string",
+          "description": "Optional user agent string for the actor's client"
+        }
+      },
+      "required": [
+        "actor_type",
+        "actor_id"
+      ]
+    },
+    "consent_record": {
+      "type": "object",
+      "description": "Represents a consent event related to a conversation or participant",
+      "properties": {
+        "consent_id": {
+          "type": "string"
+        },
+        "subject_type": {
+          "type": "string",
+          "enum": [
+            "conversation",
+            "participant",
+            "external_id"
+          ]
+        },
+        "subject_id": {
+          "type": "string",
+          "description": "ID of the subject the consent applies to (conversation_id, participant_id, etc.)"
+        },
+        "purpose": {
+          "type": "string",
+          "description": "Purpose for which consent is granted or revoked"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "granted",
+            "revoked",
+            "expired"
+          ]
+        },
+        "granted_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "revoked_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Arbitrary metadata associated with the consent record"
+        }
+      },
+      "required": [
+        "consent_id",
+        "subject_type",
+        "subject_id",
+        "purpose",
+        "status",
+        "granted_at"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "classify_conversation_data",
+      "description": "Analyze and classify a conversation for sensitivity, PII presence, and data domains to determine applicable governance controls.",
+      "stage": "analyze",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "conversation_id": {
+            "type": "string",
+            "description": "Conversation to classify"
+          },
+          "scope": {
+            "type": "object",
+            "description": "Scope of the classification analysis",
+            "properties": {
+              "messages": {
+                "type": "object",
+                "description": "Message-level scope filters",
+                "properties": {
+                  "message_ids": {
+                    "type": "array",
+                    "description": "If provided, restrict analysis to specific messages",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "time_range": {
+                    "type": "object",
+                    "description": "Restrict analysis to messages within the specified time range",
+                    "properties": {
+                      "from": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "to": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    }
+                  }
+                }
+              },
+              "include_attachments": {
+                "type": "boolean",
+                "description": "Whether to include attachments in classification",
+                "default": false
+              }
+            }
+          },
+          "classification_profile": {
+            "type": "object",
+            "description": "Configuration for how classification should be performed",
+            "properties": {
+              "pii_detectors": {
+                "type": "array",
+                "description": "PII detector profiles to apply",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "generic_pii",
+                    "financial",
+                    "healthcare",
+                    "credentials",
+                    "location",
+                    "custom"
+                  ]
+                }
+              },
+              "sensitivity_levels": {
+                "type": "array",
+                "description": "Sensitivity levels to classify into",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "public",
+                    "internal",
+                    "confidential",
+                    "restricted"
+                  ]
+                }
+              },
+              "custom_detectors": {
+                "type": "array",
+                "description": "Custom detector configurations by ID or name",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "detector_id": {
+                      "type": "string"
+                    },
+                    "threshold": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  },
+                  "required": [
+                    "detector_id"
+                  ]
+                }
+              },
+              "max_tokens": {
+                "type": "integer",
+                "description": "Max number of tokens to inspect to limit resource usage"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor"
+          },
+          "async": {
+            "type": "boolean",
+            "description": "If true, run classification asynchronously and return a governance_job_id",
+            "default": true
+          }
+        },
+        "required": [
+          "conversation_id",
+          "actor"
+        ]
+      },
+      "returns": "If async=true: governance_job_id and queued status; if async=false: classification summary with detected PII types, sensitivity level, and suggested policies."
+    },
+    {
+      "name": "evaluate_conversation_policies",
+      "description": "Evaluate data governance policies for a conversation based on its metadata, classification results, and jurisdiction.",
+      "stage": "policy_eval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "conversation_id": {
+            "type": "string"
+          },
+          "policy_scope": {
+            "type": "object",
+            "description": "Scope of policy evaluation",
+            "properties": {
+              "policy_ids": {
+                "type": "array",
+                "description": "Specific policy IDs to evaluate; if omitted, all applicable policies are evaluated",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "jurisdictions": {
+                "type": "array",
+                "description": "List of jurisdictions (e.g., regions, countries) that may apply",
+                "items": {
+                  "type": "string",
+                  "examples": [
+                    "EU",
+                    "US-CA",
+                    "BR",
+                    "IN"
+                  ]
+                }
+              },
+              "data_subject_regions": {
+                "type": "array",
+                "description": "Regions of data subjects involved in the conversation",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "inputs": {
+            "type": "object",
+            "description": "Optional pre-computed inputs that can be used during policy evaluation",
+            "properties": {
+              "classification_job_id": {
+                "type": "string",
+                "description": "Job ID from classify_conversation_data if classification was asynchronous"
+              },
+              "classification_snapshot": {
+                "type": "object",
+                "description": "Inline classification result if already available"
+              },
+              "consent_state": {
+                "type": "array",
+                "description": "Existing consent records relevant to this conversation",
+                "items": {
+                  "$ref": "#/shared_entities/consent_record"
+                }
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor"
+          },
+          "evaluation_mode": {
+            "type": "string",
+            "enum": [
+              "full",
+              "incremental"
+            ],
+            "description": "Full evaluation considers all policies; incremental only evaluates potential changes from new inputs",
+            "default": "full"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "actor"
+        ]
+      },
+      "returns": "Policy evaluation report containing matched policies, required actions (e.g., redact, restrict_export), and justification for each decision."
+    },
+    {
+      "name": "enforce_redaction_on_conversation",
+      "description": "Apply redaction rules to messages and attachments in a conversation according to evaluated policies.",
+      "stage": "enforce",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "conversation_id": {
+            "type": "string"
+          },
+          "redaction_plan": {
+            "type": "object",
+            "description": "Explicit redaction instructions or rules to apply",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "auto",
+                  "manual"
+                ],
+                "description": "Auto uses policy engine decisions; manual uses provided rules only"
+              },
+              "rules": {
+                "type": "array",
+                "description": "List of redaction rules to apply",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "target": {
+                      "type": "string",
+                      "enum": [
+                        "message_body",
+                        "metadata",
+                        "attachment",
+                        "all"
+                      ]
+                    },
+                    "pattern_type": {
+                      "type": "string",
+                      "enum": [
+                        "pii_type",
+                        "regex",
+                        "span_range",
+                        "field"
+                      ]
+                    },
+                    "pattern_value": {
+                      "type": "string",
+                      "description": "PII type, regex, or field name depending on pattern_type"
+                    },
+                    "masking_strategy": {
+                      "type": "string",
+                      "enum": [
+                        "full",
+                        "partial",
+                        "tokenize",
+                        "hash",
+                        "remove"
+                      ]
+                    },
+                    "message_filter": {
+                      "type": "object",
+                      "description": "Filter specifying which messages the rule applies to",
+                      "properties": {
+                        "message_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "roles": {
+                          "type": "array",
+                          "description": "Only apply to messages from certain roles",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "agent",
+                              "customer",
+                              "system",
+                              "bot"
+                            ]
+                          }
+                        },
+                        "created_before": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "created_after": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "target",
+                    "pattern_type",
+                    "masking_strategy"
+                  ]
+                }
+              },
+              "dry_run": {
+                "type": "boolean",
+                "description": "If true, generate a redaction preview without modifying stored data",
+                "default": false
+              }
+            }
+          },
+          "policy_reference": {
+            "type": "object",
+            "description": "Reference to policies or evaluations that triggered this enforcement",
+            "properties": {
+              "policy_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "evaluation_id": {
+                "type": "string",
+                "description": "Identifier for a prior policy evaluation run"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor"
+          },
+          "async": {
+            "type": "boolean",
+            "default": true,
+            "description": "Run redaction as an asynchronous job if true"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "actor"
+        ]
+      },
+      "returns": "If async=true: governance_job_id and queued status; if async=false: summary of redactions applied or preview details including counts and affected messages."
+    },
+    {
+      "name": "manage_consent_for_conversation",
+      "description": "Create or update consent records associated with a conversation or its participants for specific processing purposes.",
+      "stage": "consent",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string",
+            "enum": [
+              "grant",
+              "revoke",
+              "update"
+            ],
+            "description": "Type of consent operation to perform"
+          },
+          "conversation_id": {
+            "type": "string",
+            "description": "Conversation related to the consent event (optional for some subject types)"
+          },
+          "subject": {
+            "type": "object",
+            "description": "Subject the consent applies to",
+            "properties": {
+              "subject_type": {
+                "type": "string",
+                "enum": [
+                  "conversation",
+                  "participant",
+                  "external_id"
+                ]
+              },
+              "subject_id": {
+                "type": "string",
+                "description": "ID of the subject (e.g., participant_id, external user identifier)"
+              },
+              "participant_role": {
+                "type": "string",
+                "enum": [
+                  "customer",
+                  "agent",
+                  "bot",
+                  "other"
+                ]
+              }
+            },
+            "required": [
+              "subject_type",
+              "subject_id"
+            ]
+          },
+          "consent_details": {
+            "type": "object",
+            "description": "Details of the consent event",
+            "properties": {
+              "purpose": {
+                "type": "string",
+                "description": "Purpose of processing (e.g., analytics, training, support_history)"
+              },
+              "legal_basis": {
+                "type": "string",
+                "enum": [
+                  "consent",
+                  "contract",
+                  "legitimate_interest",
+                  "legal_obligation",
+                  "vital_interest",
+                  "public_task"
+                ]
+              },
+              "valid_from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "channels": {
+                "type": "array",
+                "description": "Channels for which consent applies",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "sms",
+                    "voice",
+                    "chat",
+                    "email",
+                    "social"
+                  ]
+                }
+              },
+              "evidence": {
+                "type": "object",
+                "description": "Evidence of consent such as captured text or audio reference",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "text",
+                      "audio",
+                      "document",
+                      "other"
+                    ]
+                  },
+                  "reference": {
+                    "type": "string",
+                    "description": "Reference to the stored evidence (e.g., URL, document_id)"
+                  },
+                  "metadata": {
+                    "type": "object"
+                  }
+                }
+              }
+            },
+            "required": [
+              "purpose",
+              "legal_basis",
+              "valid_from"
+            ]
+          },
+          "existing_consent_id": {
+            "type": "string",
+            "description": "Existing consent_id to update or revoke, required for update/revoke operations"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor"
+          }
+        },
+        "required": [
+          "operation",
+          "subject",
+          "consent_details",
+          "actor"
+        ]
+      },
+      "returns": "Updated consent_record including consent_id, status, timestamps, and any prior record state if modified."
+    },
+    {
+      "name": "configure_conversation_retention",
+      "description": "Configure retention and deletion rules for a conversation, including overrides of global or policy-based defaults.",
+      "stage": "configure",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "conversation_id": {
+            "type": "string"
+          },
+          "retention_policy": {
+            "type": "object",
+            "description": "Retention policy configuration for this conversation",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "inherit",
+                  "override",
+                  "suspend_deletion"
+                ],
+                "description": "inherit uses default policies, override sets custom rules, suspend_deletion pauses deletions"
+              },
+              "ttl_days": {
+                "type": "integer",
+                "description": "Time-to-live in days after conversation closure before deletion",
+                "minimum": 1
+              },
+              "hard_delete": {
+                "type": "boolean",
+                "description": "If true, data is irreversibly deleted at end of retention",
+                "default": true
+              },
+              "soft_delete_grace_period_days": {
+                "type": "integer",
+                "description": "If hard_delete=false, number of days conversation remains recoverable after deletion"
+              },
+              "legal_hold": {
+                "type": "object",
+                "description": "Optional legal hold preventing deletion",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "expires_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for changing the retention settings"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "retention_policy",
+          "actor"
+        ]
+      },
+      "returns": "Updated retention configuration including effective TTL, legal hold status, and information about inherited vs overridden settings."
+    },
+    {
+      "name": "export_conversation_data",
+      "description": "Export conversation data in a governance-compliant format for data subject access requests or audit purposes.",
+      "stage": "export",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "conversation_id": {
+            "type": "string"
+          },
+          "export_profile": {
+            "type": "object",
+            "description": "Export configuration and constraints",
+            "properties": {
+              "format": {
+                "type": "string",
+                "enum": [
+                  "json",
+                  "pdf",
+                  "csv",
+                  "html"
+                ]
+              },
+              "redaction_level": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "policy_compliant",
+                  "strict_pii",
+                  "custom"
+                ],
+                "description": "Level of redaction to apply to exported data"
+              },
+              "include": {
+                "type": "object",
+                "description": "What to include in export",
+                "properties": {
+                  "messages": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "attachments": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "metadata": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "audit_log": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "policy_decisions": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              },
+              "delivery": {
+                "type": "object",
+                "description": "How exported data should be delivered or stored",
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "download_url",
+                      "email",
+                      "object_store"
+                    ]
+                  },
+                  "destination": {
+                    "type": "object",
+                    "description": "Destination details depending on method",
+                    "properties": {
+                      "email": {
+                        "type": "string",
+                        "format": "email"
+                      },
+                      "bucket": {
+                        "type": "string",
+                        "description": "Object store bucket or container name"
+                      },
+                      "path": {
+                        "type": "string",
+                        "description": "Object path or key within the bucket"
+                      }
+                    }
+                  }
+                }
+              },
+              "custom_redaction_rules": {
+                "type": "array",
+                "description": "Optional additional redaction rules only for this export",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string"
+                    },
+                    "strategy": {
+                      "type": "string",
+                      "enum": [
+                        "remove",
+                        "mask",
+                        "hash"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "strategy"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "format"
+            ]
+          },
+          "request_context": {
+            "type": "object",
+            "description": "Context about the export request (e.g., DSAR identifier)",
+            "properties": {
+              "request_type": {
+                "type": "string",
+                "enum": [
+                  "dsar_access",
+                  "dsar_portability",
+                  "internal_audit",
+                  "regulatory_request",
+                  "other"
+                ]
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "data_subject_identifier": {
+                "type": "string",
+                "description": "Identifier of the data subject, if applicable"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor"
+          },
+          "async": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "conversation_id",
+          "export_profile",
+          "actor"
+        ]
+      },
+      "returns": "If async=true: governance_job_id and queued status; if async=false: export artifact metadata, including URLs or storage references and applied redaction summary."
+    },
+    {
+      "name": "get_governance_job_status",
+      "description": "Retrieve status and results for a governance-related asynchronous job such as classification, redaction, or export.",
+      "stage": "status",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "governance_job_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Optional additional details to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "logs",
+                "partial_results",
+                "errors",
+                "artifacts"
+              ]
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor"
+          }
+        },
+        "required": [
+          "governance_job_id",
+          "actor"
+        ]
+      },
+      "returns": "Governance job status including state (queued, running, completed, failed), progress, error details if any, and references to result artifacts (e.g., export URL, classification snapshot)."
+    },
+    {
+      "name": "retry_governance_job",
+      "description": "Retry a failed or expired governance job such as redaction or export, optionally adjusting parameters.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "governance_job_id": {
+            "type": "string"
+          },
+          "retry_strategy": {
+            "type": "object",
+            "description": "Controls how the retry is performed",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "resume",
+                  "restart"
+                ],
+                "description": "Resume continues from last checkpoint; restart begins from scratch"
+              },
+              "max_attempts": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "backoff_policy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "linear",
+                  "exponential"
+                ]
+              },
+              "backoff_base_seconds": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "override_parameters": {
+            "type": "object",
+            "description": "Optional subset of parameters to override for the new attempt; structure depends on original job type"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor"
+          }
+        },
+        "required": [
+          "governance_job_id",
+          "actor"
+        ]
+      },
+      "returns": "New governance_job_id for the retried job, along with linkage to the original job and initial status."
+    },
+    {
+      "name": "rollback_conversation_changes",
+      "description": "Rollback previously applied governance changes such as redactions or deletions when soft-recovery is available.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "conversation_id": {
+            "type": "string"
+          },
+          "rollback_plan": {
+            "type": "object",
+            "description": "Details of what to rollback",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "governance_job",
+                  "audit_version",
+                  "timestamp"
+                ]
+              },
+              "governance_job_id": {
+                "type": "string",
+                "description": "If source=governance_job, specify the job whose changes should be rolled back"
+              },
+              "audit_version_id": {
+                "type": "string",
+                "description": "If source=audit_version, use this audit snapshot as rollback base"
+              },
+              "rollback_to_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "If source=timestamp, rollback state to this approximate time"
+              },
+              "scope": {
+                "type": "object",
+                "description": "Limit rollback to specific parts of the conversation",
+                "properties": {
+                  "messages": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "description": "message_id"
+                    }
+                  },
+                  "attachments": {
+                    "type": "boolean"
+                  },
+                  "metadata_fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "dry_run": {
+                "type": "boolean",
+                "default": false,
+                "description": "If true, only simulate rollback and return a diff"
+              }
+            },
+            "required": [
+              "source"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason explaining why rollback is required"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor"
+          },
+          "async": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "conversation_id",
+          "rollback_plan",
+          "actor"
+        ]
+      },
+      "returns": "If async=true: governance_job_id and status; if async=false: rollback summary including changes reverted, conflicts, and items that could not be restored."
+    },
+    {
+      "name": "get_conversation_governance_state",
+      "description": "Retrieve the current governance-related state for a conversation, including classification, policy decisions, and active holds.",
+      "stage": "status",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "conversation_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Specific governance aspects to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "classification",
+                "policies",
+                "retention",
+                "consent",
+                "legal_hold",
+                "redaction_history",
+                "audit_log"
+              ]
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "actor"
+        ]
+      },
+      "returns": "Snapshot of governance state for the conversation, including classification labels, applied policies, retention config, consent records, and recent enforcement actions."
+    },
+    {
+      "name": "list_conversations_for_governance",
+      "description": "Search and list conversations that match specified governance-related filters for bulk operations or reporting.",
+      "stage": "search",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "description": "Filter criteria for selecting conversations",
+            "properties": {
+              "created_after": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_before": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "has_pii": {
+                "type": "boolean",
+                "description": "Whether conversation is classified as containing PII"
+              },
+              "sensitivity_levels": {
+                "type": "array",
+                "description": "Filter by classification sensitivity levels",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "public",
+                    "internal",
+                    "confidential",
+                    "restricted"
+                  ]
+                }
+              },
+              "policy_ids": {
+                "type": "array",
+                "description": "Conversations where these policies apply or have been evaluated",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "retention_mode": {
+                "type": "string",
+                "enum": [
+                  "inherit",
+                  "override",
+                  "suspend_deletion"
+                ]
+              },
+              "legal_hold_active": {
+                "type": "boolean"
+              },
+              "channel_types": {
+                "type": "array",
+                "description": "Channels used in conversations",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "sms",
+                    "voice",
+                    "chat",
+                    "email",
+                    "social"
+                  ]
+                }
+              },
+              "org_unit_ids": {
+                "type": "array",
+                "description": "Organizational units or tenants these conversations belong to",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "consent_required_but_missing": {
+                "type": "boolean",
+                "description": "Filter conversations where consent is required by policy but not present"
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "sensitivity",
+              "retention_end",
+              "last_governance_action"
+            ]
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor"
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Paginated list of conversations with summary governance metadata (sensitivity, retention, policy flags) and cursors for further navigation."
+    },
+    {
+      "name": "apply_bulk_governance_action",
+      "description": "Apply a bulk governance action such as mass redaction, retention changes, or export across multiple conversations.",
+      "stage": "bulk_enforce",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "description": "Defines which conversations are targeted by this bulk action",
+            "properties": {
+              "selection_mode": {
+                "type": "string",
+                "enum": [
+                  "explicit_ids",
+                  "search_query"
+                ]
+              },
+              "conversation_ids": {
+                "type": "array",
+                "description": "Explicit list of conversation IDs if selection_mode=explicit_ids",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "search_filters": {
+                "type": "object",
+                "description": "Filters compatible with list_conversations_for_governance if selection_mode=search_query",
+                "properties": {
+                  "has_pii": {
+                    "type": "boolean"
+                  },
+                  "sensitivity_levels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "public",
+                        "internal",
+                        "confidential",
+                        "restricted"
+                      ]
+                    }
+                  },
+                  "policy_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "created_before": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              }
+            },
+            "required": [
+              "selection_mode"
+            ]
+          },
+          "action": {
+            "type": "object",
+            "description": "Bulk governance action to perform",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "redact",
+                  "update_retention",
+                  "export",
+                  "apply_legal_hold"
+                ]
+              },
+              "redaction_options": {
+                "type": "object",
+                "description": "Options for type=redact",
+                "properties": {
+                  "redaction_level": {
+                    "type": "string",
+                    "enum": [
+                      "policy_compliant",
+                      "strict_pii"
+                    ]
+                  },
+                  "dry_run": {
+                    "type": "boolean",
+                    "default": false
+                  }
+                }
+              },
+              "retention_options": {
+                "type": "object",
+                "description": "Options for type=update_retention",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "inherit",
+                      "override",
+                      "suspend_deletion"
+                    ]
+                  },
+                  "ttl_days": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "export_options": {
+                "type": "object",
+                "description": "Options for type=export",
+                "properties": {
+                  "format": {
+                    "type": "string",
+                    "enum": [
+                      "json",
+                      "csv"
+                    ]
+                  },
+                  "delivery_bucket": {
+                    "type": "string"
+                  },
+                  "max_conversations": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "legal_hold_options": {
+                "type": "object",
+                "description": "Options for type=apply_legal_hold",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "expires_at": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "safety_limits": {
+            "type": "object",
+            "description": "Limits to avoid accidentally impacting too many conversations",
+            "properties": {
+              "max_conversations": {
+                "type": "integer",
+                "description": "Upper bound on number of conversations to affect"
+              },
+              "sample_first": {
+                "type": "boolean",
+                "description": "If true, only act on a small sample and return preview",
+                "default": false
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor"
+          },
+          "async": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "target",
+          "action",
+          "actor"
+        ]
+      },
+      "returns": "Bulk governance job metadata including governance_job_id, estimated number of affected conversations, and whether operation is in sample mode or full execution."
+    },
+    {
+      "name": "audit_governance_activity",
+      "description": "Query the audit trail of governance-related actions taken on conversations for compliance and oversight.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "description": "Audit event filters",
+            "properties": {
+              "conversation_id": {
+                "type": "string"
+              },
+              "actor_id": {
+                "type": "string"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "system",
+                  "user",
+                  "admin",
+                  "service_account"
+                ]
+              },
+              "event_types": {
+                "type": "array",
+                "description": "Types of governance events to retrieve",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "classification",
+                    "policy_evaluation",
+                    "redaction",
+                    "retention_change",
+                    "consent_change",
+                    "export",
+                    "rollback",
+                    "bulk_action"
+                  ]
+                }
+              },
+              "created_after": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_before": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "has_errors": {
+                "type": "boolean"
+              },
+              "governance_job_id": {
+                "type": "string"
+              }
+            }
+          },
+          "include_details": {
+            "type": "boolean",
+            "description": "If true, include detailed payload snapshots when available",
+            "default": false
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor"
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Paginated list of audit events including timestamps, actor details, event type, target conversation, governance_job_id (if applicable), and summary of the change."
+    },
+    {
+      "name": "bulk_import_conversations",
+      "description": "Bulk-import multiple conversations from an upstream source with validation and idempotency keys.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "import_source": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "json",
+                  "parquet",
+                  "kafka",
+                  "s3",
+                  "api"
+                ]
+              },
+              "location": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "format_options": {
+                "type": "object",
+                "properties": {
+                  "delimiter": {
+                    "type": "string"
+                  },
+                  "encoding": {
+                    "type": "string"
+                  },
+                  "header_row": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "required": [
+              "type",
+              "location"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "description": "Field mapping from source to canonical schema",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_id": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object",
+                  "additionalProperties": true
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "batch_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000,
+            "default": 500
+          },
+          "on_error": {
+            "type": "string",
+            "enum": [
+              "skip",
+              "abort",
+              "quarantine"
+            ],
+            "default": "quarantine"
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "import_source",
+          "actor"
+        ]
+      },
+      "returns": "A bulk-import job descriptor with counts of accepted, rejected, and quarantined conversations, plus a job_id for follow-up."
+    },
+    {
+      "name": "bulk_update_conversations",
+      "description": "Apply a partial update to a batch of conversations matched by filter or id list.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/conversation_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "patch": {
+            "type": "object",
+            "description": "Fields to patch on each matched item",
+            "properties": {
+              "set": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "unset": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "add_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "remove_tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "preconditions": {
+            "type": "object",
+            "description": "Optional optimistic-concurrency preconditions",
+            "properties": {
+              "if_match_version": {
+                "type": "string"
+              },
+              "expected_status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "max_items": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1000
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "patch",
+          "actor"
+        ]
+      },
+      "returns": "Summary of matched, updated, and skipped conversations with per-item error details."
+    },
+    {
+      "name": "bulk_archive_conversations",
+      "description": "Archive (soft-delete) a batch of conversations with retention metadata and audit reasons.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/conversation_id"
+            },
+            "minItems": 1
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retain_until": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "legal_hold": {
+            "type": "boolean",
+            "default": false
+          },
+          "tombstone_metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "ids",
+          "reason",
+          "actor"
+        ]
+      },
+      "returns": "Per-id archive results with new lifecycle state."
+    },
+    {
+      "name": "bulk_export_conversations",
+      "description": "Export a filtered set of conversations to a downstream destination (S3, GCS, blob, SFTP).",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Projection; empty means all fields"
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "csv",
+              "parquet",
+              "ndjson"
+            ],
+            "default": "json"
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp",
+                  "http"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "compression": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "gzip",
+                  "zstd"
+                ],
+                "default": "none"
+              }
+            },
+            "required": [
+              "type",
+              "uri"
+            ]
+          },
+          "chunk_size_mb": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1024,
+            "default": 64
+          },
+          "include_audit_columns": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "sse-s3",
+                  "sse-kms",
+                  "client-side"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "destination",
+          "actor"
+        ]
+      },
+      "returns": "Export job handle including job_id, expected object URIs, row count, and signed download URLs when applicable."
+    },
+    {
+      "name": "search_conversations_advanced",
+      "description": "Advanced faceted search across conversations with full-text, structured filters, aggregations, and sort.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "Full-text query string with Lucene-like syntax"
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "gte",
+                    "lt",
+                    "lte",
+                    "contains",
+                    "starts_with",
+                    "exists"
+                  ]
+                },
+                "value": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "array",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "aggregations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "terms",
+                    "histogram",
+                    "date_histogram",
+                    "stats",
+                    "cardinality"
+                  ]
+                },
+                "field": {
+                  "type": "string"
+                },
+                "interval": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "name",
+                "type",
+                "field"
+              ]
+            }
+          },
+          "highlight_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": []
+      },
+      "returns": "Search response with conversations hits, total count, aggregation buckets, and a next-cursor."
+    },
+    {
+      "name": "create_conversation_subscription",
+      "description": "Create a subscription that fires webhooks or notifications on conversation lifecycle events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "created",
+                "updated",
+                "status_changed",
+                "deleted",
+                "escalated",
+                "resolved",
+                "custom"
+              ]
+            },
+            "minItems": 1
+          },
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "target": {
+            "type": "object",
+            "description": "Notification target descriptor",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "email",
+                  "sms",
+                  "webhook",
+                  "push",
+                  "slack",
+                  "teams",
+                  "pagerduty"
+                ]
+              },
+              "address": {
+                "type": "string"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "secret_ref": {
+                "type": "string",
+                "description": "Reference to a stored secret"
+              }
+            },
+            "required": [
+              "type",
+              "address"
+            ]
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "retry_policy": {
+                "type": "object",
+                "properties": {
+                  "max_attempts": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  },
+                  "backoff": {
+                    "type": "string",
+                    "enum": [
+                      "linear",
+                      "exponential",
+                      "fixed"
+                    ],
+                    "default": "exponential"
+                  },
+                  "initial_delay_seconds": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "default": 5
+                  }
+                }
+              },
+              "rate_limit_per_minute": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "batch_size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            }
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "events",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "The created subscription including subscription_id, active state, and last_delivery info (initially null)."
+    },
+    {
+      "name": "list_conversation_subscriptions",
+      "description": "List existing conversation subscriptions with optional filters and pagination.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "target_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of subscription objects including delivery health stats."
+    },
+    {
+      "name": "deactivate_conversation_subscription",
+      "description": "Deactivate or delete a conversation subscription and optionally flush pending deliveries.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "delete"
+            ],
+            "default": "pause"
+          },
+          "flush_pending": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "subscription_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated subscription state and the number of pending deliveries flushed or kept."
+    },
+    {
+      "name": "get_conversation_audit_log",
+      "description": "Return the audit/change log for a single conversation with field-level diffs and actor info.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/conversation_id"
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "include_field_diff": {
+            "type": "boolean",
+            "default": true
+          },
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Chronological list of audit events with before/after diffs, actor, and source IP/system."
+    },
+    {
+      "name": "search_audit_events",
+      "description": "Search audit events across conversations for compliance and forensic review.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "actor_user_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "object_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/conversation_id"
+                }
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              },
+              "source_systems": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated audit-event hits with cross-entity references."
+    },
+    {
+      "name": "schedule_conversation_job",
+      "description": "Create a recurring schedule that triggers a named operation on a target set of conversations.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string",
+            "description": "Named operation to invoke (e.g., refresh, recompute, export, reconcile)"
+          },
+          "target_selector": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/conversation_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "description": "Filter constraints",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "description": "Free-text search across indexed fields"
+                  },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "labels": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "Key/value labels to match"
+                  },
+                  "created_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "updated_between": {
+                    "type": "object",
+                    "description": "Time window for filtering or scoping the operation",
+                    "properties": {
+                      "start": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "end": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "timezone": {
+                        "type": "string",
+                        "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                      }
+                    }
+                  },
+                  "owner_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "parameters": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Parameters passed to each invocation"
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Schedule definition",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "once",
+                  "cron",
+                  "interval",
+                  "calendar"
+                ]
+              },
+              "cron": {
+                "type": "string",
+                "description": "Cron expression (UTC by default)"
+              },
+              "interval_seconds": {
+                "type": "integer",
+                "minimum": 30
+              },
+              "start_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string"
+              },
+              "max_runs": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "jitter_seconds": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "concurrency_policy": {
+            "type": "string",
+            "enum": [
+              "allow",
+              "forbid",
+              "replace"
+            ],
+            "default": "forbid"
+          },
+          "notify_on": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "success",
+                "failure",
+                "skipped"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "operation",
+          "schedule",
+          "actor"
+        ]
+      },
+      "returns": "The created scheduled-job descriptor with job_id, next_run_at, and current status."
+    },
+    {
+      "name": "list_conversation_jobs",
+      "description": "List scheduled or in-flight jobs related to conversations with status filtering and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "running",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "skipped"
+                  ]
+                }
+              },
+              "operation_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "include_runs": {
+            "type": "boolean",
+            "default": false
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated list of conversation jobs and their last run summaries."
+    },
+    {
+      "name": "cancel_conversation_job",
+      "description": "Cancel a scheduled or in-flight conversation job, optionally interrupting running steps.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_id": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "job_id",
+          "actor"
+        ]
+      },
+      "returns": "Updated job status with cancellation timestamp and any side effects."
+    },
+    {
+      "name": "simulate_conversation_change",
+      "description": "Simulate a proposed change against a conversation (or batch) without committing; returns expected diffs and warnings.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/conversation_id"
+          },
+          "proposed_change": {
+            "type": "object",
+            "description": "Polymorphic change object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "patch",
+                  "replace",
+                  "transition",
+                  "policy_apply"
+                ]
+              },
+              "patch": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "replace": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "transition_to": {
+                "type": "string"
+              },
+              "policy_id": {
+                "$ref": "#/shared_entities/policy_id"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "evaluation_options": {
+            "type": "object",
+            "properties": {
+              "evaluate_rules": {
+                "type": "boolean",
+                "default": true
+              },
+              "evaluate_dependencies": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_cost_impact": {
+                "type": "boolean",
+                "default": false
+              },
+              "include_sla_impact": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "proposed_change",
+          "actor"
+        ]
+      },
+      "returns": "Simulation result with predicted diffs, rule violations, cost/SLA impact, and a confidence score."
+    },
+    {
+      "name": "request_conversation_approval",
+      "description": "Open an approval request for a sensitive conversation change requiring reviewer sign-off.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/conversation_id"
+          },
+          "change_summary": {
+            "type": "string"
+          },
+          "change_payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "user_id": {
+                  "type": "string"
+                },
+                "role_required": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "user_id"
+              ]
+            },
+            "minItems": 1
+          },
+          "quorum": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "escalation_policy_id": {
+            "$ref": "#/shared_entities/policy_id"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "approvers",
+          "actor"
+        ]
+      },
+      "returns": "Created approval request with approval_request_id, current state, and notification targets."
+    },
+    {
+      "name": "submit_conversation_approval_decision",
+      "description": "Submit an approve, reject, or request-changes decision against a conversation approval request.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_request_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "request_changes"
+            ]
+          },
+          "comment": {
+            "type": "string"
+          },
+          "signed_evidence": {
+            "type": "object",
+            "properties": {
+              "signature": {
+                "type": "string"
+              },
+              "signed_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "method": {
+                "type": "string",
+                "enum": [
+                  "totp",
+                  "webauthn",
+                  "sso",
+                  "manual"
+                ]
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "approval_request_id",
+          "decision",
+          "actor"
+        ]
+      },
+      "returns": "Updated approval request state including quorum progress and final decision (if reached)."
+    },
+    {
+      "name": "add_conversation_comment",
+      "description": "Append a comment or annotation to a conversation, optionally attaching files or mentioning users.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/conversation_id"
+          },
+          "body": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "internal",
+              "tenant",
+              "public"
+            ],
+            "default": "internal"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "file_name": {
+                  "type": "string"
+                },
+                "content_type": {
+                  "type": "string"
+                },
+                "size_bytes": {
+                  "type": "integer"
+                },
+                "uri": {
+                  "type": "string"
+                },
+                "checksum_sha256": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "file_name",
+                "uri"
+              ]
+            }
+          },
+          "parent_comment_id": {
+            "type": "string"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "body",
+          "actor"
+        ]
+      },
+      "returns": "The created comment object with comment_id, timestamps, and visibility-resolved permissions."
+    },
+    {
+      "name": "list_conversation_comments",
+      "description": "List comments and annotations attached to a conversation, with optional thread expansion.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/conversation_id"
+          },
+          "include_threads": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_attachments": {
+            "type": "boolean",
+            "default": true
+          },
+          "visibility_in": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "internal",
+                "tenant",
+                "public"
+              ]
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        },
+        "required": [
+          "id"
+        ]
+      },
+      "returns": "Paginated comment list with thread tree and attachment metadata."
+    },
+    {
+      "name": "snapshot_conversation",
+      "description": "Create a point-in-time immutable snapshot of a conversation for forensic, rollback, or compliance use.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/conversation_id"
+          },
+          "label": {
+            "type": "string"
+          },
+          "include_related": {
+            "type": "array",
+            "description": "Optional related-entity inclusion list",
+            "items": {
+              "type": "string"
+            }
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "kms",
+                  "client"
+                ]
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "retention": {
+            "type": "object",
+            "properties": {
+              "policy": {
+                "type": "string",
+                "enum": [
+                  "short",
+                  "standard",
+                  "long",
+                  "indefinite"
+                ]
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "actor"
+        ]
+      },
+      "returns": "Snapshot descriptor with snapshot_id, checksum, byte size, and retention expiry."
+    },
+    {
+      "name": "restore_conversation_snapshot",
+      "description": "Restore a conversation from a previously created snapshot, optionally as a new copy.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "overwrite",
+                  "new_copy",
+                  "merge"
+                ]
+              },
+              "target_id": {
+                "$ref": "#/shared_entities/conversation_id"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "fail",
+              "skip_existing",
+              "overwrite"
+            ],
+            "default": "fail"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "target",
+          "actor"
+        ]
+      },
+      "returns": "Restore job descriptor including resulting id and any per-field conflicts that were resolved."
+    },
+    {
+      "name": "get_conversation_metrics",
+      "description": "Compute KPI metrics over conversations (counts, MTTR, SLA compliance, error rates) for a time window.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for filtering or scoping the operation",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+              }
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "count",
+                "open_count",
+                "closed_count",
+                "mttr_seconds",
+                "mttd_seconds",
+                "sla_compliance_pct",
+                "error_rate",
+                "p50_latency_ms",
+                "p95_latency_ms",
+                "p99_latency_ms",
+                "throughput_per_minute",
+                "backlog_age_seconds"
+              ]
+            },
+            "minItems": 1
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "interval": {
+            "type": "string",
+            "enum": [
+              "1m",
+              "5m",
+              "15m",
+              "1h",
+              "1d",
+              "1w"
+            ],
+            "default": "1h"
+          }
+        },
+        "required": [
+          "metrics"
+        ]
+      },
+      "returns": "Time-bucketed metric series and aggregate KPIs for the matched conversations."
+    },
+    {
+      "name": "build_conversation_dashboard",
+      "description": "Persist a named dashboard composed of widgets (charts, tables, single-stat) over conversations data.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "owner_id": {
+            "type": "string"
+          },
+          "widgets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "line",
+                    "bar",
+                    "pie",
+                    "table",
+                    "single_stat",
+                    "heatmap"
+                  ]
+                },
+                "query": {
+                  "type": "object",
+                  "properties": {
+                    "metrics": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "filter": {
+                      "type": "object",
+                      "description": "Filter constraints",
+                      "properties": {
+                        "text": {
+                          "type": "string",
+                          "description": "Free-text search across indexed fields"
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "labels": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "string"
+                          },
+                          "description": "Key/value labels to match"
+                        },
+                        "created_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "updated_between": {
+                          "type": "object",
+                          "description": "Time window for filtering or scoping the operation",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "timezone": {
+                              "type": "string",
+                              "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                            }
+                          }
+                        },
+                        "owner_ids": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "group_by": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "time_range": {
+                      "type": "object",
+                      "description": "Time window for filtering or scoping the operation",
+                      "properties": {
+                        "start": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "end": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "timezone": {
+                          "type": "string",
+                          "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "metrics"
+                  ]
+                },
+                "position": {
+                  "type": "object",
+                  "properties": {
+                    "x": {
+                      "type": "integer"
+                    },
+                    "y": {
+                      "type": "integer"
+                    },
+                    "w": {
+                      "type": "integer"
+                    },
+                    "h": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "title",
+                "type",
+                "query"
+              ]
+            },
+            "minItems": 1
+          },
+          "refresh_seconds": {
+            "type": "integer",
+            "minimum": 10,
+            "default": 60
+          },
+          "shared_with": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "widgets",
+          "actor"
+        ]
+      },
+      "returns": "Created dashboard descriptor with dashboard_id, shareable URL, and computed first-render preview."
+    },
+    {
+      "name": "upsert_conversation_policy",
+      "description": "Create or update a policy/rule used to govern conversation behavior, validation, or routing.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "$ref": "#/shared_entities/policy_id"
+          },
+          "name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "expression": {
+                  "type": "string",
+                  "description": "CEL or JEXL expression"
+                },
+                "action": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "allow",
+                        "deny",
+                        "route",
+                        "transform",
+                        "notify",
+                        "tag"
+                      ]
+                    },
+                    "params": {
+                      "type": "object",
+                      "additionalProperties": true
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "expression",
+                "action"
+              ]
+            },
+            "minItems": 1
+          },
+          "version_strategy": {
+            "type": "string",
+            "enum": [
+              "bump_minor",
+              "bump_major",
+              "replace"
+            ],
+            "default": "bump_minor"
+          },
+          "effective_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "rules",
+          "actor"
+        ]
+      },
+      "returns": "Persisted policy with policy_id, version, rule count, and validation warnings (if any)."
+    },
+    {
+      "name": "list_conversation_policies",
+      "description": "List policies governing conversations with version, scope, and lifecycle filters.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter constraints",
+            "properties": {
+              "text": {
+                "type": "string",
+                "description": "Free-text search across indexed fields"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Key/value labels to match"
+              },
+              "created_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "updated_between": {
+                "type": "object",
+                "description": "Time window for filtering or scoping the operation",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "IANA timezone, e.g., Asia/Kuala_Lumpur"
+                  }
+                }
+              },
+              "owner_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "scope_label": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              },
+              "enabled": {
+                "type": "boolean"
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          },
+          "include_rule_summary": {
+            "type": "boolean",
+            "default": true
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination controls",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 500,
+                "default": 50
+              },
+              "cursor": {
+                "type": "string",
+                "description": "Opaque cursor for keyset pagination"
+              },
+              "sort_by": {
+                "type": "string"
+              },
+              "sort_order": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ],
+                "default": "desc"
+              }
+            }
+          }
+        }
+      },
+      "returns": "Paginated policy entries with rule counts and last evaluation metrics."
+    },
+    {
+      "name": "link_conversation_dependencies",
+      "description": "Establish or update dependency links between a conversation and related artefacts.",
+      "stage": "depends",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "$ref": "#/shared_entities/conversation_id"
+          },
+          "dependencies": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_type": {
+                  "type": "string"
+                },
+                "target_id": {
+                  "type": "string"
+                },
+                "relation": {
+                  "type": "string",
+                  "enum": [
+                    "depends_on",
+                    "blocks",
+                    "related_to",
+                    "parent_of",
+                    "child_of"
+                  ]
+                },
+                "weight": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "default": 1.0
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "target_type",
+                "target_id",
+                "relation"
+              ]
+            },
+            "minItems": 1
+          },
+          "replace_existing": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "type": "object",
+            "description": "Actor performing the action",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "admin",
+                  "operator",
+                  "analyst",
+                  "approver",
+                  "system",
+                  "auditor"
+                ]
+              },
+              "team": {
+                "type": "string"
+              },
+              "on_behalf_of": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "user_id"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "dependencies",
+          "actor"
+        ]
+      },
+      "returns": "Updated dependency graph summary with added/removed/updated edges."
+    }
+  ]
+}

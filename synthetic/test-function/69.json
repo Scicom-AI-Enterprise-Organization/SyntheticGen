@@ -1,0 +1,3210 @@
+{
+  "workflow_name": "uc_usage_to_payment",
+  "description": "End-to-end workflow for managing unified communications subscriptions, tracking usage, rating and billing, and processing payments for B2B telco customers.",
+  "domain": "telco_b2b/unified_communications",
+  "shared_entities": {
+    "account_id": {
+      "type": "string",
+      "description": "Unique identifier for the B2B customer account"
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Identifier for the UC tenant/workspace within an account"
+    },
+    "subscription_id": {
+      "type": "string",
+      "description": "Identifier for a UC subscription bundle"
+    },
+    "user_id": {
+      "type": "string",
+      "description": "Identifier for an end user within a tenant"
+    },
+    "usage_session_id": {
+      "type": "string",
+      "description": "Identifier for a single usage session (call, meeting, message batch)"
+    },
+    "usage_batch_id": {
+      "type": "string",
+      "description": "Identifier for a batch of usage records imported together"
+    },
+    "invoice_id": {
+      "type": "string",
+      "description": "Identifier for a generated invoice"
+    },
+    "payment_id": {
+      "type": "string",
+      "description": "Identifier for a payment transaction"
+    },
+    "currency_code": {
+      "type": "string",
+      "description": "ISO 4217 currency code (e.g., USD, EUR, GBP)"
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "create_uc_account",
+      "description": "Create a new B2B unified communications account and primary tenant.",
+      "stage": "onboarding",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "company": {
+            "type": "object",
+            "description": "Company identity details",
+            "properties": {
+              "legal_name": {
+                "type": "string"
+              },
+              "trading_name": {
+                "type": "string"
+              },
+              "registration_number": {
+                "type": "string"
+              },
+              "tax_id": {
+                "type": "string"
+              },
+              "industry": {
+                "type": "string"
+              },
+              "size_segment": {
+                "type": "string",
+                "enum": [
+                  "small",
+                  "mid_market",
+                  "enterprise"
+                ]
+              }
+            },
+            "required": [
+              "legal_name"
+            ]
+          },
+          "billing_profile": {
+            "type": "object",
+            "description": "Billing and invoicing configuration",
+            "properties": {
+              "currency": {
+                "$ref": "#/shared_entities/currency_code"
+              },
+              "billing_cycle": {
+                "type": "string",
+                "enum": [
+                  "monthly",
+                  "quarterly",
+                  "annual"
+                ]
+              },
+              "payment_terms_days": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "invoice_delivery": {
+                "type": "object",
+                "properties": {
+                  "method": {
+                    "type": "string",
+                    "enum": [
+                      "email",
+                      "api",
+                      "portal"
+                    ]
+                  },
+                  "recipients": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "email"
+                    }
+                  },
+                  "bcc_finance_team": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "required": [
+              "currency",
+              "billing_cycle"
+            ]
+          },
+          "contacts": {
+            "type": "object",
+            "description": "Key contacts for the account",
+            "properties": {
+              "technical": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "phone": {
+                    "type": "string"
+                  }
+                }
+              },
+              "billing": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "phone": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "tenant_config": {
+            "type": "object",
+            "description": "Initial UC tenant configuration",
+            "properties": {
+              "primary_domain": {
+                "type": "string",
+                "description": "Primary SIP or UC domain for the tenant"
+              },
+              "region": {
+                "type": "string",
+                "enum": [
+                  "us_east",
+                  "us_west",
+                  "eu_central",
+                  "eu_west",
+                  "ap_southeast",
+                  "ap_northeast"
+                ]
+              },
+              "features": {
+                "type": "object",
+                "properties": {
+                  "voice": {
+                    "type": "boolean"
+                  },
+                  "video": {
+                    "type": "boolean"
+                  },
+                  "messaging": {
+                    "type": "boolean"
+                  },
+                  "contact_center": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            },
+            "required": [
+              "primary_domain",
+              "region"
+            ]
+          },
+          "tags": {
+            "type": "object",
+            "description": "Freeform key-value tags for the account",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "company",
+          "billing_profile",
+          "tenant_config"
+        ]
+      },
+      "returns": "Newly created account_id and primary tenant_id with initial configuration summary."
+    },
+    {
+      "name": "configure_uc_subscription",
+      "description": "Create or update unified communications subscription plans for an account tenant.",
+      "stage": "onboarding",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "$ref": "#/shared_entities/account_id"
+          },
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "subscription_name": {
+            "type": "string",
+            "description": "Human-readable name for the subscription bundle"
+          },
+          "plan_type": {
+            "type": "string",
+            "enum": [
+              "commitment",
+              "pay_as_you_go",
+              "hybrid"
+            ]
+          },
+          "bundles": {
+            "type": "array",
+            "description": "List of bundled services and allowances",
+            "items": {
+              "type": "object",
+              "properties": {
+                "bundle_code": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "included_units": {
+                  "type": "object",
+                  "properties": {
+                    "voice_minutes": {
+                      "type": "integer"
+                    },
+                    "video_hours": {
+                      "type": "number"
+                    },
+                    "messages": {
+                      "type": "integer"
+                    },
+                    "contact_center_hours": {
+                      "type": "number"
+                    }
+                  }
+                },
+                "overage_rate": {
+                  "type": "object",
+                  "description": "Overage rating per modality in account currency",
+                  "properties": {
+                    "voice_per_minute": {
+                      "type": "number"
+                    },
+                    "video_per_hour": {
+                      "type": "number"
+                    },
+                    "message_per_unit": {
+                      "type": "number"
+                    },
+                    "contact_center_per_hour": {
+                      "type": "number"
+                    }
+                  }
+                }
+              },
+              "required": [
+                "bundle_code"
+              ]
+            }
+          },
+          "contract": {
+            "type": "object",
+            "description": "Contractual constraints and commitments",
+            "properties": {
+              "start_date": {
+                "type": "string",
+                "format": "date"
+              },
+              "end_date": {
+                "type": "string",
+                "format": "date"
+              },
+              "min_commit_spend": {
+                "type": "number"
+              },
+              "early_termination_fee_percent": {
+                "type": "number"
+              }
+            }
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "active",
+              "suspended",
+              "terminated"
+            ],
+            "description": "Desired status of the subscription configuration"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          }
+        },
+        "required": [
+          "account_id",
+          "tenant_id",
+          "subscription_name",
+          "plan_type"
+        ]
+      },
+      "returns": "subscription_id and full subscription configuration details."
+    },
+    {
+      "name": "list_tenant_users",
+      "description": "List users provisioned under a tenant with their UC service entitlements.",
+      "stage": "inventory",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "$ref": "#/shared_entities/account_id"
+          },
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "suspended",
+                  "pending",
+                  "deleted"
+                ]
+              },
+              "entitlement": {
+                "type": "string",
+                "enum": [
+                  "voice",
+                  "video",
+                  "messaging",
+                  "contact_center"
+                ]
+              },
+              "email_contains": {
+                "type": "string"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 200,
+                "default": 50
+              }
+            }
+          }
+        },
+        "required": [
+          "account_id",
+          "tenant_id"
+        ]
+      },
+      "returns": "Paged list of users with user_id, contact info, and UC entitlements."
+    },
+    {
+      "name": "ingest_usage_batch",
+      "description": "Ingest a batch of UC usage records (voice, video, messaging, etc.) for rating and billing.",
+      "stage": "usage_collection",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source_system": {
+            "type": "string",
+            "description": "Originating system of usage records",
+            "enum": [
+              "pbx",
+              "sip_trunk",
+              "web_meetings",
+              "contact_center",
+              "messaging_gateway",
+              "other"
+            ]
+          },
+          "account_id": {
+            "$ref": "#/shared_entities/account_id"
+          },
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "ingestion_mode": {
+            "type": "string",
+            "enum": [
+              "realtime",
+              "batch",
+              "replay"
+            ]
+          },
+          "records": {
+            "type": "array",
+            "description": "Array of raw usage records from network/UC platforms",
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_session_id": {
+                  "type": "string",
+                  "description": "Session ID from source system"
+                },
+                "user_id": {
+                  "$ref": "#/shared_entities/user_id"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "voice_call",
+                    "video_meeting",
+                    "message_batch",
+                    "contact_center_interaction"
+                  ]
+                },
+                "start_time": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "end_time": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "direction": {
+                  "type": "string",
+                  "enum": [
+                    "inbound",
+                    "outbound",
+                    "internal"
+                  ]
+                },
+                "participants": {
+                  "type": "array",
+                  "description": "Participant information where applicable (e.g., meetings)",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "user_id": {
+                        "$ref": "#/shared_entities/user_id"
+                      },
+                      "role": {
+                        "type": "string",
+                        "enum": [
+                          "host",
+                          "agent",
+                          "attendee",
+                          "external"
+                        ]
+                      },
+                      "joined_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "left_at": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    }
+                  }
+                },
+                "usage_metrics": {
+                  "type": "object",
+                  "description": "Modality-specific usage metrics",
+                  "properties": {
+                    "duration_seconds": {
+                      "type": "integer"
+                    },
+                    "media_type": {
+                      "type": "string",
+                      "enum": [
+                        "audio",
+                        "video_hd",
+                        "video_sd",
+                        "screen_share",
+                        "text"
+                      ]
+                    },
+                    "message_count": {
+                      "type": "integer"
+                    },
+                    "recording_enabled": {
+                      "type": "boolean"
+                    }
+                  }
+                },
+                "routing": {
+                  "type": "object",
+                  "description": "Routing details for voice/contact center usage",
+                  "properties": {
+                    "caller_number": {
+                      "type": "string"
+                    },
+                    "callee_number": {
+                      "type": "string"
+                    },
+                    "trunk_group": {
+                      "type": "string"
+                    },
+                    "queue_id": {
+                      "type": "string"
+                    },
+                    "skill_group": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "raw_charge": {
+                  "type": "number",
+                  "description": "Optional pre-rated charge from external system"
+                },
+                "attributes": {
+                  "type": "object",
+                  "description": "Arbitrary attributes for analytics or rating overrides",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "external_session_id",
+                "type",
+                "start_time"
+              ]
+            }
+          },
+          "deduplication": {
+            "type": "object",
+            "description": "Deduplication strategy for repeated/replayed records",
+            "properties": {
+              "key_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "external_session_id",
+                    "user_id",
+                    "start_time"
+                  ]
+                }
+              },
+              "time_window_minutes": {
+                "type": "integer",
+                "minimum": 0,
+                "default": 60
+              },
+              "on_duplicate": {
+                "type": "string",
+                "enum": [
+                  "ignore",
+                  "replace",
+                  "keep_both"
+                ]
+              }
+            }
+          },
+          "tags": {
+            "type": "object",
+            "description": "Batch-level tags for tracking (e.g., source file name)",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "source_system",
+          "account_id",
+          "tenant_id",
+          "ingestion_mode",
+          "records"
+        ]
+      },
+      "returns": "usage_batch_id, number of accepted/rejected records, and summary of validation errors."
+    },
+    {
+      "name": "validate_usage_batch",
+      "description": "Run detailed validation on an ingested usage batch and mark records as ready for rating or flagged.",
+      "stage": "usage_validation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "usage_batch_id": {
+            "$ref": "#/shared_entities/usage_batch_id"
+          },
+          "validation_profile": {
+            "type": "object",
+            "description": "Configurable validation rules",
+            "properties": {
+              "required_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "user_id",
+                    "duration_seconds",
+                    "media_type",
+                    "direction",
+                    "routing.caller_number",
+                    "routing.callee_number"
+                  ]
+                }
+              },
+              "max_duration_seconds": {
+                "type": "integer"
+              },
+              "allowed_media_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "user_resolution": {
+                "type": "string",
+                "enum": [
+                  "strict",
+                  "allow_unknown_user",
+                  "fallback_to_account"
+                ]
+              },
+              "on_error": {
+                "type": "string",
+                "enum": [
+                  "reject_record",
+                  "flag_for_review"
+                ]
+              }
+            }
+          },
+          "auto_fix": {
+            "type": "object",
+            "description": "Optional automatic correction behaviors",
+            "properties": {
+              "truncate_duration_overflow": {
+                "type": "boolean"
+              },
+              "fill_missing_direction_as": {
+                "type": "string",
+                "enum": [
+                  "inbound",
+                  "outbound",
+                  "internal"
+                ]
+              },
+              "normalize_phone_numbers": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "required": [
+          "usage_batch_id"
+        ]
+      },
+      "returns": "Validation summary with counts by status (valid, corrected, rejected) and error categories."
+    },
+    {
+      "name": "rate_usage_batch",
+      "description": "Apply rating to validated usage records in a batch and produce rated usage sessions.",
+      "stage": "rating",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "usage_batch_id": {
+            "$ref": "#/shared_entities/usage_batch_id"
+          },
+          "account_id": {
+            "$ref": "#/shared_entities/account_id"
+          },
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "subscription_id": {
+            "$ref": "#/shared_entities/subscription_id"
+          },
+          "rating_options": {
+            "type": "object",
+            "properties": {
+              "re_rate_existing": {
+                "type": "boolean",
+                "description": "If true, re-rate records that already have charges."
+              },
+              "apply_discounts": {
+                "type": "boolean",
+                "default": true
+              },
+              "discount_priority": {
+                "type": "string",
+                "enum": [
+                  "subscription_first",
+                  "promo_first"
+                ]
+              },
+              "time_zone": {
+                "type": "string",
+                "description": "Time zone to use for time-of-day pricing rules (IANA name)."
+              }
+            }
+          }
+        },
+        "required": [
+          "usage_batch_id",
+          "account_id",
+          "tenant_id",
+          "subscription_id"
+        ]
+      },
+      "returns": "Count of rated sessions, total rated amount per modality, and list of usage_session_ids with rating status."
+    },
+    {
+      "name": "get_usage_summary",
+      "description": "Retrieve aggregated usage and charges for a given period by account, tenant, and optional user breakdown.",
+      "stage": "usage_reporting",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "$ref": "#/shared_entities/account_id"
+          },
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "group_by": {
+            "type": "array",
+            "description": "Dimensions to group usage by",
+            "items": {
+              "type": "string",
+              "enum": [
+                "user",
+                "modality",
+                "direction",
+                "location",
+                "subscription_bundle"
+              ]
+            }
+          },
+          "include_charges": {
+            "type": "boolean",
+            "default": true
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "user_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/user_id"
+                }
+              },
+              "modalities": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "voice",
+                    "video",
+                    "messaging",
+                    "contact_center"
+                  ]
+                }
+              },
+              "min_charge": {
+                "type": "number"
+              }
+            }
+          }
+        },
+        "required": [
+          "account_id",
+          "tenant_id",
+          "from",
+          "to"
+        ]
+      },
+      "returns": "Aggregated usage metrics and charges by requested group_by dimensions."
+    },
+    {
+      "name": "generate_invoice",
+      "description": "Generate an invoice for an account for a specific billing period based on rated usage and subscriptions.",
+      "stage": "billing",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "account_id": {
+            "$ref": "#/shared_entities/account_id"
+          },
+          "billing_period": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date"
+              },
+              "to": {
+                "type": "string",
+                "format": "date"
+              },
+              "cycle_label": {
+                "type": "string",
+                "description": "Display label for the billing cycle, e.g., '2026-01 Monthly'"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "include_unbilled_usage": {
+            "type": "boolean",
+            "default": true
+          },
+          "proration": {
+            "type": "object",
+            "description": "Proration rules for mid-cycle changes",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "daily",
+                  "half_month",
+                  "none"
+                ]
+              },
+              "rounding": {
+                "type": "string",
+                "enum": [
+                  "up",
+                  "down",
+                  "nearest"
+                ]
+              }
+            }
+          },
+          "tax_profile": {
+            "type": "object",
+            "description": "Optional tax override for this invoice",
+            "properties": {
+              "country": {
+                "type": "string"
+              },
+              "region": {
+                "type": "string"
+              },
+              "tax_exempt": {
+                "type": "boolean"
+              },
+              "tax_rates": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "rate_percent": {
+                      "type": "number"
+                    },
+                    "applies_to": {
+                      "type": "string",
+                      "enum": [
+                        "all",
+                        "subscription",
+                        "usage"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "rate_percent"
+                  ]
+                }
+              }
+            }
+          },
+          "draft": {
+            "type": "boolean",
+            "description": "If true, generate invoice as draft (not posted).",
+            "default": true
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean"
+              ]
+            }
+          }
+        },
+        "required": [
+          "account_id",
+          "billing_period"
+        ]
+      },
+      "returns": "invoice_id, invoice totals (net, tax, gross), line item breakdowns, and status (draft/posted)."
+    },
+    {
+      "name": "get_invoice_details",
+      "description": "Retrieve full details of an invoice including line items, taxes, and payment status.",
+      "stage": "billing",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "invoice_id": {
+            "$ref": "#/shared_entities/invoice_id"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "line_items",
+                "taxes",
+                "usage_breakdown",
+                "payments",
+                "adjustments",
+                "pdf_link"
+              ]
+            }
+          }
+        },
+        "required": [
+          "invoice_id"
+        ]
+      },
+      "returns": "Complete invoice object with optional sections as requested by include."
+    },
+    {
+      "name": "process_invoice_payment",
+      "description": "Process a payment for an invoice using a specified payment method.",
+      "stage": "payment",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "invoice_id": {
+            "$ref": "#/shared_entities/invoice_id"
+          },
+          "payment_method": {
+            "type": "object",
+            "description": "Payment method details (polymorphic by type)",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "card",
+                  "bank_transfer",
+                  "direct_debit",
+                  "wallet",
+                  "credit_note"
+                ]
+              },
+              "card": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string",
+                    "description": "Tokenized card reference"
+                  },
+                  "cardholder_name": {
+                    "type": "string"
+                  }
+                }
+              },
+              "bank_transfer": {
+                "type": "object",
+                "properties": {
+                  "reference": {
+                    "type": "string",
+                    "description": "Customer-provided bank transfer reference"
+                  },
+                  "received_date": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              },
+              "direct_debit": {
+                "type": "object",
+                "properties": {
+                  "mandate_id": {
+                    "type": "string"
+                  },
+                  "collection_date": {
+                    "type": "string",
+                    "format": "date"
+                  }
+                }
+              },
+              "wallet": {
+                "type": "object",
+                "properties": {
+                  "wallet_id": {
+                    "type": "string"
+                  }
+                }
+              },
+              "credit_note": {
+                "type": "object",
+                "properties": {
+                  "credit_note_id": {
+                    "type": "string"
+                  },
+                  "apply_amount": {
+                    "type": "number"
+                  }
+                }
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "amount": {
+            "type": "number",
+            "description": "Amount to pay; if omitted, full outstanding amount will be used."
+          },
+          "currency": {
+            "$ref": "#/shared_entities/currency_code"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Optional key to ensure payment is not processed twice."
+          }
+        },
+        "required": [
+          "invoice_id",
+          "payment_method"
+        ]
+      },
+      "returns": "payment_id, updated invoice balance/status, and payment gateway status."
+    },
+    {
+      "name": "get_payment_status",
+      "description": "Retrieve the status and details of a specific payment transaction.",
+      "stage": "payment",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "payment_id": {
+            "$ref": "#/shared_entities/payment_id"
+          },
+          "include_gateway_data": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "payment_id"
+        ]
+      },
+      "returns": "Current payment status, timestamps, reconciliation info, and optional gateway metadata."
+    },
+    {
+      "name": "retry_payment",
+      "description": "Retry a failed or pending payment transaction with optional adjustments to method or amount.",
+      "stage": "payment_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "payment_id": {
+            "$ref": "#/shared_entities/payment_id"
+          },
+          "override_payment_method": {
+            "type": "object",
+            "description": "Optionally override original payment method for retry.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "card",
+                  "bank_transfer",
+                  "direct_debit",
+                  "wallet"
+                ]
+              },
+              "card": {
+                "type": "object",
+                "properties": {
+                  "token": {
+                    "type": "string"
+                  },
+                  "cardholder_name": {
+                    "type": "string"
+                  }
+                }
+              },
+              "bank_transfer": {
+                "type": "object",
+                "properties": {
+                  "reference": {
+                    "type": "string"
+                  }
+                }
+              },
+              "direct_debit": {
+                "type": "object",
+                "properties": {
+                  "mandate_id": {
+                    "type": "string"
+                  }
+                }
+              },
+              "wallet": {
+                "type": "object",
+                "properties": {
+                  "wallet_id": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "adjustments": {
+            "type": "object",
+            "description": "Optional adjustments before retry.",
+            "properties": {
+              "amount": {
+                "type": "number",
+                "description": "If set, overrides original payment amount."
+              },
+              "partial_allowed": {
+                "type": "boolean",
+                "default": false
+              },
+              "surcharge": {
+                "type": "number",
+                "description": "Additional fee to apply on retry, if applicable."
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for retry (e.g., 'card_updated', 'network_issue_resolved')."
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "payment_id"
+        ]
+      },
+      "returns": "New or updated payment_id with latest status and any error codes if retry failed."
+    },
+    {
+      "name": "cancel_or_rollback_invoice",
+      "description": "Cancel an invoice and optionally rollback associated rated usage and payments for error recovery.",
+      "stage": "billing_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "invoice_id": {
+            "$ref": "#/shared_entities/invoice_id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "cancel_only",
+              "cancel_and_credit",
+              "full_rollback"
+            ],
+            "description": "Determines whether to only cancel, cancel with credit note, or rollback rating and usage."
+          },
+          "reason": {
+            "type": "string"
+          },
+          "rollback_options": {
+            "type": "object",
+            "description": "Additional controls when performing full rollback.",
+            "properties": {
+              "unrate_usage": {
+                "type": "boolean",
+                "default": true
+              },
+              "detach_payments": {
+                "type": "boolean",
+                "default": true
+              },
+              "notify_contacts": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "credit_note": {
+            "type": "object",
+            "description": "Credit note configuration when mode is cancel_and_credit.",
+            "properties": {
+              "issue_credit_note": {
+                "type": "boolean",
+                "default": true
+              },
+              "credit_amount_mode": {
+                "type": "string",
+                "enum": [
+                  "full",
+                  "partial"
+                ]
+              },
+              "partial_amount": {
+                "type": "number",
+                "description": "Required if credit_amount_mode is 'partial'."
+              },
+              "reason_code": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "invoice_id",
+          "mode"
+        ]
+      },
+      "returns": "Confirmation of invoice cancellation/rollback, optional credit_note_id, and list of impacted payments and usage batches."
+    },
+    {
+      "name": "search_uc_billing_entities",
+      "description": "Faceted search across uc_billing entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching uc_billing entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_uc_billing_records",
+      "description": "Bulk-create up to N uc_billing records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_uc_billing_records",
+      "description": "Apply a partial update patch to many uc_billing records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_uc_billing_records",
+      "description": "Delete or soft-delete many uc_billing records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_uc_billing_dataset",
+      "description": "Schedule or stream an export of uc_billing data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_uc_billing_dataset",
+      "description": "Validate and import a uc_billing dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_uc_billing_state",
+      "description": "Create a point-in-time snapshot of one or more uc_billing entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_uc_billing_snapshot",
+      "description": "Restore uc_billing state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_uc_billing_metrics",
+      "description": "Query aggregated metrics/KPIs for the uc_billing workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_uc_billing_dashboard",
+      "description": "Compose a dashboard view across uc_billing metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_uc_billing_audit_events",
+      "description": "Search the uc_billing audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_uc_billing_events",
+      "description": "Create a webhook subscription that delivers uc_billing workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_uc_billing_subscriptions",
+      "description": "List webhook subscriptions for uc_billing events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_uc_billing_subscription",
+      "description": "Remove a webhook subscription for uc_billing events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_uc_billing_job",
+      "description": "Schedule a recurring or one-off uc_billing job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_uc_billing_schedules",
+      "description": "List scheduled uc_billing jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_uc_billing_schedule",
+      "description": "Cancel or pause a scheduled uc_billing job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_uc_billing_operation",
+      "description": "Run a what-if simulation of a uc_billing operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_uc_billing_approval",
+      "description": "Open an approval request for a uc_billing action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_uc_billing_approval",
+      "description": "Record an approve/reject/abstain decision on a uc_billing approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_uc_billing_comment",
+      "description": "Add a threaded comment or annotation to any uc_billing entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_uc_billing_comments",
+      "description": "List comments/annotations attached to a uc_billing entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_uc_billing_policy",
+      "description": "Create or update a policy/rule controlling uc_billing behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_uc_billing_policies",
+      "description": "List uc_billing policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_uc_billing_entities",
+      "description": "Create a typed relationship between two uc_billing-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_uc_billing_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a uc_billing entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_uc_billing_entities",
+      "description": "Add, remove, or replace tags on one or many uc_billing entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}

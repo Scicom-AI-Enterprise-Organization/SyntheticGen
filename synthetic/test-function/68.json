@@ -1,0 +1,3082 @@
+{
+  "workflow_name": "prepaid_charging_session_management",
+  "description": "End-to-end lifecycle management for prepaid charging sessions, including balance inquiries, eligibility checks, real-time reservation, rating, usage reporting, top-up, adjustments, and error recovery in a telco network exposure context.",
+  "domain": "telco_billing/prepaid_charging",
+  "shared_entities": {
+    "subscriber_id": {
+      "type": "string",
+      "description": "Unique subscriber identifier (e.g., MSISDN, IMSI, or CRM ID)"
+    },
+    "account_id": {
+      "type": "string",
+      "description": "Billing account identifier associated with the subscriber"
+    },
+    "session_id": {
+      "type": "string",
+      "description": "Charging session identifier used for online charging and reservations"
+    },
+    "transaction_id": {
+      "type": "string",
+      "description": "Unique transaction identifier for top-ups, adjustments, and rating events"
+    },
+    "correlation_id": {
+      "type": "string",
+      "description": "Correlation ID propagated from network exposure layer for tracing"
+    },
+    "service_id": {
+      "type": "string",
+      "description": "Identifier for the service being charged (e.g., data, voice, SMS, content partner)"
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "query_prepaid_balance",
+      "description": "Retrieve current prepaid balances and allowances for a subscriber, including monetary and non-monetary buckets.",
+      "stage": "inquiry",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string",
+            "description": "Identifier of the subscriber whose balance is queried"
+          },
+          "account_id": {
+            "type": "string",
+            "description": "Optional account ID if the subscriber has multiple prepaid accounts"
+          },
+          "correlation_id": {
+            "type": "string",
+            "description": "Correlation ID from network exposure or API gateway"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional sections to include in the response",
+            "items": {
+              "type": "string",
+              "enum": [
+                "monetary_buckets",
+                "data_bundles",
+                "voice_sms_bundles",
+                "promo_balances",
+                "pending_reservations",
+                "usage_summary"
+              ]
+            }
+          },
+          "request_context": {
+            "type": "object",
+            "description": "Context of the balance inquiry from the network element",
+            "properties": {
+              "originating_system": {
+                "type": "string",
+                "description": "System making the request (e.g., 'OCS', 'NEF', 'IN', 'SelfCareApp')"
+              },
+              "access_type": {
+                "type": "string",
+                "enum": [
+                  "4g",
+                  "5g",
+                  "wifi",
+                  "fixed_broadband",
+                  "unknown"
+                ]
+              },
+              "location": {
+                "type": "object",
+                "description": "Coarse location info for policy-driven responses",
+                "properties": {
+                  "mcc": {
+                    "type": "string",
+                    "description": "Mobile Country Code"
+                  },
+                  "mnc": {
+                    "type": "string",
+                    "description": "Mobile Network Code"
+                  },
+                  "cell_id": {
+                    "type": "string",
+                    "description": "Cell identifier, if available"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "subscriber_id"
+        ]
+      },
+      "returns": "Current prepaid balance snapshot including monetary and resource buckets, their validity, and any pending reservations."
+    },
+    {
+      "name": "check_charging_eligibility",
+      "description": "Evaluate whether a subscriber is eligible for real-time charging for a given service, considering barring, credit limits, and policy rules.",
+      "stage": "pre_check",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string"
+          },
+          "service_id": {
+            "type": "string",
+            "description": "Service identifier or rating group to be charged"
+          },
+          "requested_units": {
+            "type": "object",
+            "description": "Units requested by the network function",
+            "properties": {
+              "unit_type": {
+                "type": "string",
+                "enum": [
+                  "time",
+                  "volume",
+                  "events"
+                ]
+              },
+              "amount": {
+                "type": "number",
+                "description": "Requested amount of units (e.g., seconds, bytes, events)"
+              },
+              "unit_of_measure": {
+                "type": "string",
+                "description": "Unit of measure, e.g., 'seconds', 'bytes', 'KB', 'MB', 'events'"
+              }
+            },
+            "required": [
+              "unit_type",
+              "amount"
+            ]
+          },
+          "charging_characteristics": {
+            "type": "object",
+            "description": "Characteristics that influence eligibility and rating",
+            "properties": {
+              "roaming_indicator": {
+                "type": "string",
+                "enum": [
+                  "home",
+                  "roaming_in",
+                  "roaming_out",
+                  "unknown"
+                ]
+              },
+              "network_slice": {
+                "type": "string",
+                "description": "5G network slice or QoS class identifier"
+              },
+              "service_category": {
+                "type": "string",
+                "enum": [
+                  "internet",
+                  "voip",
+                  "video_streaming",
+                  "gaming",
+                  "messaging",
+                  "enterprise_iot",
+                  "other"
+                ]
+              }
+            }
+          },
+          "correlation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "service_id",
+          "requested_units"
+        ]
+      },
+      "returns": "Eligibility decision indicating whether charging can proceed, including reasons, applicable profiles, and any required actions (e.g., top-up needed)."
+    },
+    {
+      "name": "initiate_charging_session",
+      "description": "Create a new online charging session with initial unit reservation for a service usage request.",
+      "stage": "reservation_start",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string"
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "initial_request": {
+            "type": "object",
+            "description": "Details of the initial usage request from the network function",
+            "properties": {
+              "requested_units": {
+                "type": "object",
+                "properties": {
+                  "unit_type": {
+                    "type": "string",
+                    "enum": [
+                      "time",
+                      "volume",
+                      "events"
+                    ]
+                  },
+                  "amount": {
+                    "type": "number"
+                  },
+                  "unit_of_measure": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "unit_type",
+                  "amount"
+                ]
+              },
+              "session_start_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start time of the service session"
+              },
+              "calling_party": {
+                "type": "string",
+                "description": "Originating subscriber, if different (e.g., for transfer services)"
+              },
+              "called_party": {
+                "type": "string",
+                "description": "Destination address or called party number"
+              },
+              "bearer_info": {
+                "type": "object",
+                "description": "Network bearer information for QoS-aware charging",
+                "properties": {
+                  "qos_class_id": {
+                    "type": "string"
+                  },
+                  "apn": {
+                    "type": "string",
+                    "description": "Access Point Name for data services"
+                  },
+                  "rat_type": {
+                    "type": "string",
+                    "enum": [
+                      "LTE",
+                      "NR",
+                      "WiFi",
+                      "3G",
+                      "2G",
+                      "UNKNOWN"
+                    ]
+                  }
+                }
+              }
+            },
+            "required": [
+              "requested_units"
+            ]
+          },
+          "policy_overrides": {
+            "type": "object",
+            "description": "Optional policy overrides for partner or enterprise services",
+            "properties": {
+              "sponsored_data": {
+                "type": "boolean",
+                "description": "Indicates if data is sponsor-paid and should not decrement user quota"
+              },
+              "zero_rating": {
+                "type": "boolean",
+                "description": "Indicates if the usage is zero-rated"
+              },
+              "preferred_bucket_ids": {
+                "type": "array",
+                "description": "Hint for which balance buckets to charge first",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "correlation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "service_id",
+          "initial_request"
+        ]
+      },
+      "returns": "Charging session context including session_id, reserved units, applicable tariff, and session state."
+    },
+    {
+      "name": "update_charging_session",
+      "description": "Update an ongoing charging session with interim usage reports and additional unit reservations.",
+      "stage": "reservation_update",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "usage_report": {
+            "type": "object",
+            "description": "Interim usage details reported by the network function",
+            "properties": {
+              "consumed_units": {
+                "type": "object",
+                "properties": {
+                  "unit_type": {
+                    "type": "string",
+                    "enum": [
+                      "time",
+                      "volume",
+                      "events"
+                    ]
+                  },
+                  "amount": {
+                    "type": "number"
+                  },
+                  "unit_of_measure": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "unit_type",
+                  "amount"
+                ]
+              },
+              "report_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "partial_cdr_reference": {
+                "type": "string",
+                "description": "Reference to a partial CDR or usage record in the network element"
+              }
+            },
+            "required": [
+              "consumed_units"
+            ]
+          },
+          "additional_request": {
+            "type": "object",
+            "description": "Optional request for additional units if more usage is expected",
+            "properties": {
+              "requested_units": {
+                "type": "object",
+                "properties": {
+                  "unit_type": {
+                    "type": "string",
+                    "enum": [
+                      "time",
+                      "volume",
+                      "events"
+                    ]
+                  },
+                  "amount": {
+                    "type": "number"
+                  },
+                  "unit_of_measure": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "unit_type",
+                  "amount"
+                ]
+              },
+              "reason": {
+                "type": "string",
+                "enum": [
+                  "normal_continuation",
+                  "handover",
+                  "qos_change",
+                  "service_change",
+                  "other"
+                ]
+              }
+            }
+          },
+          "correlation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "usage_report"
+        ]
+      },
+      "returns": "Updated reservation status, including newly reserved units (if any), remaining balance, and any policy actions such as throttling or termination advice."
+    },
+    {
+      "name": "finalize_charging_session",
+      "description": "Finalize a charging session to commit charges and release any remaining reserved units.",
+      "stage": "reservation_end",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "final_usage_report": {
+            "type": "object",
+            "description": "Final usage report consolidating total consumed units",
+            "properties": {
+              "total_consumed_units": {
+                "type": "object",
+                "properties": {
+                  "unit_type": {
+                    "type": "string",
+                    "enum": [
+                      "time",
+                      "volume",
+                      "events"
+                    ]
+                  },
+                  "amount": {
+                    "type": "number"
+                  },
+                  "unit_of_measure": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "unit_type",
+                  "amount"
+                ]
+              },
+              "session_end_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "termination_cause": {
+                "type": "string",
+                "enum": [
+                  "normal_release",
+                  "network_failure",
+                  "insufficient_balance",
+                  "timeout",
+                  "policy_termination",
+                  "other"
+                ]
+              }
+            },
+            "required": [
+              "total_consumed_units"
+            ]
+          },
+          "cdr_metadata": {
+            "type": "object",
+            "description": "Metadata to support CDR generation and offline rating reconciliation",
+            "properties": {
+              "cdr_id": {
+                "type": "string"
+              },
+              "offline_record_reference": {
+                "type": "string"
+              },
+              "export_profile": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "roaming",
+                  "partner",
+                  "wholesale"
+                ]
+              }
+            }
+          },
+          "correlation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "final_usage_report"
+        ]
+      },
+      "returns": "Final charging outcome including debited amounts from each bucket, any remaining reserved units released, and a transaction_id for audit."
+    },
+    {
+      "name": "abort_charging_session",
+      "description": "Abort an ongoing charging session, rolling back reserved units when appropriate and marking the session as failed or cancelled.",
+      "stage": "reservation_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "abort_reason": {
+            "type": "string",
+            "enum": [
+              "network_error",
+              "rating_error",
+              "duplicate_session",
+              "user_cancellation",
+              "timeout",
+              "other"
+            ]
+          },
+          "rollback_policy": {
+            "type": "object",
+            "description": "Controls how reserved units are treated on abort",
+            "properties": {
+              "release_all_reservations": {
+                "type": "boolean",
+                "default": true
+              },
+              "partial_commit": {
+                "type": "boolean",
+                "description": "If true, commit part of the consumed units before release"
+              },
+              "commit_consumed_units": {
+                "type": "object",
+                "description": "Optional details if partial_commit is true",
+                "properties": {
+                  "unit_type": {
+                    "type": "string",
+                    "enum": [
+                      "time",
+                      "volume",
+                      "events"
+                    ]
+                  },
+                  "amount": {
+                    "type": "number"
+                  },
+                  "unit_of_measure": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "correlation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id",
+          "abort_reason"
+        ]
+      },
+      "returns": "Confirmation of session abort, rollback results on reserved units, and any residual charges that were committed."
+    },
+    {
+      "name": "rate_usage_event",
+      "description": "Rate a discrete prepaid usage event (e.g., SMS, one-time content purchase) and charge it immediately against available balances.",
+      "stage": "one_off_rating",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string"
+          },
+          "service_id": {
+            "type": "string"
+          },
+          "event_details": {
+            "type": "object",
+            "description": "Details describing the usage event to be rated",
+            "properties": {
+              "event_type": {
+                "type": "string",
+                "enum": [
+                  "sms",
+                  "mms",
+                  "content_purchase",
+                  "subscription_activation",
+                  "subscription_renewal",
+                  "other"
+                ]
+              },
+              "event_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "destination": {
+                "type": "string",
+                "description": "Destination address, if applicable"
+              },
+              "attributes": {
+                "type": "object",
+                "description": "Additional rating attributes from network exposure",
+                "properties": {
+                  "roaming_indicator": {
+                    "type": "string",
+                    "enum": [
+                      "home",
+                      "roaming_in",
+                      "roaming_out",
+                      "unknown"
+                    ]
+                  },
+                  "content_provider_id": {
+                    "type": "string"
+                  },
+                  "price_override": {
+                    "type": "object",
+                    "description": "Optional negotiated or promotional price override",
+                    "properties": {
+                      "amount": {
+                        "type": "number"
+                      },
+                      "currency": {
+                        "type": "string"
+                      },
+                      "reason": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+              "event_type"
+            ]
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "If true, only simulate rating without debiting balance",
+            "default": false
+          },
+          "correlation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "service_id",
+          "event_details"
+        ]
+      },
+      "returns": "Rating result including rated amount, buckets impacted, final charged amount, and a transaction_id; may include a simulation flag if dry_run was used."
+    },
+    {
+      "name": "apply_prepaid_topup",
+      "description": "Apply a prepaid top-up or recharge to a subscriber account, potentially activating bonus buckets and promotions.",
+      "stage": "topup",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string"
+          },
+          "account_id": {
+            "type": "string"
+          },
+          "topup_source": {
+            "type": "string",
+            "enum": [
+              "voucher",
+              "online_payment",
+              "retail_pos",
+              "bank_transfer",
+              "partner_api",
+              "other"
+            ]
+          },
+          "topup_details": {
+            "type": "object",
+            "description": "Details about the top-up transaction",
+            "properties": {
+              "amount": {
+                "type": "number",
+                "description": "Top-up amount in the account currency"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "voucher": {
+                "type": "object",
+                "description": "Voucher specifics when topup_source is 'voucher'",
+                "properties": {
+                  "voucher_code": {
+                    "type": "string"
+                  },
+                  "serial_number": {
+                    "type": "string"
+                  },
+                  "pin": {
+                    "type": "string"
+                  }
+                }
+              },
+              "payment_reference": {
+                "type": "string",
+                "description": "External reference for the payment transaction"
+              },
+              "channel_info": {
+                "type": "object",
+                "description": "Channel-specific metadata",
+                "properties": {
+                  "channel_id": {
+                    "type": "string"
+                  },
+                  "agent_id": {
+                    "type": "string"
+                  },
+                  "location": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": [
+              "amount",
+              "currency"
+            ]
+          },
+          "promotion_context": {
+            "type": "object",
+            "description": "Context for promotional rules linked to the top-up",
+            "properties": {
+              "campaign_id": {
+                "type": "string"
+              },
+              "promo_code": {
+                "type": "string"
+              },
+              "eligibility_override": {
+                "type": "boolean",
+                "description": "Force apply campaign even if normal eligibility fails"
+              }
+            }
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Key to safely retry top-up without double posting"
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "topup_source",
+          "topup_details"
+        ]
+      },
+      "returns": "Top-up result including updated balances, any bonus or promotional buckets created, and a transaction_id for reconciliation."
+    },
+    {
+      "name": "reverse_topup_transaction",
+      "description": "Reverse or partially rollback a previously applied top-up transaction in case of payment failures or disputes.",
+      "stage": "topup_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "transaction_id": {
+            "type": "string",
+            "description": "Identifier of the original top-up transaction to reverse"
+          },
+          "reversal_type": {
+            "type": "string",
+            "enum": [
+              "full",
+              "partial"
+            ]
+          },
+          "partial_reversal_amount": {
+            "type": "number",
+            "description": "Amount to reverse in case of partial reversal"
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "payment_chargeback",
+              "payment_failure",
+              "fraud_detected",
+              "customer_request",
+              "duplicate_topup",
+              "other"
+            ]
+          },
+          "reversal_policy": {
+            "type": "object",
+            "description": "Controls rollback of bonus and promotional balances",
+            "properties": {
+              "reverse_bonus_buckets": {
+                "type": "boolean",
+                "default": true
+              },
+              "reverse_promotional_buckets": {
+                "type": "boolean",
+                "default": true
+              },
+              "protect_consumed_amount": {
+                "type": "boolean",
+                "description": "If true, will not reverse amounts already consumed by usage"
+              }
+            }
+          },
+          "correlation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "transaction_id",
+          "reversal_type",
+          "reason"
+        ]
+      },
+      "returns": "Reversal outcome including adjusted balances, impacted buckets, and linkage to both original and reversal transaction_ids."
+    },
+    {
+      "name": "apply_prepaid_adjustment",
+      "description": "Apply a manual or system-driven adjustment (credit or debit) to a prepaid account for dispute resolution or corrections.",
+      "stage": "adjustment",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string"
+          },
+          "account_id": {
+            "type": "string"
+          },
+          "adjustment_type": {
+            "type": "string",
+            "enum": [
+              "credit",
+              "debit"
+            ]
+          },
+          "adjustment_amount": {
+            "type": "number",
+            "description": "Amount to adjust (positive number, direction decided by adjustment_type)"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "billing_dispute",
+              "service_degradation",
+              "promo_compensation",
+              "technical_error",
+              "manual_correction",
+              "other"
+            ]
+          },
+          "reason_details": {
+            "type": "string",
+            "description": "Free-text explanation for the adjustment"
+          },
+          "allocation_policy": {
+            "type": "object",
+            "description": "Controls allocation of adjustment across buckets",
+            "properties": {
+              "target_bucket_id": {
+                "type": "string",
+                "description": "Specific bucket to be adjusted, if applicable"
+              },
+              "allocation_strategy": {
+                "type": "string",
+                "enum": [
+                  "oldest_first",
+                  "newest_first",
+                  "proportional",
+                  "specified_bucket"
+                ]
+              }
+            }
+          },
+          "initiator": {
+            "type": "object",
+            "description": "Information about who or what initiated the adjustment",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "agent",
+                  "system",
+                  "partner",
+                  "customer_portal"
+                ]
+              },
+              "id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            }
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "idempotency_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "adjustment_type",
+          "adjustment_amount",
+          "currency",
+          "reason_code"
+        ]
+      },
+      "returns": "Adjustment result including updated balances, affected bucket list, and generated transaction_id."
+    },
+    {
+      "name": "get_charging_session_status",
+      "description": "Retrieve the current status and context of a charging session, including reservations and related rating actions.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional details to include in the response",
+            "items": {
+              "type": "string",
+              "enum": [
+                "reservations",
+                "usage_summary",
+                "rating_details",
+                "balance_impact",
+                "audit_trail"
+              ]
+            }
+          },
+          "correlation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "session_id"
+        ]
+      },
+      "returns": "Charging session snapshot including state (active, finalized, aborted), reserved and consumed units, and any associated transaction_ids."
+    },
+    {
+      "name": "list_prepaid_transactions",
+      "description": "List prepaid-related transactions (sessions, top-ups, adjustments, rated events) for a subscriber with filtering and pagination.",
+      "stage": "reporting",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "object",
+            "description": "Filter criteria for the transaction list",
+            "properties": {
+              "transaction_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "session",
+                    "topup",
+                    "adjustment",
+                    "usage_event"
+                  ]
+                }
+              },
+              "date_from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "date_to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "min_amount": {
+                "type": "number"
+              },
+              "max_amount": {
+                "type": "number"
+              },
+              "service_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "result_codes": {
+                "type": "array",
+                "description": "Filter by outcome/result codes (e.g., SUCCESS, INSUFFICIENT_BALANCE)",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "event_time",
+              "created_at",
+              "amount"
+            ],
+            "default": "event_time"
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50,
+            "maximum": 200
+          },
+          "correlation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriber_id"
+        ]
+      },
+      "returns": "Paginated list of prepaid transactions with basic details and references to more detailed records."
+    },
+    {
+      "name": "retry_failed_charging_operation",
+      "description": "Retry a previously failed online charging operation (session update, finalize, or usage event rating) with optional parameter overrides.",
+      "stage": "error_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "failed_operation_id": {
+            "type": "string",
+            "description": "Identifier of the failed operation in the charging system"
+          },
+          "operation_type": {
+            "type": "string",
+            "enum": [
+              "session_initiate",
+              "session_update",
+              "session_finalize",
+              "usage_event_rating",
+              "topup",
+              "adjustment"
+            ]
+          },
+          "retry_strategy": {
+            "type": "object",
+            "description": "Strategy for retrying the failed operation",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "simple_retry",
+                  "rebuild_and_retry",
+                  "simulate_only"
+                ]
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 1
+              },
+              "backoff_seconds": {
+                "type": "integer",
+                "description": "Delay between retries in seconds",
+                "default": 0
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "parameter_overrides": {
+            "type": "object",
+            "description": "Optional partial override of original operation parameters; structure depends on operation_type",
+            "properties": {
+              "session_correction": {
+                "type": "object",
+                "description": "Overrides for session-related retries",
+                "properties": {
+                  "session_id": {
+                    "type": "string"
+                  },
+                  "adjusted_units": {
+                    "type": "object",
+                    "properties": {
+                      "unit_type": {
+                        "type": "string",
+                        "enum": [
+                          "time",
+                          "volume",
+                          "events"
+                        ]
+                      },
+                      "amount": {
+                        "type": "number"
+                      },
+                      "unit_of_measure": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "rating_correction": {
+                "type": "object",
+                "description": "Overrides for usage event rating retries",
+                "properties": {
+                  "override_tariff_id": {
+                    "type": "string"
+                  },
+                  "force_offline_recalc": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          },
+          "correlation_id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "failed_operation_id",
+          "operation_type",
+          "retry_strategy"
+        ]
+      },
+      "returns": "Result of the retry attempt including final status (success, still_failed, simulated), any new transaction_ids, and diagnostic information."
+    },
+    {
+      "name": "search_prepaid_charging_entities",
+      "description": "Faceted search across prepaid_charging entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching prepaid_charging entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_prepaid_charging_records",
+      "description": "Bulk-create up to N prepaid_charging records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_prepaid_charging_records",
+      "description": "Apply a partial update patch to many prepaid_charging records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_prepaid_charging_records",
+      "description": "Delete or soft-delete many prepaid_charging records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_prepaid_charging_dataset",
+      "description": "Schedule or stream an export of prepaid_charging data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_prepaid_charging_dataset",
+      "description": "Validate and import a prepaid_charging dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_prepaid_charging_state",
+      "description": "Create a point-in-time snapshot of one or more prepaid_charging entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_prepaid_charging_snapshot",
+      "description": "Restore prepaid_charging state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_prepaid_charging_metrics",
+      "description": "Query aggregated metrics/KPIs for the prepaid_charging workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_prepaid_charging_dashboard",
+      "description": "Compose a dashboard view across prepaid_charging metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_prepaid_charging_audit_events",
+      "description": "Search the prepaid_charging audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_prepaid_charging_events",
+      "description": "Create a webhook subscription that delivers prepaid_charging workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_prepaid_charging_subscriptions",
+      "description": "List webhook subscriptions for prepaid_charging events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_prepaid_charging_subscription",
+      "description": "Remove a webhook subscription for prepaid_charging events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_prepaid_charging_job",
+      "description": "Schedule a recurring or one-off prepaid_charging job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_prepaid_charging_schedules",
+      "description": "List scheduled prepaid_charging jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_prepaid_charging_schedule",
+      "description": "Cancel or pause a scheduled prepaid_charging job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_prepaid_charging_operation",
+      "description": "Run a what-if simulation of a prepaid_charging operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_prepaid_charging_approval",
+      "description": "Open an approval request for a prepaid_charging action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_prepaid_charging_approval",
+      "description": "Record an approve/reject/abstain decision on a prepaid_charging approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_prepaid_charging_comment",
+      "description": "Add a threaded comment or annotation to any prepaid_charging entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_prepaid_charging_comments",
+      "description": "List comments/annotations attached to a prepaid_charging entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_prepaid_charging_policy",
+      "description": "Create or update a policy/rule controlling prepaid_charging behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_prepaid_charging_policies",
+      "description": "List prepaid_charging policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_prepaid_charging_entities",
+      "description": "Create a typed relationship between two prepaid_charging-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_prepaid_charging_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a prepaid_charging entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_prepaid_charging_entities",
+      "description": "Add, remove, or replace tags on one or many prepaid_charging entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}

@@ -1,0 +1,3114 @@
+{
+  "workflow_name": "sla_management",
+  "description": "End-to-end lifecycle for defining, monitoring, enforcing, and remediating network SLAs in a Telecom-as-a-Service (TaaS) network intelligence platform.",
+  "domain": "taas/network_intelligence",
+  "shared_entities": {
+    "sla_id": {
+      "type": "string",
+      "description": "Unique identifier for an SLA definition."
+    },
+    "sla_version_id": {
+      "type": "string",
+      "description": "Unique identifier for a specific version of an SLA."
+    },
+    "policy_id": {
+      "type": "string",
+      "description": "Identifier of a network policy linked to an SLA."
+    },
+    "violation_id": {
+      "type": "string",
+      "description": "Identifier for an SLA violation incident."
+    },
+    "remediation_run_id": {
+      "type": "string",
+      "description": "Identifier for an automated remediation execution."
+    },
+    "network_scope": {
+      "type": "object",
+      "description": "Common scoping object for where an SLA applies in the network.",
+      "properties": {
+        "scope_type": {
+          "type": "string",
+          "enum": [
+            "site",
+            "link",
+            "device",
+            "tenant",
+            "service",
+            "segment"
+          ],
+          "description": "Type of network scope to which the SLA applies."
+        },
+        "identifiers": {
+          "type": "object",
+          "description": "Identifiers for the selected scope type.",
+          "properties": {
+            "site_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "link_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "device_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "tenant_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "service_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "segment_ids": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "scope_type"
+      ]
+    },
+    "kpi_definition": {
+      "type": "object",
+      "description": "Reusable KPI definition for SLA targets.",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Logical KPI name (e.g. latency, packet_loss)."
+        },
+        "metric_id": {
+          "type": "string",
+          "description": "Internal metric identifier in the telemetry platform."
+        },
+        "aggregation": {
+          "type": "string",
+          "enum": [
+            "avg",
+            "p95",
+            "p99",
+            "max",
+            "min",
+            "sum"
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "description": "Measurement unit, e.g., ms, %, Mbps."
+        },
+        "threshold": {
+          "type": "number",
+          "description": "Target or limit value depending on comparator."
+        },
+        "comparator": {
+          "type": "string",
+          "enum": [
+            "<=",
+            "<",
+            ">=",
+            ">",
+            "==",
+            "!="
+          ]
+        },
+        "breach_direction": {
+          "type": "string",
+          "enum": [
+            "above_threshold",
+            "below_threshold",
+            "both"
+          ]
+        },
+        "evaluation_window": {
+          "type": "object",
+          "description": "Time window for evaluating KPI compliance.",
+          "properties": {
+            "duration_minutes": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "rolling": {
+              "type": "boolean",
+              "description": "Whether evaluation uses rolling window or fixed intervals."
+            },
+            "grace_period_minutes": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      },
+      "required": [
+        "name",
+        "metric_id",
+        "aggregation",
+        "threshold",
+        "comparator"
+      ]
+    },
+    "actor_context": {
+      "type": "object",
+      "description": "Context about who is performing the action and from where.",
+      "properties": {
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "system",
+            "ops_admin",
+            "ops_engineer",
+            "support_agent",
+            "customer_admin",
+            "customer_user",
+            "partner_admin",
+            "automation"
+          ]
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "Identifier of the actor in the IAM system."
+        },
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant or organization scope, if applicable."
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Optional session/correlation id."
+        },
+        "ip_address": {
+          "type": "string",
+          "description": "Source IP of the request."
+        }
+      },
+      "required": [
+        "actor_type",
+        "actor_id"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Generic time range filter.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "time_zone": {
+          "type": "string",
+          "description": "IANA time zone (e.g. 'UTC', 'Asia/Kuala_Lumpur')."
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "notification_channel": {
+      "type": "object",
+      "description": "Notification channel descriptor.",
+      "properties": {
+        "channel": {
+          "type": "string",
+          "enum": [
+            "email",
+            "sms",
+            "webhook",
+            "slack",
+            "teams",
+            "pagerduty",
+            "in_app"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "description": "Channel-specific address (email, URL, phone, etc.)."
+        },
+        "secret_ref": {
+          "type": "string",
+          "description": "Optional secret reference for signed webhook delivery."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "channel",
+        "target"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Pointer to an uploaded attachment or document.",
+      "properties": {
+        "filename": {
+          "type": "string"
+        },
+        "content_type": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename",
+        "url"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination and sorting controls for list endpoints.",
+      "properties": {
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Optional opaque cursor for keyset pagination."
+        },
+        "sort_by": {
+          "type": "string"
+        },
+        "sort_order": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "default": "desc"
+        }
+      }
+    },
+    "approval_decision": {
+      "type": "object",
+      "description": "Approval/review decision record.",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "rejected",
+            "needs_changes",
+            "deferred"
+          ]
+        },
+        "approver_id": {
+          "type": "string"
+        },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "decision",
+        "approver_id"
+      ]
+    },
+    "tag_set": {
+      "type": "object",
+      "description": "Free-form key/value tags for categorization and search.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "once",
+            "cron",
+            "interval",
+            "calendar"
+          ]
+        },
+        "cron_expression": {
+          "type": "string",
+          "description": "Standard 5-field cron expression."
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "calendar": {
+          "type": "object",
+          "properties": {
+            "days_of_week": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "MON",
+                  "TUE",
+                  "WED",
+                  "THU",
+                  "FRI",
+                  "SAT",
+                  "SUN"
+                ]
+              }
+            },
+            "time_of_day": {
+              "type": "string",
+              "description": "HH:MM 24h local."
+            }
+          }
+        },
+        "time_zone": {
+          "type": "string",
+          "description": "IANA time zone."
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "max_runs": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    "policy_rule": {
+      "type": "object",
+      "description": "Generic policy rule with conditions and actions.",
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "operator": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "gt",
+                  "gte",
+                  "lt",
+                  "lte",
+                  "in",
+                  "nin",
+                  "contains",
+                  "regex"
+                ]
+              },
+              "value": {
+                "description": "Value to compare against. Type depends on operator."
+              }
+            },
+            "required": [
+              "field",
+              "operator"
+            ]
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "parameters": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "name",
+        "conditions",
+        "actions"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "define_sla_template",
+      "description": "Create a new SLA template with KPIs, network scope, and evaluation rules.",
+      "stage": "design",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Human-readable name of the SLA template."
+          },
+          "description": {
+            "type": "string",
+            "description": "Detailed description of the SLA intent."
+          },
+          "customer_tier": {
+            "type": "string",
+            "enum": [
+              "bronze",
+              "silver",
+              "gold",
+              "platinum",
+              "custom"
+            ]
+          },
+          "network_scope": {
+            "$ref": "#/shared_entities/network_scope"
+          },
+          "kpis": {
+            "type": "array",
+            "description": "List of KPI definitions that form the SLA.",
+            "items": {
+              "$ref": "#/shared_entities/kpi_definition"
+            },
+            "minItems": 1
+          },
+          "applicability": {
+            "type": "object",
+            "description": "Conditions under which this SLA is applied.",
+            "properties": {
+              "traffic_classes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Traffic classes (e.g., voice, video, best_effort)."
+              },
+              "time_constraints": {
+                "type": "array",
+                "description": "Time-based applicability windows.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "days_of_week": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "mon",
+                          "tue",
+                          "wed",
+                          "thu",
+                          "fri",
+                          "sat",
+                          "sun"
+                        ]
+                      }
+                    },
+                    "start_time": {
+                      "type": "string",
+                      "format": "time"
+                    },
+                    "end_time": {
+                      "type": "string",
+                      "format": "time"
+                    }
+                  },
+                  "required": [
+                    "days_of_week"
+                  ]
+                }
+              },
+              "min_bandwidth_mbps": {
+                "type": "number",
+                "description": "Minimum bandwidth threshold for SLA applicability."
+              }
+            }
+          },
+          "breach_policies": {
+            "type": "object",
+            "description": "What to do when SLA is breached.",
+            "properties": {
+              "severity_mapping": {
+                "type": "array",
+                "description": "Map KPI deviation ranges to severity levels.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "severity": {
+                      "type": "string",
+                      "enum": [
+                        "info",
+                        "minor",
+                        "major",
+                        "critical"
+                      ]
+                    },
+                    "deviation_percent_min": {
+                      "type": "number"
+                    },
+                    "deviation_percent_max": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "severity",
+                    "deviation_percent_min"
+                  ]
+                }
+              },
+              "notification_channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "webhook",
+                    "ticketing"
+                  ]
+                }
+              },
+              "auto_remediation_enabled": {
+                "type": "boolean"
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Arbitrary key-value metadata for tagging and integration.",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        },
+        "required": [
+          "name",
+          "network_scope",
+          "kpis"
+        ]
+      },
+      "returns": "New SLA template created with sla_id and initial version information."
+    },
+    {
+      "name": "update_sla_template",
+      "description": "Update an existing SLA template and create a new version with change tracking.",
+      "stage": "design",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sla_id": {
+            "type": "string",
+            "description": "Identifier of the SLA to update."
+          },
+          "base_version_id": {
+            "type": "string",
+            "description": "Version being updated, used for optimistic concurrency control."
+          },
+          "updates": {
+            "type": "object",
+            "description": "Partial updates to apply.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "customer_tier": {
+                "type": "string",
+                "enum": [
+                  "bronze",
+                  "silver",
+                  "gold",
+                  "platinum",
+                  "custom"
+                ]
+              },
+              "network_scope": {
+                "$ref": "#/shared_entities/network_scope"
+              },
+              "kpis": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/kpi_definition"
+                }
+              },
+              "breach_policies": {
+                "type": "object"
+              },
+              "applicability": {
+                "type": "object"
+              },
+              "metadata": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "change_reason": {
+            "type": "string",
+            "description": "Reason for change to be recorded in the audit log."
+          }
+        },
+        "required": [
+          "sla_id",
+          "base_version_id",
+          "updates"
+        ]
+      },
+      "returns": "Updated SLA template with new sla_version_id and diff summary."
+    },
+    {
+      "name": "list_slas",
+      "description": "List existing SLAs with filtering, pagination, and version selection.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "customer_tier": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "bronze",
+                    "silver",
+                    "gold",
+                    "platinum",
+                    "custom"
+                  ]
+                }
+              },
+              "scope_type": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "site",
+                    "link",
+                    "device",
+                    "tenant",
+                    "service",
+                    "segment"
+                  ]
+                }
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "draft",
+                    "active",
+                    "deprecated",
+                    "archived"
+                  ]
+                }
+              },
+              "tag": {
+                "type": "string",
+                "description": "Filter by a metadata tag value."
+              },
+              "search": {
+                "type": "string",
+                "description": "Free-text search across SLA name and description."
+              }
+            }
+          },
+          "include_latest_only": {
+            "type": "boolean",
+            "description": "If true, only return the latest version per SLA."
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "name",
+              "customer_tier",
+              "created_at",
+              "updated_at"
+            ]
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "asc"
+          }
+        }
+      },
+      "returns": "Paginated list of SLAs with basic details, current status, and version information."
+    },
+    {
+      "name": "get_sla_details",
+      "description": "Retrieve full details of an SLA, including versions, KPIs, and policies.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sla_id": {
+            "type": "string"
+          },
+          "sla_version_id": {
+            "type": "string",
+            "description": "Optional version identifier; if omitted, latest active version is returned."
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional related entities to include.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "full_kpi_definitions",
+                "change_history",
+                "attached_policies",
+                "applicability_preview",
+                "current_health"
+              ]
+            }
+          }
+        },
+        "required": [
+          "sla_id"
+        ]
+      },
+      "returns": "Complete SLA definition, version history (optional), and any requested related information."
+    },
+    {
+      "name": "activate_sla",
+      "description": "Activate or schedule an SLA version for enforcement in the network.",
+      "stage": "deploy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sla_id": {
+            "type": "string"
+          },
+          "sla_version_id": {
+            "type": "string",
+            "description": "Version to activate; if omitted, latest version is used."
+          },
+          "activation_mode": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "scheduled",
+              "canary"
+            ],
+            "description": "How the SLA should be rolled out."
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Scheduling details if activation_mode is scheduled or canary.",
+            "properties": {
+              "start_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "time_zone": {
+                "type": "string"
+              }
+            }
+          },
+          "canary_config": {
+            "type": "object",
+            "description": "Scope for canary activation.",
+            "properties": {
+              "percentage": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 50,
+                "description": "Percentage of scope to include in canary."
+              },
+              "subset_strategy": {
+                "type": "string",
+                "enum": [
+                  "random",
+                  "by_site",
+                  "by_tenant"
+                ]
+              },
+              "max_blast_radius": {
+                "type": "integer",
+                "description": "Maximum number of entities affected in canary."
+              }
+            }
+          },
+          "conflict_handling": {
+            "type": "string",
+            "enum": [
+              "fail_on_conflict",
+              "override_lower_tier",
+              "override_all"
+            ],
+            "description": "How to handle conflicts with existing active SLAs."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "If true, only validate activation without applying."
+          }
+        },
+        "required": [
+          "sla_id",
+          "activation_mode"
+        ]
+      },
+      "returns": "Activation status, any conflicts detected, and effective policy summary for the applied scope."
+    },
+    {
+      "name": "check_sla_compliance",
+      "description": "Evaluate current and historical SLA compliance across the network scope.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sla_id": {
+            "type": "string"
+          },
+          "sla_version_id": {
+            "type": "string"
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time range for compliance evaluation.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "preset": {
+                "type": "string",
+                "enum": [
+                  "last_15m",
+                  "last_1h",
+                  "last_24h",
+                  "last_7d",
+                  "last_30d"
+                ]
+              }
+            }
+          },
+          "granularity": {
+            "type": "string",
+            "enum": [
+              "5m",
+              "15m",
+              "1h",
+              "24h"
+            ],
+            "description": "Resolution for time-series compliance metrics."
+          },
+          "group_by": {
+            "type": "array",
+            "description": "Dimensions over which to aggregate compliance.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "site",
+                "link",
+                "device",
+                "tenant",
+                "service",
+                "segment",
+                "traffic_class"
+              ]
+            }
+          },
+          "include_details": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "per_kpi_breakdown",
+                "top_offenders",
+                "raw_metrics_sample"
+              ]
+            }
+          }
+        },
+        "required": [
+          "sla_id"
+        ]
+      },
+      "returns": "Compliance score, per-KPI results, aggregated statistics, and requested breakdowns for the time range."
+    },
+    {
+      "name": "list_sla_violations",
+      "description": "List SLA violations with filters, including open and historical incidents.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "sla_id": {
+                "type": "string"
+              },
+              "severity": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "minor",
+                    "major",
+                    "critical"
+                  ]
+                }
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "acknowledged",
+                    "in_progress",
+                    "resolved",
+                    "suppressed"
+                  ]
+                }
+              },
+              "scope_type": {
+                "type": "string",
+                "enum": [
+                  "site",
+                  "link",
+                  "device",
+                  "tenant",
+                  "service",
+                  "segment"
+                ]
+              },
+              "scope_id": {
+                "type": "string",
+                "description": "Specific entity id within the chosen scope_type."
+              },
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "kpi_name": {
+                "type": "string"
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "start_time",
+              "end_time",
+              "severity",
+              "duration",
+              "impact_score"
+            ]
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          }
+        }
+      },
+      "returns": "Paginated list of SLA violations with severity, status, affected scope, and high-level impact metrics."
+    },
+    {
+      "name": "get_violation_details",
+      "description": "Get full details of a specific SLA violation, including contributing factors and impact analysis.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "violation_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "time_series",
+                "root_cause_hypotheses",
+                "correlated_events",
+                "remediation_history",
+                "ticket_references"
+              ]
+            }
+          }
+        },
+        "required": [
+          "violation_id"
+        ]
+      },
+      "returns": "Detailed violation object, including metrics, affected entities, probable root cause, and any associated actions."
+    },
+    {
+      "name": "trigger_remediation",
+      "description": "Trigger or schedule an automated remediation workflow for an SLA violation or at-risk condition.",
+      "stage": "remediate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "remediation_context": {
+            "type": "object",
+            "description": "Context in which remediation is triggered.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "for_violation",
+                  "proactive_for_sla",
+                  "manual_scope"
+                ]
+              },
+              "violation_id": {
+                "type": "string",
+                "description": "Required when mode is for_violation."
+              },
+              "sla_id": {
+                "type": "string",
+                "description": "Used for proactive or manual scope remediation."
+              },
+              "scope_override": {
+                "$ref": "#/shared_entities/network_scope"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "playbook": {
+            "type": "object",
+            "description": "Remediation playbook to execute.",
+            "properties": {
+              "playbook_id": {
+                "type": "string",
+                "description": "Identifier for a predefined remediation playbook."
+              },
+              "steps_override": {
+                "type": "array",
+                "description": "Custom steps overriding a default playbook.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "step_type": {
+                      "type": "string",
+                      "enum": [
+                        "policy_adjustment",
+                        "path_reoptimization",
+                        "bandwidth_reallocation",
+                        "device_reboot",
+                        "ticket_creation",
+                        "notification_only"
+                      ]
+                    },
+                    "parameters": {
+                      "type": "object",
+                      "description": "Step-specific parameters (polymorphic)."
+                    },
+                    "timeout_seconds": {
+                      "type": "integer"
+                    },
+                    "rollback_step": {
+                      "type": "object",
+                      "description": "Definition of how to rollback this step.",
+                      "properties": {
+                        "action": {
+                          "type": "string"
+                        },
+                        "parameters": {
+                          "type": "object"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "step_type"
+                  ]
+                }
+              }
+            }
+          },
+          "execution_options": {
+            "type": "object",
+            "properties": {
+              "schedule_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "max_duration_minutes": {
+                "type": "integer"
+              },
+              "safe_mode": {
+                "type": "boolean",
+                "description": "If true, only non-disruptive actions are permitted."
+              },
+              "approval_required": {
+                "type": "boolean"
+              }
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "If true, simulate remediation without making changes."
+          }
+        },
+        "required": [
+          "remediation_context"
+        ]
+      },
+      "returns": "Remediation run created with remediation_run_id, initial status, and step plan summary."
+    },
+    {
+      "name": "rollback_remediation",
+      "description": "Rollback changes made by a previous remediation run, partially or fully.",
+      "stage": "remediate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "remediation_run_id": {
+            "type": "string"
+          },
+          "rollback_mode": {
+            "type": "string",
+            "enum": [
+              "full",
+              "to_step",
+              "custom_subset"
+            ]
+          },
+          "target_step_index": {
+            "type": "integer",
+            "description": "Step index to roll back to when rollback_mode is to_step."
+          },
+          "step_subset": {
+            "type": "array",
+            "description": "List of step IDs or indices to rollback when mode is custom_subset.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for rollback."
+          },
+          "force": {
+            "type": "boolean",
+            "description": "If true, attempt rollback even if some step metadata is missing."
+          }
+        },
+        "required": [
+          "remediation_run_id",
+          "rollback_mode"
+        ]
+      },
+      "returns": "Rollback execution summary, updated remediation run status, and any residual drift information."
+    },
+    {
+      "name": "get_remediation_status",
+      "description": "Get status, logs, and outcomes of a remediation run, including failed steps for retry.",
+      "stage": "remediate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "remediation_run_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "step_logs",
+                "diff_before_after",
+                "affected_entities",
+                "metrics_impact_summary"
+              ]
+            }
+          }
+        },
+        "required": [
+          "remediation_run_id"
+        ]
+      },
+      "returns": "Remediation run state, per-step status, logs, and optional impact metrics."
+    },
+    {
+      "name": "retry_sla_enforcement",
+      "description": "Retry SLA enforcement or policy deployment after a failure or partial success.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sla_id": {
+            "type": "string"
+          },
+          "sla_version_id": {
+            "type": "string"
+          },
+          "previous_activation_id": {
+            "type": "string",
+            "description": "Identifier of the previous activation attempt to reference failed entities."
+          },
+          "retry_scope": {
+            "type": "string",
+            "enum": [
+              "failed_only",
+              "all",
+              "custom"
+            ]
+          },
+          "custom_entities": {
+            "type": "object",
+            "description": "Explicit list of entities to retry when retry_scope is custom.",
+            "properties": {
+              "site_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "device_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "link_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "max_concurrency": {
+                "type": "integer",
+                "description": "Maximum number of parallel deployments."
+              },
+              "backoff_strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "linear",
+                  "exponential"
+                ]
+              },
+              "skip_validation": {
+                "type": "boolean",
+                "description": "If true, skip pre-deployment validation checks."
+              }
+            }
+          }
+        },
+        "required": [
+          "sla_id",
+          "previous_activation_id",
+          "retry_scope"
+        ]
+      },
+      "returns": "Retry job identifier, targeted entities, and initial retry deployment status."
+    },
+    {
+      "name": "suppress_sla_violation",
+      "description": "Temporarily or permanently suppress alerting and remediation for a specific SLA violation or scope.",
+      "stage": "governance",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "suppress_mode": {
+            "type": "string",
+            "enum": [
+              "by_violation",
+              "by_scope",
+              "by_sla"
+            ]
+          },
+          "violation_id": {
+            "type": "string",
+            "description": "Required when suppress_mode is by_violation."
+          },
+          "sla_id": {
+            "type": "string",
+            "description": "Required when suppress_mode is by_sla or for scope-specific suppression tied to an SLA."
+          },
+          "scope": {
+            "$ref": "#/shared_entities/network_scope"
+          },
+          "duration": {
+            "type": "object",
+            "description": "How long the suppression remains active.",
+            "properties": {
+              "until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "preset": {
+                "type": "string",
+                "enum": [
+                  "1h",
+                  "4h",
+                  "24h",
+                  "7d",
+                  "indefinite"
+                ]
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Business or operational reason for suppression."
+          },
+          "affects": {
+            "type": "array",
+            "description": "What aspects to suppress.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "alerting",
+                "ticketing",
+                "auto_remediation"
+              ]
+            }
+          }
+        },
+        "required": [
+          "suppress_mode"
+        ]
+      },
+      "returns": "Suppression rule identifier, effective scope, and expiration details."
+    },
+    {
+      "name": "sla_bulk_import",
+      "description": "Bulk import sla entities from an external source (CSV, JSON, or upstream system) with validation, mapping, and partial-commit support.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "source": {
+            "type": "object",
+            "description": "Source of records being imported.",
+            "properties": {
+              "source_type": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "json",
+                  "xml",
+                  "upstream_system",
+                  "uploaded_file"
+                ]
+              },
+              "attachment": {
+                "$ref": "#/shared_entities/attachment_ref"
+              },
+              "upstream_system": {
+                "type": "string"
+              },
+              "external_query": {
+                "type": "string",
+                "description": "Optional query used to pull records from upstream."
+              }
+            },
+            "required": [
+              "source_type"
+            ]
+          },
+          "records": {
+            "type": "array",
+            "description": "Inline records, used when source_type is 'json'.",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "field_mapping": {
+            "type": "object",
+            "description": "Map of source field names to target schema fields.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "deduplication": {
+            "type": "object",
+            "properties": {
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "by_external_id",
+                  "by_natural_key",
+                  "by_hash"
+                ]
+              },
+              "natural_key_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "validation_mode": {
+            "type": "string",
+            "enum": [
+              "strict",
+              "lenient",
+              "report_only"
+            ],
+            "default": "strict"
+          },
+          "commit_mode": {
+            "type": "string",
+            "enum": [
+              "all_or_nothing",
+              "partial_commit"
+            ],
+            "default": "partial_commit"
+          },
+          "tags": {
+            "$ref": "#/shared_entities/tag_set"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "actor",
+          "source"
+        ]
+      },
+      "returns": "Bulk import outcome including counts of created/updated/skipped/failed records, per-record errors, and a batch reference."
+    },
+    {
+      "name": "sla_bulk_update",
+      "description": "Apply a single update payload across many sla entities matching a filter or explicit id list.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "selector": {
+            "type": "object",
+            "description": "How to choose entities for the update.",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/sla_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "tags": {
+                    "$ref": "#/shared_entities/tag_set"
+                  },
+                  "created_within": {
+                    "$ref": "#/shared_entities/time_range"
+                  },
+                  "expression": {
+                    "type": "string",
+                    "description": "Optional SQL-like filter expression."
+                  }
+                }
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              }
+            }
+          },
+          "update": {
+            "type": "object",
+            "description": "Field-level updates to apply. Polymorphic - one of set/unset/append.",
+            "properties": {
+              "set": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "unset": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "append": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "if_match": {
+            "type": "object",
+            "description": "Optimistic concurrency check.",
+            "properties": {
+              "version": {
+                "type": "integer"
+              },
+              "etag": {
+                "type": "string"
+              }
+            }
+          },
+          "batch_size": {
+            "type": "integer",
+            "default": 100
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "actor",
+          "selector",
+          "update"
+        ]
+      },
+      "returns": "Bulk update summary including total matched, updated, skipped (e.g. due to concurrency), and failures."
+    },
+    {
+      "name": "sla_bulk_delete",
+      "description": "Soft- or hard-delete (or archive) many sla entities in a single operation with dependency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/sla_id"
+            }
+          },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "older_than": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              }
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft_delete",
+              "hard_delete",
+              "archive"
+            ],
+            "default": "soft_delete"
+          },
+          "cascade": {
+            "type": "object",
+            "description": "Whether to cascade to related entities.",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "include": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "List of relationship names to cascade through."
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false,
+            "description": "Skip non-critical dependency checks."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Bulk delete result including counts of deleted/archived/skipped entities, dependency conflicts, and a tombstone reference."
+    },
+    {
+      "name": "sla_bulk_export",
+      "description": "Export sla entities (and optional related data) to a downloadable artifact, optionally redacting sensitive fields.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/sla_id"
+                }
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_within": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "expression": {
+                "type": "string"
+              }
+            }
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "json",
+              "parquet",
+              "ndjson",
+              "xlsx"
+            ],
+            "default": "json"
+          },
+          "include_related": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names of related collections to include."
+          },
+          "field_projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Subset of top-level fields to include."
+          },
+          "redact_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "delivery_type": {
+                "type": "string",
+                "enum": [
+                  "download_url",
+                  "s3",
+                  "sftp",
+                  "email"
+                ],
+                "default": "download_url"
+              },
+              "destination": {
+                "type": "string",
+                "description": "Destination URI/email depending on delivery_type."
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "delivery_type"
+            ]
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "actor",
+          "format",
+          "delivery"
+        ]
+      },
+      "returns": "Export job descriptor including job_id, expected size, status, and delivery details."
+    },
+    {
+      "name": "sla_search_advanced",
+      "description": "Faceted, full-text and structured search across sla entities with relevance ranking and facet aggregations.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "query": {
+            "type": "string",
+            "description": "Optional full-text query."
+          },
+          "entity_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "sla_record",
+                "sla",
+                "sla_version",
+                "policy",
+                "violation",
+                "remediation_run"
+              ]
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "owner_id": {
+                "type": "string"
+              },
+              "created_within": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_within": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "custom_expression": {
+                "type": "string"
+              }
+            }
+          },
+          "facets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Field names to compute aggregations over."
+          },
+          "highlight": {
+            "type": "boolean",
+            "default": false
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Search response with ranked hits, total count, facet bucket counts, and pagination cursor."
+    },
+    {
+      "name": "sla_subscribe_to_events",
+      "description": "Create a notification subscription for sla events using one or more channels and event-type filters.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "subscription_name": {
+            "type": "string"
+          },
+          "event_types": {
+            "type": "array",
+            "description": "Event types to subscribe to.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "created",
+                "updated",
+                "deleted",
+                "status_changed",
+                "failed",
+                "approved",
+                "rejected",
+                "rolled_back",
+                "completed",
+                "escalated"
+              ]
+            }
+          },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/sla_id"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "severity": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warning",
+                    "minor",
+                    "major",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/notification_channel"
+            },
+            "minItems": 1
+          },
+          "delivery_policy": {
+            "type": "object",
+            "properties": {
+              "rate_limit_per_minute": {
+                "type": "integer"
+              },
+              "deduplicate_within_seconds": {
+                "type": "integer"
+              },
+              "retry_policy": {
+                "type": "object",
+                "properties": {
+                  "max_attempts": {
+                    "type": "integer",
+                    "default": 5
+                  },
+                  "backoff_strategy": {
+                    "type": "string",
+                    "enum": [
+                      "fixed",
+                      "linear",
+                      "exponential"
+                    ],
+                    "default": "exponential"
+                  }
+                }
+              }
+            }
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "subscription_name",
+          "event_types",
+          "channels"
+        ]
+      },
+      "returns": "Subscription descriptor including subscription_id, enabled status, and validated channel configurations."
+    },
+    {
+      "name": "sla_list_webhook_deliveries",
+      "description": "List webhook delivery attempts for sla notifications with filters for status, time window, and subscription.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "subscription_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "delivered",
+                "failed",
+                "retrying",
+                "dead_letter"
+              ]
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "include_payload": {
+            "type": "boolean",
+            "default": false
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Paginated list of webhook delivery records including attempt counts, response codes, and last error."
+    },
+    {
+      "name": "sla_get_audit_log",
+      "description": "Retrieve the audit trail for one or more sla entities with actor, change, and diff information.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/sla_id"
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "actor_filter": {
+            "type": "object",
+            "properties": {
+              "actor_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "event_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "create",
+                "update",
+                "delete",
+                "status_change",
+                "approval",
+                "rollback",
+                "access"
+              ]
+            }
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": true
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Paginated audit events ordered by time with field-level diffs when requested."
+    },
+    {
+      "name": "sla_schedule_recurring_job",
+      "description": "Schedule a recurring job (e.g. health probe, report generation, sync) related to sla on a cron/interval/calendar schedule.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "job_name": {
+            "type": "string"
+          },
+          "job_kind": {
+            "type": "string",
+            "enum": [
+              "health_check",
+              "report",
+              "sync",
+              "rotation",
+              "cleanup",
+              "reconciliation",
+              "snapshot"
+            ]
+          },
+          "target": {
+            "type": "object",
+            "description": "Target scope of the job (entity ids and/or filter).",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/sla_id"
+                }
+              },
+              "filter_expression": {
+                "type": "string"
+              }
+            }
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "parameters_payload": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Job-specific parameters passed at each run."
+          },
+          "notification_channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/notification_channel"
+            }
+          },
+          "max_concurrency": {
+            "type": "integer",
+            "default": 1
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "job_name",
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Scheduled job descriptor including job_id, next_run_at, enablement status, and schedule summary."
+    },
+    {
+      "name": "sla_simulate_operation",
+      "description": "Simulate a sla operation (e.g. change, deploy, terminate) without committing changes, returning predicted effects and warnings.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "create",
+              "update",
+              "delete",
+              "deploy",
+              "rollback",
+              "scale",
+              "migrate",
+              "terminate",
+              "renew"
+            ]
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/sla_id"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The would-be request payload."
+          },
+          "scenario": {
+            "type": "object",
+            "description": "Optional what-if scenario overrides.",
+            "properties": {
+              "assume_load_factor": {
+                "type": "number"
+              },
+              "assume_failures": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "assume_traffic_pattern": {
+                "type": "string"
+              }
+            }
+          },
+          "snapshot_id": {
+            "type": "string",
+            "description": "Optional snapshot id to simulate against a frozen state."
+          },
+          "depth": {
+            "type": "string",
+            "enum": [
+              "shallow",
+              "deep"
+            ],
+            "default": "deep"
+          },
+          "include_cost_impact": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "operation"
+        ]
+      },
+      "returns": "Simulation report with predicted state diff, dependency impacts, warnings, errors, and cost estimate."
+    },
+    {
+      "name": "sla_request_approval",
+      "description": "Open an approval request for a pending sla change, with reviewers, justification, and SLA.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/sla_id"
+          },
+          "change_summary": {
+            "type": "string"
+          },
+          "change_payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "approver_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "approver_id"
+              ]
+            },
+            "minItems": 1
+          },
+          "policy": {
+            "type": "object",
+            "properties": {
+              "quorum": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "veto_roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "auto_approve_if_no_response_hours": {
+                "type": "integer"
+              }
+            }
+          },
+          "sla_hours": {
+            "type": "integer"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "tags": {
+            "$ref": "#/shared_entities/tag_set"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id",
+          "change_summary",
+          "approvers"
+        ]
+      },
+      "returns": "Approval request record including approval_request_id, status, due_at, and current quorum."
+    },
+    {
+      "name": "sla_record_approval_decision",
+      "description": "Record an individual approver's decision on a pending sla approval request and advance the workflow.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "approval_request_id": {
+            "type": "string"
+          },
+          "decision": {
+            "$ref": "#/shared_entities/approval_decision"
+          },
+          "side_effects": {
+            "type": "object",
+            "description": "Optional side effects of this decision.",
+            "properties": {
+              "auto_execute_on_final_approval": {
+                "type": "boolean",
+                "default": false
+              },
+              "notify_requester": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "required": [
+          "actor",
+          "approval_request_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval request state including remaining required approvers and whether the request is now finalized."
+    },
+    {
+      "name": "sla_add_comment",
+      "description": "Attach a comment, internal note, or @-mention to a sla entity for collaboration.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/sla_id"
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown or rich-text body of the comment."
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "internal",
+              "customer_visible",
+              "partner_visible"
+            ],
+            "default": "internal"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "User IDs to notify."
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "parent_comment_id": {
+            "type": "string",
+            "description": "If replying to a thread."
+          },
+          "tags": {
+            "$ref": "#/shared_entities/tag_set"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id",
+          "body"
+        ]
+      },
+      "returns": "Created comment record including comment_id, created_at, and notification fan-out summary."
+    },
+    {
+      "name": "sla_attach_evidence",
+      "description": "Attach one or more evidence files (logs, screenshots, contracts, diagnostics) to a sla entity.",
+      "stage": "evidence",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/sla_id"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            },
+            "minItems": 1
+          },
+          "evidence_type": {
+            "type": "string",
+            "enum": [
+              "diagnostic",
+              "screenshot",
+              "log_excerpt",
+              "contract",
+              "supporting_doc",
+              "telemetry"
+            ]
+          },
+          "redaction_policy": {
+            "type": "object",
+            "properties": {
+              "redact_pii": {
+                "type": "boolean",
+                "default": true
+              },
+              "redacted_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id",
+          "attachments"
+        ]
+      },
+      "returns": "Attachment registration result with stored attachment IDs, virus-scan status, and any redactions applied."
+    },
+    {
+      "name": "sla_create_snapshot",
+      "description": "Create a point-in-time snapshot of a sla entity (and optionally its dependencies) for restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/sla_id"
+          },
+          "snapshot_name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "include_related": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "exclude_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "retention_days": {
+            "type": "integer",
+            "default": 90
+          },
+          "tags": {
+            "$ref": "#/shared_entities/tag_set"
+          },
+          "encryption_kms_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id",
+          "snapshot_name"
+        ]
+      },
+      "returns": "Snapshot descriptor including snapshot_id, size, scope manifest, and retention date."
+    },
+    {
+      "name": "sla_restore_snapshot",
+      "description": "Restore a sla entity from a previously captured snapshot, with conflict-resolution and dry-run options.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_entity_id": {
+            "$ref": "#/shared_entities/sla_id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "create_new"
+            ],
+            "default": "overwrite"
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "snapshot_wins",
+              "current_wins",
+              "manual_resolution"
+            ],
+            "default": "snapshot_wins"
+          },
+          "include_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "exclude_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore result including restored entity id, conflicts, applied paths, and the resulting state version."
+    },
+    {
+      "name": "sla_get_kpi_metrics",
+      "description": "Compute aggregated KPIs and time series for sla activity over a time range, grouped by chosen dimensions.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "granularity": {
+            "type": "string",
+            "enum": [
+              "minute",
+              "hour",
+              "day",
+              "week",
+              "month"
+            ],
+            "default": "day"
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Metric names (e.g., creations, success_rate, latency_p95)."
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "entity_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/sla_id"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "compare_with_previous_period": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "actor",
+          "time_range",
+          "metrics"
+        ]
+      },
+      "returns": "Aggregated KPI snapshot with per-bucket time series, totals, and optional period-over-period deltas."
+    },
+    {
+      "name": "sla_pin_to_dashboard",
+      "description": "Pin a sla view, metric, or saved query to an operations dashboard for at-a-glance monitoring.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "dashboard_id": {
+            "type": "string"
+          },
+          "tile_type": {
+            "type": "string",
+            "enum": [
+              "metric",
+              "list",
+              "kpi",
+              "timeseries",
+              "alert_feed",
+              "map"
+            ]
+          },
+          "tile_config": {
+            "type": "object",
+            "description": "Tile-type-specific configuration.",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "metric_name": {
+                "type": "string"
+              },
+              "filter_expression": {
+                "type": "string"
+              },
+              "time_window_seconds": {
+                "type": "integer"
+              },
+              "thresholds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "level": {
+                      "type": "string",
+                      "enum": [
+                        "info",
+                        "warn",
+                        "critical"
+                      ]
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte"
+                      ]
+                    },
+                    "value": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "level",
+                    "operator",
+                    "value"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "title"
+            ]
+          },
+          "position": {
+            "type": "object",
+            "properties": {
+              "row": {
+                "type": "integer"
+              },
+              "column": {
+                "type": "integer"
+              },
+              "width": {
+                "type": "integer"
+              },
+              "height": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "required": [
+          "actor",
+          "dashboard_id",
+          "tile_type",
+          "tile_config"
+        ]
+      },
+      "returns": "Created dashboard tile descriptor including tile_id, dashboard_id, and effective configuration."
+    },
+    {
+      "name": "sla_upsert_policy",
+      "description": "Create or update a governance/automation policy that applies to sla entities with rule conditions and actions.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "entity_filter": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/policy_rule"
+            },
+            "minItems": 1
+          },
+          "enforcement": {
+            "type": "string",
+            "enum": [
+              "advisory",
+              "blocking",
+              "auto_remediate"
+            ],
+            "default": "advisory"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "effective_to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version_note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "name",
+          "rules"
+        ]
+      },
+      "returns": "Policy descriptor including policy_id, current version, rule count, and validation warnings."
+    },
+    {
+      "name": "sla_evaluate_policy",
+      "description": "Evaluate one or more policies against a given sla payload or live entity and return decisions and matched rules.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "policy_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "target": {
+            "type": "object",
+            "description": "Either an entity reference or an inline payload to evaluate.",
+            "properties": {
+              "entity_id": {
+                "$ref": "#/shared_entities/sla_id"
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "context": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "advisory",
+              "blocking",
+              "auto_remediate"
+            ],
+            "default": "advisory"
+          },
+          "explain": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "target"
+        ]
+      },
+      "returns": "Policy evaluation report listing decisions (allow/deny/remediate), matched rules, and explanations per rule."
+    },
+    {
+      "name": "sla_get_dependency_graph",
+      "description": "Return the dependency or association graph for a sla entity, including inbound and outbound links.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/sla_id"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "inbound",
+              "outbound",
+              "both"
+            ],
+            "default": "both"
+          },
+          "max_depth": {
+            "type": "integer",
+            "default": 2,
+            "minimum": 1,
+            "maximum": 10
+          },
+          "edge_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "include_metadata": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id"
+        ]
+      },
+      "returns": "Graph response containing nodes and edges up to the requested depth with edge labels and metadata."
+    },
+    {
+      "name": "sla_manage_links_and_tags",
+      "description": "Add, remove or replace tags and cross-entity links for a sla entity in a single atomic operation.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/sla_id"
+          },
+          "tags": {
+            "type": "object",
+            "properties": {
+              "set": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "remove": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "links": {
+            "type": "array",
+            "description": "Links to add, remove, or update.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "add",
+                    "remove",
+                    "update"
+                  ]
+                },
+                "link_type": {
+                  "type": "string"
+                },
+                "target_entity_type": {
+                  "type": "string"
+                },
+                "target_id": {
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "op",
+                "link_type",
+                "target_entity_type",
+                "target_id"
+              ]
+            }
+          },
+          "if_match_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id"
+        ]
+      },
+      "returns": "Updated entity reference with applied tag and link changes plus any conflicts encountered."
+    }
+  ]
+}

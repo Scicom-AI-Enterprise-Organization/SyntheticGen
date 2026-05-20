@@ -1,0 +1,4797 @@
+{
+  "workflow_name": "cloud_exchange_connectivity_provisioning",
+  "description": "End-to-end workflow for requesting, validating, provisioning, monitoring, and managing connectivity services on a cloud exchange platform, including error handling, modification, and rollback.",
+  "domain": "taas_connectivity/cloud_exchange",
+  "shared_entities": {
+    "customer_id": {
+      "type": "string",
+      "description": "Unique identifier of the customer or tenant within the cloud exchange platform"
+    },
+    "project_id": {
+      "type": "string",
+      "description": "Identifier for a logical project or account context under a customer"
+    },
+    "connection_request_id": {
+      "type": "string",
+      "description": "Identifier for a requested connectivity order prior to activation"
+    },
+    "connection_id": {
+      "type": "string",
+      "description": "Identifier for an active or provisioned connectivity service on the cloud exchange"
+    },
+    "provider_id": {
+      "type": "string",
+      "description": "Identifier for a cloud or network service provider on the exchange"
+    },
+    "port_id": {
+      "type": "string",
+      "description": "Identifier for a physical or logical port on the exchange"
+    },
+    "quote_id": {
+      "type": "string",
+      "description": "Identifier for a commercial quote associated with a connection request"
+    },
+    "change_request_id": {
+      "type": "string",
+      "description": "Identifier for a requested change to an existing connection"
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Identifier for a provisioning or workflow task running in the background"
+    },
+    "audit_event_id": {
+      "type": "string",
+      "description": "Identifier of an audit log entry."
+    },
+    "approval_id": {
+      "type": "string",
+      "description": "Identifier of an approval workflow."
+    },
+    "subscription_id": {
+      "type": "string",
+      "description": "Identifier of a webhook or notification subscription."
+    },
+    "snapshot_id": {
+      "type": "string",
+      "description": "Identifier of a captured state snapshot."
+    },
+    "alert_id": {
+      "type": "string",
+      "description": "Identifier of a monitoring alert."
+    },
+    "incident_id": {
+      "type": "string",
+      "description": "Identifier of an incident record."
+    },
+    "policy_id": {
+      "type": "string",
+      "description": "Identifier of a policy record."
+    },
+    "dashboard_id": {
+      "type": "string",
+      "description": "Identifier of a dashboard definition."
+    },
+    "schedule_id": {
+      "type": "string",
+      "description": "Identifier of a scheduled job."
+    }
+  },
+  "functions": [
+    {
+      "name": "discover_exchange_capabilities",
+      "description": "List available providers, locations, and service profiles on the cloud exchange for a given customer and project context.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "object",
+            "description": "Optional filters to narrow down the available capabilities",
+            "properties": {
+              "locations": {
+                "type": "array",
+                "description": "List of desired metro/location codes",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "provider_types": {
+                "type": "array",
+                "description": "Filter by provider categories",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "cloud",
+                    "saas",
+                    "network",
+                    "internet",
+                    "security",
+                    "storage"
+                  ]
+                }
+              },
+              "connectivity_types": {
+                "type": "array",
+                "description": "Filter by connectivity technology",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "layer2_vc",
+                    "layer3_vpn",
+                    "internet_exchange",
+                    "cloud_private_link"
+                  ]
+                }
+              },
+              "bandwidth_min_mbps": {
+                "type": "integer",
+                "description": "Minimum bandwidth in Mbps"
+              },
+              "bandwidth_max_mbps": {
+                "type": "integer",
+                "description": "Maximum bandwidth in Mbps"
+              }
+            }
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional data to include in the response",
+            "items": {
+              "type": "string",
+              "enum": [
+                "pricing_tiers",
+                "supported_regions",
+                "service_level_options"
+              ]
+            }
+          }
+        },
+        "required": [
+          "customer_id"
+        ]
+      },
+      "returns": "List of available providers, locations, ports, and service profiles for the specified customer and optional filters."
+    },
+    {
+      "name": "check_connectivity_feasibility",
+      "description": "Perform a technical and policy feasibility check for a prospective connection between a customer port and target provider endpoint.",
+      "stage": "precheck",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "object",
+            "description": "Source side details of the connection",
+            "properties": {
+              "port_id": {
+                "type": "string"
+              },
+              "vlan": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 4094
+              },
+              "redundancy_group": {
+                "type": "string",
+                "description": "Optional redundancy group identifier if part of HA design"
+              }
+            },
+            "required": [
+              "port_id"
+            ]
+          },
+          "destination": {
+            "type": "object",
+            "description": "Destination side details (provider or remote port)",
+            "properties": {
+              "provider_id": {
+                "type": "string"
+              },
+              "service_profile_id": {
+                "type": "string",
+                "description": "Identifier of target service profile offered by the provider"
+              },
+              "region": {
+                "type": "string",
+                "description": "Cloud/provider region code, e.g., us-east-1"
+              },
+              "peering_type": {
+                "type": "string",
+                "enum": [
+                  "private",
+                  "public",
+                  "transit"
+                ]
+              }
+            },
+            "required": [
+              "provider_id",
+              "service_profile_id"
+            ]
+          },
+          "bandwidth_mbps": {
+            "type": "integer",
+            "description": "Requested committed bandwidth in Mbps",
+            "minimum": 50
+          },
+          "qos_profile": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "business",
+              "premium"
+            ]
+          },
+          "constraints": {
+            "type": "object",
+            "description": "Optional constraints for latency, path diversity, and maintenance windows",
+            "properties": {
+              "max_latency_ms": {
+                "type": "number"
+              },
+              "require_diverse_paths": {
+                "type": "boolean",
+                "default": false
+              },
+              "maintenance_window": {
+                "type": "object",
+                "description": "Preferred maintenance window for provisioning changes",
+                "properties": {
+                  "timezone": {
+                    "type": "string"
+                  },
+                  "start_time": {
+                    "type": "string",
+                    "format": "time"
+                  },
+                  "end_time": {
+                    "type": "string",
+                    "format": "time"
+                  },
+                  "days_of_week": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "monday",
+                        "tuesday",
+                        "wednesday",
+                        "thursday",
+                        "friday",
+                        "saturday",
+                        "sunday"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "customer_id",
+          "source",
+          "destination",
+          "bandwidth_mbps"
+        ]
+      },
+      "returns": "Feasibility assessment including pass/fail, reasons, suggested adjustments, and an optional precheck reference ID."
+    },
+    {
+      "name": "create_connection_request",
+      "description": "Create a new connectivity request on the cloud exchange, including technical parameters and commercial options.",
+      "stage": "request",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "feasibility_reference_id": {
+            "type": "string",
+            "description": "Optional reference to a previous feasibility check result"
+          },
+          "technical_config": {
+            "type": "object",
+            "description": "Technical configuration for the requested connection",
+            "properties": {
+              "source": {
+                "type": "object",
+                "properties": {
+                  "port_id": {
+                    "type": "string"
+                  },
+                  "vlan": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 4094
+                  },
+                  "ip_config": {
+                    "type": "object",
+                    "description": "Optional L3 configuration on the source side",
+                    "properties": {
+                      "address_family": {
+                        "type": "string",
+                        "enum": [
+                          "ipv4",
+                          "ipv6",
+                          "dual_stack"
+                        ]
+                      },
+                      "customer_ip_cidr": {
+                        "type": "string"
+                      },
+                      "gateway_ip": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "port_id"
+                ]
+              },
+              "destination": {
+                "type": "object",
+                "properties": {
+                  "provider_id": {
+                    "type": "string"
+                  },
+                  "service_profile_id": {
+                    "type": "string"
+                  },
+                  "region": {
+                    "type": "string"
+                  },
+                  "provider_account": {
+                    "type": "object",
+                    "description": "Identifiers needed by the provider to map the connection",
+                    "properties": {
+                      "account_id": {
+                        "type": "string"
+                      },
+                      "project_name": {
+                        "type": "string"
+                      },
+                      "tenant_id": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "provider_id",
+                  "service_profile_id"
+                ]
+              },
+              "routing": {
+                "type": "object",
+                "description": "L3/BGP routing configuration when applicable",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "static",
+                      "bgp"
+                    ]
+                  },
+                  "bgp": {
+                    "type": "object",
+                    "properties": {
+                      "customer_asn": {
+                        "type": "integer"
+                      },
+                      "provider_asn": {
+                        "type": "integer"
+                      },
+                      "customer_peering_ip": {
+                        "type": "string"
+                      },
+                      "provider_peering_ip": {
+                        "type": "string"
+                      },
+                      "md5_password": {
+                        "type": "string"
+                      },
+                      "advertised_prefixes": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              "bandwidth_mbps": {
+                "type": "integer",
+                "minimum": 50
+              },
+              "redundancy": {
+                "type": "string",
+                "enum": [
+                  "single",
+                  "active_active",
+                  "active_standby"
+                ]
+              }
+            },
+            "required": [
+              "source",
+              "destination",
+              "bandwidth_mbps"
+            ]
+          },
+          "commercial_terms": {
+            "type": "object",
+            "description": "Commercial options associated with this request",
+            "properties": {
+              "billing_term": {
+                "type": "string",
+                "enum": [
+                  "hourly",
+                  "monthly",
+                  "annual"
+                ]
+              },
+              "contract_duration_months": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "currency": {
+                "type": "string"
+              },
+              "auto_renew": {
+                "type": "boolean",
+                "default": true
+              },
+              "discount_codes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "billing_term",
+              "currency"
+            ]
+          },
+          "notifications": {
+            "type": "object",
+            "description": "Notification preferences for this connection request",
+            "properties": {
+              "emails": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "email"
+                }
+              },
+              "webhooks": {
+                "type": "array",
+                "description": "Webhook targets for provisioning events",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "event_types": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "request_created",
+                          "quote_generated",
+                          "provisioning_started",
+                          "provisioning_completed",
+                          "provisioning_failed",
+                          "connection_up",
+                          "connection_down"
+                        ]
+                      }
+                    },
+                    "secret": {
+                      "type": "string",
+                      "description": "Optional secret used to sign webhook callbacks"
+                    }
+                  },
+                  "required": [
+                    "url"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "customer_id",
+          "technical_config",
+          "commercial_terms"
+        ]
+      },
+      "returns": "New connection_request_id with initial status, along with a summary of technical and commercial parameters."
+    },
+    {
+      "name": "generate_connection_quote",
+      "description": "Generate a commercial quote for a given connection request, including breakdown of charges and estimated taxes.",
+      "stage": "quote",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection_request_id": {
+            "type": "string"
+          },
+          "pricing_options": {
+            "type": "object",
+            "description": "Options influencing how pricing is calculated",
+            "properties": {
+              "include_setup_fees": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_taxes": {
+                "type": "boolean",
+                "default": true
+              },
+              "regional_tax_overrides": {
+                "type": "array",
+                "description": "Override tax rules for specific regions",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "region": {
+                      "type": "string"
+                    },
+                    "tax_rate": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "region",
+                    "tax_rate"
+                  ]
+                }
+              },
+              "currency": {
+                "type": "string",
+                "description": "Override the default currency"
+              }
+            }
+          }
+        },
+        "required": [
+          "connection_request_id"
+        ]
+      },
+      "returns": "quote_id with detailed recurring and non-recurring charges, validity period, and acceptance conditions."
+    },
+    {
+      "name": "submit_connection_order",
+      "description": "Submit a connection request and associated quote for provisioning, creating a provisioning task and locking pricing.",
+      "stage": "order",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection_request_id": {
+            "type": "string"
+          },
+          "quote_id": {
+            "type": "string"
+          },
+          "customer_id": {
+            "type": "string"
+          },
+          "order_metadata": {
+            "type": "object",
+            "description": "Additional metadata for the order",
+            "properties": {
+              "customer_po_number": {
+                "type": "string"
+              },
+              "internal_reference": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "activation_preferences": {
+            "type": "object",
+            "description": "Preferences for when and how the connection should be activated",
+            "properties": {
+              "activation_type": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "scheduled",
+                  "manual"
+                ]
+              },
+              "scheduled_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Required if activation_type is scheduled"
+              },
+              "auto_enable_billing_on_activation": {
+                "type": "boolean",
+                "default": true
+              }
+            },
+            "required": [
+              "activation_type"
+            ]
+          }
+        },
+        "required": [
+          "connection_request_id",
+          "quote_id",
+          "customer_id"
+        ]
+      },
+      "returns": "Provisioning task_id, current order status, and a preliminary connection_id placeholder if already reserved."
+    },
+    {
+      "name": "get_provisioning_task_status",
+      "description": "Retrieve status and progress details for a provisioning task associated with a connection order.",
+      "stage": "status",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional information to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "steps",
+                "logs",
+                "warnings",
+                "rollback_plan"
+              ]
+            }
+          },
+          "page_logs": {
+            "type": "object",
+            "description": "Pagination options for logs when included",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 200,
+                "default": 50
+              }
+            }
+          }
+        },
+        "required": [
+          "task_id"
+        ]
+      },
+      "returns": "Current provisioning status, percentage complete, step breakdown (if requested), and any error details if the task failed."
+    },
+    {
+      "name": "get_connection_details",
+      "description": "Retrieve detailed technical, commercial, and operational information about an existing connection on the exchange.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Specify additional data to be returned",
+            "items": {
+              "type": "string",
+              "enum": [
+                "technical_config",
+                "commercial_terms",
+                "monitoring",
+                "event_history",
+                "provider_metadata"
+              ]
+            }
+          }
+        },
+        "required": [
+          "connection_id"
+        ]
+      },
+      "returns": "Full connection object with technical configuration, commercial data, operational state, and optional related history and monitoring snapshots."
+    },
+    {
+      "name": "list_connections",
+      "description": "List and filter connections for a customer or project, with support for pagination and status filters.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "provisioning",
+                    "active",
+                    "suspended",
+                    "failed",
+                    "decommissioned"
+                  ]
+                }
+              },
+              "provider_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "bandwidth_min_mbps": {
+                "type": "integer"
+              },
+              "bandwidth_max_mbps": {
+                "type": "integer"
+              },
+              "created_after": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_before": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 10,
+            "maximum": 200,
+            "default": 50
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "bandwidth_mbps",
+              "status"
+            ]
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          }
+        },
+        "required": [
+          "customer_id"
+        ]
+      },
+      "returns": "Paginated list of connections matching the filters, including basic details and counts."
+    },
+    {
+      "name": "monitor_connection_health",
+      "description": "Fetch current and recent health metrics and alarms for a given connection.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window to query metrics for",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "preset": {
+                "type": "string",
+                "enum": [
+                  "last_15m",
+                  "last_1h",
+                  "last_24h",
+                  "last_7d"
+                ],
+                "description": "If provided, overrides explicit start/end"
+              }
+            }
+          },
+          "metrics": {
+            "type": "array",
+            "description": "Which metrics to return, blank means a default set",
+            "items": {
+              "type": "string",
+              "enum": [
+                "availability",
+                "latency_ms",
+                "packet_loss_percent",
+                "jitter_ms",
+                "inbound_utilization_percent",
+                "outbound_utilization_percent"
+              ]
+            }
+          },
+          "include_alarms": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "connection_id"
+        ]
+      },
+      "returns": "Current health summary, timeseries metrics for selected window, and any active or recent alarms."
+    },
+    {
+      "name": "modify_connection",
+      "description": "Submit a change request for an existing connection, such as bandwidth upgrade, QoS change, or routing modification.",
+      "stage": "change_request",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "customer_id": {
+            "type": "string"
+          },
+          "change_scope": {
+            "type": "object",
+            "description": "Description of the requested change",
+            "properties": {
+              "bandwidth_mbps": {
+                "type": "integer",
+                "description": "New desired bandwidth; omit if unchanged"
+              },
+              "qos_profile": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "business",
+                  "premium"
+                ]
+              },
+              "routing_changes": {
+                "type": "object",
+                "description": "Changes to routing parameters",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "static",
+                      "bgp"
+                    ]
+                  },
+                  "bgp": {
+                    "type": "object",
+                    "properties": {
+                      "customer_asn": {
+                        "type": "integer"
+                      },
+                      "md5_password": {
+                        "type": "string"
+                      },
+                      "additional_prefixes": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "remove_prefixes": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "schedule": {
+                "type": "object",
+                "description": "Scheduling options for the change",
+                "properties": {
+                  "change_type": {
+                    "type": "string",
+                    "enum": [
+                      "immediate",
+                      "scheduled"
+                    ]
+                  },
+                  "scheduled_time": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "required": [
+                  "change_type"
+                ]
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable reason for the requested change"
+          },
+          "impact_approval": {
+            "type": "object",
+            "description": "Customer approval regarding service impact",
+            "properties": {
+              "approved_by": {
+                "type": "string"
+              },
+              "ticket_reference": {
+                "type": "string",
+                "description": "Optional reference to an external change ticket"
+              },
+              "downtime_tolerance_minutes": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "required": [
+          "connection_id",
+          "customer_id",
+          "change_scope"
+        ]
+      },
+      "returns": "change_request_id, preliminary impact analysis, and whether additional approval steps are required."
+    },
+    {
+      "name": "retry_or_rollback_provisioning",
+      "description": "Handle failed or partial provisioning by retrying specific steps or rolling back the connection request.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "task_id": {
+            "type": "string",
+            "description": "Provisioning task to recover"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "retry_full",
+              "retry_failed_steps",
+              "rollback"
+            ]
+          },
+          "options": {
+            "type": "object",
+            "description": "Additional options influencing recovery behavior",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 3
+              },
+              "force_rollback": {
+                "type": "boolean",
+                "default": false
+              },
+              "notify_contacts": {
+                "type": "array",
+                "description": "List of contacts to notify about the recovery action",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "email": {
+                      "type": "string",
+                      "format": "email"
+                    },
+                    "role": {
+                      "type": "string",
+                      "enum": [
+                        "technical",
+                        "billing",
+                        "operations"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "email"
+                  ]
+                }
+              },
+              "reason": {
+                "type": "string",
+                "description": "Explanation of why recovery is triggered"
+              }
+            }
+          }
+        },
+        "required": [
+          "task_id",
+          "mode"
+        ]
+      },
+      "returns": "New or updated task_id for the recovery operation, along with the recovery plan summary and current status."
+    },
+    {
+      "name": "suspend_or_terminate_connection",
+      "description": "Suspend (temporarily disable) or terminate (permanently decommission) an existing connection, with optional scheduling and rollback options.",
+      "stage": "lifecycle",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "suspend",
+              "resume",
+              "terminate"
+            ]
+          },
+          "schedule": {
+            "type": "object",
+            "description": "When the lifecycle action should take effect",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "scheduled"
+                ]
+              },
+              "scheduled_time": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "billing_handling": {
+            "type": "object",
+            "description": "Instructions for how billing should be handled",
+            "properties": {
+              "prorate": {
+                "type": "boolean",
+                "default": true
+              },
+              "early_termination_waiver": {
+                "type": "boolean",
+                "default": false
+              },
+              "approval_reference": {
+                "type": "string",
+                "description": "Reference for approval to waive penalties if applicable"
+              }
+            }
+          }
+        },
+        "required": [
+          "connection_id",
+          "action"
+        ]
+      },
+      "returns": "Confirmation of requested lifecycle action with resulting status, effective time, and any billing impact summary."
+    },
+    {
+      "name": "audit_connection_activity",
+      "description": "Retrieve an audit trail of configuration, provisioning, and lifecycle events for a specific connection or connection request.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "connection_id": {
+            "type": "string",
+            "description": "Either connection_id or connection_request_id must be provided"
+          },
+          "connection_request_id": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "event_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "creation",
+                    "update",
+                    "status_change",
+                    "alarm",
+                    "lifecycle",
+                    "billing",
+                    "security"
+                  ]
+                }
+              },
+              "initiated_by": {
+                "type": "array",
+                "description": "Filter by actor types",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "customer",
+                    "provider",
+                    "system",
+                    "operator"
+                  ]
+                }
+              },
+              "time_range": {
+                "type": "object",
+                "properties": {
+                  "start": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "end": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 20,
+            "maximum": 200,
+            "default": 50
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "connection_id"
+            ]
+          },
+          {
+            "required": [
+              "connection_request_id"
+            ]
+          }
+        ]
+      },
+      "returns": "Paginated list of audit events with timestamps, actor details, event types, and before/after snapshots where applicable."
+    },
+    {
+      "name": "search_customers",
+      "description": "Faceted search across customer records with rich filters, full-text query, and faceted aggregations for cloud_exchange_connectivity_provisioning.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query_text": {
+            "type": "string",
+            "description": "Optional full-text query string"
+          },
+          "filters": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "facets": {
+            "type": "array",
+            "description": "Facet definitions returned alongside results",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Facet field"
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 100,
+                  "description": "Top buckets to return"
+                },
+                "include_other": {
+                  "type": "boolean",
+                  "description": "Whether to include an 'other' bucket"
+                }
+              },
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "include_archived": {
+            "type": "boolean",
+            "description": "Include archived records"
+          },
+          "highlight": {
+            "type": "boolean",
+            "description": "Return highlighted snippets when matching text"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based page index"
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Records per page"
+          },
+          "sort": {
+            "type": "array",
+            "description": "Ordered sort directives",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Sort field name"
+                },
+                "direction": {
+                  "type": "string",
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ],
+                  "description": "Sort direction"
+                }
+              },
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque continuation token for stable pagination"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "A paginated result set of customer records with facet buckets, total count, and continuation cursor."
+    },
+    {
+      "name": "list_customers_by_status",
+      "description": "List customer records filtered by lifecycle status with stable cursor pagination.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "statuses": {
+            "type": "array",
+            "description": "Statuses to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "pending",
+                "active",
+                "blocked",
+                "failed",
+                "completed",
+                "archived"
+              ]
+            },
+            "minItems": 1
+          },
+          "owner_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional owner filter"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Tag membership filter (any-of)"
+          },
+          "created_window": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "updated_window": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "include_metrics": {
+            "type": "boolean",
+            "description": "Attach summary metrics per record"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based page index"
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Records per page"
+          },
+          "sort": {
+            "type": "array",
+            "description": "Ordered sort directives",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Sort field name"
+                },
+                "direction": {
+                  "type": "string",
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ],
+                  "description": "Sort direction"
+                }
+              },
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque continuation token for stable pagination"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "statuses"
+        ]
+      },
+      "returns": "A paginated list of customer records matching the requested statuses, optionally with summary metrics."
+    },
+    {
+      "name": "get_customer_detail",
+      "description": "Fetch a single customer record with optional expansion of related entities and versioned snapshots.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "expand": {
+            "type": "array",
+            "description": "Related entity collections to inline",
+            "items": {
+              "type": "string",
+              "enum": [
+                "history",
+                "policies",
+                "approvals",
+                "comments",
+                "attachments",
+                "dependencies",
+                "metrics"
+              ]
+            }
+          },
+          "as_of": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Read the record as of this point in time"
+          },
+          "version_id": {
+            "type": "string",
+            "description": "Specific version to retrieve when versioning is enabled"
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sparse fieldset selection"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "customer_id"
+        ]
+      },
+      "returns": "A customer record with the requested expansions and version metadata."
+    },
+    {
+      "name": "bulk_create_customers",
+      "description": "Submit a batch of customer records for creation, with idempotency keys and partial-success reporting.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "description": "Records to create",
+            "items": {
+              "type": "object",
+              "properties": {
+                "idempotency_key": {
+                  "type": "string",
+                  "description": "Caller-generated dedupe key"
+                },
+                "payload": {
+                  "type": "object",
+                  "description": "Free-form record body validated server-side"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "Tags applied to the new record"
+                }
+              },
+              "required": [
+                "idempotency_key",
+                "payload"
+              ]
+            }
+          },
+          "on_error": {
+            "type": "string",
+            "enum": [
+              "abort",
+              "skip",
+              "isolate"
+            ],
+            "description": "Batch error handling strategy"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Validate only, do not persist"
+          },
+          "trace_id": {
+            "type": "string",
+            "description": "Correlation id propagated across the batch"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
+      "returns": "A per-item outcome list with created identifiers, validation errors, and batch-level statistics."
+    },
+    {
+      "name": "bulk_update_customers",
+      "description": "Apply partial updates to many customer records in a single transactional batch.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "patch": {
+            "type": "object",
+            "description": "JSON merge-patch applied to every matched record",
+            "additionalProperties": true
+          },
+          "expected_version": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Optimistic concurrency token"
+          },
+          "max_records": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "description": "Safety cap on affected rows"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Compute affected count without applying changes"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Audit-visible reason for the change"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "patch",
+          "reason"
+        ]
+      },
+      "returns": "Affected record count, sampled previews, and any per-record errors."
+    },
+    {
+      "name": "bulk_archive_customers",
+      "description": "Soft-archive customer records matching a selector with optional grace period before purge.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "grace_period_days": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 365,
+            "description": "Days before records become purge-eligible"
+          },
+          "preserve_audit": {
+            "type": "boolean",
+            "description": "Keep audit trail even after purge"
+          },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "obsolete",
+              "duplicate",
+              "compliance",
+              "manual"
+            ],
+            "description": "Standardised archive reason"
+          },
+          "reason_notes": {
+            "type": "string",
+            "description": "Free-form notes attached to audit"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Compute affected count without applying"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "reason_code"
+        ]
+      },
+      "returns": "Archive operation summary including matched count, scheduled purge date, and any blockers."
+    },
+    {
+      "name": "export_customers",
+      "description": "Asynchronously export a filtered slice of customer records to the configured object store.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "json",
+              "ndjson",
+              "csv",
+              "parquet"
+            ],
+            "description": "Output encoding"
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "description": "Compression algorithm"
+          },
+          "destination": {
+            "type": "object",
+            "description": "Where the export should be delivered",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp",
+                  "http"
+                ],
+                "description": "Destination kind"
+              },
+              "uri": {
+                "type": "string",
+                "description": "Destination URI"
+              },
+              "credentials_ref": {
+                "type": "string",
+                "description": "Pointer to stored credentials"
+              },
+              "encryption": {
+                "type": "object",
+                "description": "Optional encryption settings",
+                "properties": {
+                  "algorithm": {
+                    "type": "string",
+                    "enum": [
+                      "aes256",
+                      "kms",
+                      "pgp"
+                    ],
+                    "description": "Algorithm to use"
+                  },
+                  "key_ref": {
+                    "type": "string",
+                    "description": "Key reference"
+                  }
+                },
+                "required": [
+                  "algorithm"
+                ]
+              }
+            },
+            "required": [
+              "type",
+              "uri"
+            ]
+          },
+          "include_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Sparse field projection"
+          },
+          "max_records": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Optional cap on rows exported"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "selector",
+          "format",
+          "destination"
+        ]
+      },
+      "returns": "An export job descriptor with status, destination URI, and progress callbacks."
+    },
+    {
+      "name": "subscribe_customer_events",
+      "description": "Register a webhook subscription for customer lifecycle events with HMAC signing and replay protection.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "event_types": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "Event type names to receive"
+          },
+          "filter": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "endpoint": {
+            "type": "object",
+            "description": "Receiving endpoint configuration",
+            "properties": {
+              "url": {
+                "type": "string",
+                "description": "HTTPS endpoint that receives events"
+              },
+              "signing_secret_ref": {
+                "type": "string",
+                "description": "Reference to the HMAC signing secret"
+              },
+              "tls_verify": {
+                "type": "boolean",
+                "description": "Whether to validate the server certificate"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Extra headers per delivery"
+              }
+            },
+            "required": [
+              "url"
+            ]
+          },
+          "delivery": {
+            "type": "object",
+            "description": "Delivery semantics",
+            "properties": {
+              "ordering": {
+                "type": "string",
+                "enum": [
+                  "best_effort",
+                  "ordered_per_key",
+                  "global_order"
+                ],
+                "description": "Required ordering guarantee"
+              },
+              "deduplicate_window_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Duplicate-suppression window"
+              },
+              "max_in_flight": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Concurrency cap"
+              }
+            }
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Subscription labels"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "event_types",
+          "endpoint"
+        ]
+      },
+      "returns": "A subscription handle including subscription_id, verification status, and current delivery health."
+    },
+    {
+      "name": "unsubscribe_customer_events",
+      "description": "Disable or delete a previously created customer event subscription.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string",
+            "description": "Subscription to terminate"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "delete"
+            ],
+            "description": "Lifecycle transition"
+          },
+          "drain_seconds": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Grace period to flush in-flight events"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Audit-visible reason"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "subscription_id",
+          "mode"
+        ]
+      },
+      "returns": "Final subscription state and any undelivered event counts at the time of termination."
+    },
+    {
+      "name": "get_customer_audit_history",
+      "description": "Retrieve the chronological audit log for a customer including who changed what and when.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "event_categories": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "create",
+                "update",
+                "delete",
+                "approve",
+                "reject",
+                "execute",
+                "rollback",
+                "access"
+              ]
+            },
+            "description": "Audit event categories to include"
+          },
+          "include_payload_diff": {
+            "type": "boolean",
+            "description": "Inline before/after field diffs"
+          },
+          "actor_filter": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Restrict to specific actor ids"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based page index"
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Records per page"
+          },
+          "sort": {
+            "type": "array",
+            "description": "Ordered sort directives",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Sort field name"
+                },
+                "direction": {
+                  "type": "string",
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ],
+                  "description": "Sort direction"
+                }
+              },
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque continuation token for stable pagination"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "customer_id"
+        ]
+      },
+      "returns": "An ordered list of audit entries with diffs, actor metadata, and correlation ids."
+    },
+    {
+      "name": "query_customer_changelog",
+      "description": "Query the cross-record changelog for cloud_exchange_connectivity_provisioning with field-level filters.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "selector": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "fields_changed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Restrict to changes touching these fields"
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "group_by": {
+            "type": "string",
+            "enum": [
+              "actor",
+              "entity",
+              "day",
+              "field"
+            ],
+            "description": "Aggregation dimension"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based page index"
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "Records per page"
+          },
+          "sort": {
+            "type": "array",
+            "description": "Ordered sort directives",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Sort field name"
+                },
+                "direction": {
+                  "type": "string",
+                  "enum": [
+                    "asc",
+                    "desc"
+                  ],
+                  "description": "Sort direction"
+                }
+              },
+              "required": [
+                "field"
+              ]
+            }
+          },
+          "cursor": {
+            "type": "string",
+            "description": "Opaque continuation token for stable pagination"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "time_window"
+        ]
+      },
+      "returns": "Aggregated changelog rows or detail entries depending on group_by, plus totals."
+    },
+    {
+      "name": "schedule_customer_job",
+      "description": "Create a recurring or one-off scheduled job that runs a cloud_exchange_connectivity_provisioning operation.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "string",
+            "description": "Operation name to invoke when the schedule fires"
+          },
+          "input_template": {
+            "type": "object",
+            "description": "Parameters passed to the operation, with templating",
+            "additionalProperties": true
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Recurring schedule specification",
+            "properties": {
+              "cadence": {
+                "type": "string",
+                "enum": [
+                  "one_off",
+                  "hourly",
+                  "daily",
+                  "weekly",
+                  "monthly",
+                  "cron"
+                ],
+                "description": "Recurrence cadence"
+              },
+              "cron_expression": {
+                "type": "string",
+                "description": "Required when cadence=cron, 5- or 6-field cron"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA timezone for evaluation"
+              },
+              "start_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Earliest run time"
+              },
+              "end_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Latest run time (optional)"
+              },
+              "max_occurrences": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Cap on total executions"
+              },
+              "jitter_seconds": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Random delay applied per run"
+              }
+            },
+            "required": [
+              "cadence"
+            ]
+          },
+          "owner_id": {
+            "type": "string",
+            "description": "Owning principal for the schedule"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Schedule labels"
+          },
+          "failure_policy": {
+            "type": "object",
+            "description": "What to do when a run fails",
+            "properties": {
+              "on_failure": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "halt",
+                  "alert"
+                ],
+                "description": "Per-failure action"
+              },
+              "max_failures": {
+                "type": "integer",
+                "minimum": 1,
+                "description": "Pause schedule after this many failures"
+              },
+              "alert_channel": {
+                "type": "string",
+                "description": "Channel id to alert on failure"
+              }
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "operation",
+          "schedule"
+        ]
+      },
+      "returns": "A schedule descriptor including schedule_id, next run time, and validation issues."
+    },
+    {
+      "name": "pause_customer_schedule",
+      "description": "Temporarily pause a scheduled cloud_exchange_connectivity_provisioning job without deleting its history.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string",
+            "description": "Schedule to pause"
+          },
+          "until": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Optional auto-resume time"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Audit-visible reason"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "schedule_id",
+          "reason"
+        ]
+      },
+      "returns": "Updated schedule status and prior pause history."
+    },
+    {
+      "name": "simulate_customer_execution",
+      "description": "Run a dry-run simulation of a cloud_exchange_connectivity_provisioning execution path without producing side effects.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scenario": {
+            "type": "object",
+            "description": "Scenario inputs",
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Scenario label"
+              },
+              "seed": {
+                "type": "integer",
+                "description": "Deterministic seed for stochastic steps"
+              },
+              "fixtures": {
+                "type": "object",
+                "description": "Stubbed external responses",
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "name"
+            ]
+          },
+          "target_steps": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional restriction to specific steps"
+          },
+          "max_steps": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Cap on simulated steps"
+          },
+          "include_side_effect_plan": {
+            "type": "boolean",
+            "description": "Return the side effects that would have been emitted"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "scenario"
+        ]
+      },
+      "returns": "Simulation transcript with predicted outcome, side-effect plan, and assertions checked."
+    },
+    {
+      "name": "preview_customer_change",
+      "description": "Compute a preview of how a proposed change would affect a customer prior to commit.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "proposed_patch": {
+            "type": "object",
+            "description": "Merge-patch to apply for preview",
+            "additionalProperties": true
+          },
+          "show_dependencies": {
+            "type": "boolean",
+            "description": "Whether to compute downstream impact"
+          },
+          "evaluate_policies": {
+            "type": "boolean",
+            "description": "Run policy engine against the proposed state"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "customer_id",
+          "proposed_patch"
+        ]
+      },
+      "returns": "A preview document with field diffs, policy verdicts, and dependency impact."
+    },
+    {
+      "name": "submit_customer_for_approval",
+      "description": "Submit a customer for review with configurable approver routing and SLA targets.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "approval_chain": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Ordered approval steps",
+            "items": {
+              "type": "object",
+              "properties": {
+                "step_name": {
+                  "type": "string",
+                  "description": "Human-readable step label"
+                },
+                "approver_group": {
+                  "type": "string",
+                  "description": "Group or role authorised at this step"
+                },
+                "quorum": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Approvals required at this step"
+                },
+                "sla_minutes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "SLA before escalation"
+                },
+                "escalation_policy_id": {
+                  "type": "string",
+                  "description": "Policy invoked on SLA breach"
+                }
+              },
+              "required": [
+                "step_name",
+                "approver_group",
+                "quorum"
+              ]
+            }
+          },
+          "justification": {
+            "type": "string",
+            "description": "Reason the change is required"
+          },
+          "evidence_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Attached evidence document ids"
+          },
+          "deadline": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Hard deadline for approval"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "customer_id",
+          "approval_chain",
+          "justification"
+        ]
+      },
+      "returns": "Approval workflow handle with approval_id, current step, and projected completion time."
+    },
+    {
+      "name": "record_customer_approval_decision",
+      "description": "Record an approve/reject/recuse decision for a pending customer approval step.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string",
+            "description": "Approval workflow id"
+          },
+          "step_name": {
+            "type": "string",
+            "description": "Step being decided"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "recuse",
+              "request_changes"
+            ],
+            "description": "Decision outcome"
+          },
+          "comments": {
+            "type": "string",
+            "description": "Free-form comments"
+          },
+          "conditions": {
+            "type": "array",
+            "description": "Conditions attached to a conditional approval",
+            "items": {
+              "type": "object",
+              "properties": {
+                "code": {
+                  "type": "string",
+                  "description": "Condition code"
+                },
+                "due_by": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "Deadline for the condition"
+                },
+                "owner_id": {
+                  "type": "string",
+                  "description": "Owner accountable for the condition"
+                }
+              },
+              "required": [
+                "code"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "approval_id",
+          "step_name",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state, next pending step, and any triggered automations."
+    },
+    {
+      "name": "escalate_customer",
+      "description": "Escalate a stuck or breached customer to a higher tier with paging and audit.",
+      "stage": "escalate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "sev1",
+              "sev2",
+              "sev3",
+              "sev4"
+            ],
+            "description": "Escalation severity"
+          },
+          "target_team": {
+            "type": "string",
+            "description": "Team or rota receiving the escalation"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Why the escalation is happening"
+          },
+          "sla_breach_minutes": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Minutes past SLA, if applicable"
+          },
+          "page_oncall": {
+            "type": "boolean",
+            "description": "Trigger paging vs. just notification"
+          },
+          "context_refs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Related artifact ids attached for context"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "customer_id",
+          "severity",
+          "target_team",
+          "reason"
+        ]
+      },
+      "returns": "Escalation record id, paged responders, and acknowledgement timer."
+    },
+    {
+      "name": "add_customer_comment",
+      "description": "Append a comment, optionally with @mentions and visibility scope, to a customer.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "body": {
+            "type": "string",
+            "description": "Comment text in Markdown"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "User ids mentioned in the body"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "restricted"
+            ],
+            "description": "Audience scope"
+          },
+          "parent_comment_id": {
+            "type": "string",
+            "description": "Comment id this one replies to"
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Labels on the comment"
+          },
+          "attachments": {
+            "type": "array",
+            "description": "Inline attachments",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "file",
+                    "link",
+                    "snippet"
+                  ],
+                  "description": "Attachment kind"
+                },
+                "uri": {
+                  "type": "string",
+                  "description": "Pointer to the attachment payload"
+                },
+                "media_type": {
+                  "type": "string",
+                  "description": "RFC 6838 media type"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "customer_id",
+          "body"
+        ]
+      },
+      "returns": "Newly created comment record including comment_id and resolved mentions."
+    },
+    {
+      "name": "attach_customer_evidence",
+      "description": "Upload an evidence file or link as an attachment to a customer with content hash and retention.",
+      "stage": "evidence",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "name": {
+            "type": "string",
+            "description": "Display name of the attachment"
+          },
+          "source": {
+            "type": "object",
+            "description": "Where the bytes come from",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "inline",
+                  "object_store",
+                  "url"
+                ],
+                "description": "Source kind"
+              },
+              "content_base64": {
+                "type": "string",
+                "description": "Inline base64 bytes when type=inline"
+              },
+              "uri": {
+                "type": "string",
+                "description": "Pointer when type=object_store or url"
+              },
+              "media_type": {
+                "type": "string",
+                "description": "RFC 6838 media type"
+              },
+              "sha256": {
+                "type": "string",
+                "description": "Pre-computed content hash"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "classification": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "confidential",
+              "restricted"
+            ],
+            "description": "Data classification"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Retention before automatic purge"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Attachment tags"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "customer_id",
+          "name",
+          "source"
+        ]
+      },
+      "returns": "Attachment descriptor including attachment_id, content hash, and stored URI."
+    },
+    {
+      "name": "snapshot_customer_state",
+      "description": "Capture a point-in-time snapshot of a customer and its dependencies for restore or audit.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "include_dependencies": {
+            "type": "boolean",
+            "description": "Capture linked entities transitively"
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "description": "Dependency traversal depth"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "audit",
+              "restore_point",
+              "diff",
+              "export"
+            ],
+            "description": "Snapshot intent"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Retention before automatic purge"
+          },
+          "labels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Snapshot labels"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "customer_id",
+          "purpose"
+        ]
+      },
+      "returns": "Snapshot descriptor with snapshot_id, captured size, and storage URI."
+    },
+    {
+      "name": "restore_customer_from_snapshot",
+      "description": "Restore a customer (and optionally dependencies) from a previously captured snapshot.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string",
+            "description": "Snapshot to restore from"
+          },
+          "target": {
+            "type": "object",
+            "description": "Where to restore",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "in_place",
+                  "new_record",
+                  "shadow"
+                ],
+                "description": "Restore target mode"
+              },
+              "new_owner_id": {
+                "type": "string",
+                "description": "Owner of the restored record when mode=new_record"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "merge_strategy": {
+            "type": "string",
+            "enum": [
+              "replace",
+              "merge",
+              "fail_on_conflict"
+            ],
+            "description": "Conflict resolution"
+          },
+          "skip_validation": {
+            "type": "boolean",
+            "description": "Skip post-restore validators"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "description": "Compute restore plan without applying"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "snapshot_id",
+          "target"
+        ]
+      },
+      "returns": "Restore job descriptor with conflicts surfaced and final record id."
+    },
+    {
+      "name": "get_customer_metrics_summary",
+      "description": "Compute summary KPIs for cloud_exchange_connectivity_provisioning over a time window with optional segmentation.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "time_window": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "granularity": {
+            "type": "string",
+            "enum": [
+              "minute",
+              "hour",
+              "day",
+              "week",
+              "month"
+            ],
+            "description": "Bucket size"
+          },
+          "segment_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Dimensions to break out"
+          },
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            },
+            "description": "Metric names to compute (e.g. throughput, p95_latency, failure_rate)"
+          },
+          "filters": {
+            "type": "object",
+            "description": "Boolean filter tree with nested AND/OR support",
+            "properties": {
+              "combinator": {
+                "type": "string",
+                "enum": [
+                  "and",
+                  "or"
+                ],
+                "description": "How to combine clauses"
+              },
+              "predicates": {
+                "type": "array",
+                "description": "Leaf predicates at this level",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string",
+                      "description": "Field path being filtered"
+                    },
+                    "op": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "ne",
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte",
+                        "in",
+                        "nin",
+                        "contains",
+                        "regex",
+                        "exists"
+                      ],
+                      "description": "Comparison operator"
+                    },
+                    "value": {
+                      "description": "Comparison value, type depends on op"
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "op"
+                  ]
+                }
+              },
+              "groups": {
+                "type": "array",
+                "description": "Nested clause groups",
+                "items": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "compare_to_previous_period": {
+            "type": "boolean",
+            "description": "Include delta vs the previous equal-length window"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "time_window",
+          "metrics"
+        ]
+      },
+      "returns": "A metrics document with per-bucket values, totals, and optional period-over-period deltas."
+    },
+    {
+      "name": "create_customer_dashboard",
+      "description": "Define a dashboard layout combining charts and tables for cloud_exchange_connectivity_provisioning.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "Dashboard display name"
+          },
+          "owner_id": {
+            "type": "string",
+            "description": "Owning user or team"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Panels to render",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string",
+                  "description": "Panel title"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "line",
+                    "bar",
+                    "stat",
+                    "table",
+                    "heatmap"
+                  ],
+                  "description": "Visualisation type"
+                },
+                "query": {
+                  "type": "object",
+                  "description": "Query spec, polymorphic by panel type",
+                  "additionalProperties": true
+                },
+                "position": {
+                  "type": "object",
+                  "description": "Grid placement",
+                  "properties": {
+                    "x": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Column index"
+                    },
+                    "y": {
+                      "type": "integer",
+                      "minimum": 0,
+                      "description": "Row index"
+                    },
+                    "w": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Width in columns"
+                    },
+                    "h": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "description": "Height in rows"
+                    }
+                  },
+                  "required": [
+                    "x",
+                    "y",
+                    "w",
+                    "h"
+                  ]
+                }
+              },
+              "required": [
+                "title",
+                "type",
+                "query",
+                "position"
+              ]
+            }
+          },
+          "shared_with": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Principal ids that can view"
+          },
+          "default_time_range": {
+            "type": "object",
+            "description": "Inclusive UTC time window",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of window (UTC, ISO8601)"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of window (UTC, ISO8601)"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "Reporting timezone (IANA name)"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard descriptor including dashboard_id and resolved share list."
+    },
+    {
+      "name": "define_customer_policy",
+      "description": "Create or version a policy controlling allowed cloud_exchange_connectivity_provisioning behaviour.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_name": {
+            "type": "string",
+            "description": "Human-readable policy name"
+          },
+          "scope": {
+            "type": "object",
+            "description": "Where the policy applies",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Tenant ids"
+              },
+              "environments": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Environment ids"
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Label matchers"
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Ordered rule list, first match wins",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Rule label"
+                },
+                "when": {
+                  "type": "object",
+                  "description": "Boolean filter tree with nested AND/OR support",
+                  "properties": {
+                    "combinator": {
+                      "type": "string",
+                      "enum": [
+                        "and",
+                        "or"
+                      ],
+                      "description": "How to combine clauses"
+                    },
+                    "predicates": {
+                      "type": "array",
+                      "description": "Leaf predicates at this level",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "field": {
+                            "type": "string",
+                            "description": "Field path being filtered"
+                          },
+                          "op": {
+                            "type": "string",
+                            "enum": [
+                              "eq",
+                              "ne",
+                              "gt",
+                              "gte",
+                              "lt",
+                              "lte",
+                              "in",
+                              "nin",
+                              "contains",
+                              "regex",
+                              "exists"
+                            ],
+                            "description": "Comparison operator"
+                          },
+                          "value": {
+                            "description": "Comparison value, type depends on op"
+                          }
+                        },
+                        "required": [
+                          "field",
+                          "op"
+                        ]
+                      }
+                    },
+                    "groups": {
+                      "type": "array",
+                      "description": "Nested clause groups",
+                      "items": {
+                        "type": "object"
+                      }
+                    }
+                  }
+                },
+                "effect": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "rate_limit"
+                  ],
+                  "description": "Rule effect"
+                },
+                "params": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "description": "Effect parameters"
+                }
+              },
+              "required": [
+                "name",
+                "when",
+                "effect"
+              ]
+            }
+          },
+          "enforcement_mode": {
+            "type": "string",
+            "enum": [
+              "enforce",
+              "audit_only",
+              "advisory"
+            ],
+            "description": "How strictly the policy is applied"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Earliest activation time"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "policy_name",
+          "rules"
+        ]
+      },
+      "returns": "Policy version descriptor with policy_id, version_id, and validation report."
+    },
+    {
+      "name": "evaluate_customer_policies",
+      "description": "Evaluate the active cloud_exchange_connectivity_provisioning policies against a candidate input and return verdicts.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "candidate": {
+            "type": "object",
+            "description": "Input under evaluation",
+            "additionalProperties": true
+          },
+          "policy_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional explicit policy set"
+          },
+          "context": {
+            "type": "object",
+            "description": "Evaluation context",
+            "properties": {
+              "tenant_id": {
+                "type": "string",
+                "description": "Tenant scope"
+              },
+              "environment_id": {
+                "type": "string",
+                "description": "Environment scope"
+              },
+              "labels": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Contextual labels"
+              }
+            }
+          },
+          "explain": {
+            "type": "boolean",
+            "description": "Return per-rule trace"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "candidate"
+        ]
+      },
+      "returns": "Aggregate verdict, per-rule outcomes, and any obligations attached to the decision."
+    },
+    {
+      "name": "link_customer_dependencies",
+      "description": "Declare typed dependency links between a customer and related artifacts to drive impact analysis.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "$ref": "#/shared_entities/customer_id"
+          },
+          "links": {
+            "type": "array",
+            "minItems": 1,
+            "description": "Links to upsert",
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_type": {
+                  "type": "string",
+                  "description": "Target entity type"
+                },
+                "target_id": {
+                  "type": "string",
+                  "description": "Target entity id"
+                },
+                "relation": {
+                  "type": "string",
+                  "enum": [
+                    "depends_on",
+                    "blocks",
+                    "supersedes",
+                    "duplicates",
+                    "related_to"
+                  ],
+                  "description": "Relation kind"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "description": "Free-form link metadata"
+                }
+              },
+              "required": [
+                "target_type",
+                "target_id",
+                "relation"
+              ]
+            }
+          },
+          "replace_existing": {
+            "type": "boolean",
+            "description": "Replace prior links of the same relations"
+          },
+          "actor": {
+            "type": "object",
+            "description": "Caller identity used for audit and authorization",
+            "properties": {
+              "actor_id": {
+                "type": "string",
+                "description": "Stable identifier for the caller"
+              },
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "service",
+                  "scheduler",
+                  "system"
+                ],
+                "description": "Caller principal kind"
+              },
+              "roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Roles asserted by the caller"
+              },
+              "session_id": {
+                "type": "string",
+                "description": "Session correlation id"
+              },
+              "ip_address": {
+                "type": "string",
+                "description": "Source IP address"
+              },
+              "user_agent": {
+                "type": "string",
+                "description": "Client user-agent string"
+              }
+            },
+            "required": [
+              "actor_id",
+              "actor_type"
+            ]
+          }
+        },
+        "required": [
+          "customer_id",
+          "links"
+        ]
+      },
+      "returns": "Resulting link set with created, updated, and removed entries."
+    }
+  ]
+}

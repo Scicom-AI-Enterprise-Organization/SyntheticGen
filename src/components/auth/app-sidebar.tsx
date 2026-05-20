@@ -20,6 +20,7 @@ import {
   Play,
   Settings,
   ShieldCheck,
+  Sparkles,
   User,
   Users2,
   Wrench,
@@ -53,13 +54,14 @@ const ADMIN: Item[] = [
 
 const PROJECT_NAV: { label: string; segment: string; icon: LucideIcon }[] = [
   { label: "Overview", segment: "", icon: Home },
+  { label: "Bootstrap", segment: "bootstrap", icon: Sparkles },
   { label: "Taxonomy", segment: "taxonomy", icon: Network },
   { label: "Personas", segment: "personas", icon: Users2 },
   { label: "Languages", segment: "languages", icon: Languages },
   { label: "Templates", segment: "templates", icon: FileCode },
   { label: "Knowledge", segment: "knowledge", icon: BookOpen },
-  { label: "Flows", segment: "flows", icon: GitBranch },
   { label: "Tools", segment: "tools", icon: Wrench },
+  { label: "Flows", segment: "flows", icon: GitBranch },
   { label: "Runs", segment: "runs", icon: Play },
   { label: "Conversations", segment: "conversations", icon: MessagesSquare },
   { label: "Benchmarks", segment: "benchmarks", icon: FlaskConical },

@@ -1,0 +1,3363 @@
+{
+  "workflow_name": "sd_wan_incident_lifecycle",
+  "description": "End-to-end lifecycle for managing SD-WAN service incidents for B2B customers, from detection and triage through remediation, change, communication, and closure.",
+  "domain": "telco_b2b/sd_wan_service",
+  "shared_entities": {
+    "tenant_id": {
+      "type": "string",
+      "description": "Unique identifier of the enterprise customer (tenant)"
+    },
+    "site_id": {
+      "type": "string",
+      "description": "Unique identifier of a customer site/location"
+    },
+    "wan_edge_id": {
+      "type": "string",
+      "description": "Identifier of SD-WAN edge device (CPE/branch router)"
+    },
+    "service_id": {
+      "type": "string",
+      "description": "Identifier of an SD-WAN virtual service (e.g., virtual circuit, overlay, QoS policy set)"
+    },
+    "incident_id": {
+      "type": "string",
+      "description": "Unique identifier for an incident"
+    },
+    "change_request_id": {
+      "type": "string",
+      "description": "Unique identifier for a change request related to an incident"
+    },
+    "task_id": {
+      "type": "string",
+      "description": "Unique identifier for a work item or subtask associated with an incident"
+    },
+    "user_ref": {
+      "type": "object",
+      "description": "Reference to a user (operator, NOC engineer, customer contact)",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "User identifier in IAM/CRM system"
+        },
+        "name": {
+          "type": "string",
+          "description": "Display name"
+        },
+        "role": {
+          "type": "string",
+          "description": "Role or function of the user",
+          "enum": [
+            "noc_engineer",
+            "field_engineer",
+            "service_manager",
+            "customer_admin",
+            "automation_bot",
+            "other"
+          ]
+        },
+        "contact": {
+          "type": "object",
+          "properties": {
+            "email": {
+              "type": "string",
+              "format": "email"
+            },
+            "phone": {
+              "type": "string"
+            },
+            "timezone": {
+              "type": "string",
+              "description": "IANA time zone identifier"
+            }
+          }
+        }
+      },
+      "required": [
+        "id"
+      ]
+    },
+    "sla_impact": {
+      "type": "object",
+      "description": "Standardized SLA impact representation",
+      "properties": {
+        "severity": {
+          "type": "string",
+          "enum": [
+            "critical",
+            "major",
+            "minor",
+            "warning",
+            "info"
+          ]
+        },
+        "business_impact": {
+          "type": "string",
+          "enum": [
+            "full_outage",
+            "partial_degradation",
+            "intermittent",
+            "no_customer_impact",
+            "unknown"
+          ]
+        },
+        "affected_users_estimate": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "penalty_risk": {
+          "type": "string",
+          "enum": [
+            "high",
+            "medium",
+            "low",
+            "none",
+            "unknown"
+          ]
+        }
+      },
+      "required": [
+        "severity",
+        "business_impact"
+      ]
+    },
+    "diagnostic_result": {
+      "type": "object",
+      "description": "Standardized diagnostic test result",
+      "properties": {
+        "test_id": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "pending",
+            "running",
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail",
+            "inconclusive",
+            "not_applicable",
+            "unknown"
+          ]
+        },
+        "metrics": {
+          "type": "object",
+          "additionalProperties": {
+            "type": [
+              "number",
+              "string",
+              "boolean",
+              "null"
+            ]
+          },
+          "description": "Key/value metrics from the test (latency_ms, loss_pct, jitter_ms, etc.)"
+        },
+        "evidence": {
+          "type": "array",
+          "description": "Evidence artifacts such as logs or trace IDs",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "log_snippet",
+                  "screenshot",
+                  "trace_id",
+                  "pcap_reference",
+                  "other"
+                ]
+              },
+              "reference": {
+                "type": "string",
+                "description": "URL or opaque reference to the artifact"
+              },
+              "description": {
+                "type": "string"
+              },
+              "collected_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "type",
+              "reference"
+            ]
+          }
+        }
+      },
+      "required": [
+        "status"
+      ]
+    },
+    "actor_context": {
+      "type": "object",
+      "description": "Context about who is performing the action and from where.",
+      "properties": {
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "system",
+            "ops_admin",
+            "ops_engineer",
+            "support_agent",
+            "customer_admin",
+            "customer_user",
+            "partner_admin",
+            "automation"
+          ]
+        },
+        "actor_id": {
+          "type": "string",
+          "description": "Identifier of the actor in the IAM system."
+        },
+        "tenant_id": {
+          "type": "string",
+          "description": "Tenant or organization scope, if applicable."
+        },
+        "session_id": {
+          "type": "string",
+          "description": "Optional session/correlation id."
+        },
+        "ip_address": {
+          "type": "string",
+          "description": "Source IP of the request."
+        }
+      },
+      "required": [
+        "actor_type",
+        "actor_id"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Generic time range filter.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "time_zone": {
+          "type": "string",
+          "description": "IANA time zone (e.g. 'UTC', 'Asia/Kuala_Lumpur')."
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "notification_channel": {
+      "type": "object",
+      "description": "Notification channel descriptor.",
+      "properties": {
+        "channel": {
+          "type": "string",
+          "enum": [
+            "email",
+            "sms",
+            "webhook",
+            "slack",
+            "teams",
+            "pagerduty",
+            "in_app"
+          ]
+        },
+        "target": {
+          "type": "string",
+          "description": "Channel-specific address (email, URL, phone, etc.)."
+        },
+        "secret_ref": {
+          "type": "string",
+          "description": "Optional secret reference for signed webhook delivery."
+        },
+        "metadata": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "channel",
+        "target"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Pointer to an uploaded attachment or document.",
+      "properties": {
+        "filename": {
+          "type": "string"
+        },
+        "content_type": {
+          "type": "string"
+        },
+        "url": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "sha256": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "filename",
+        "url"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination and sorting controls for list endpoints.",
+      "properties": {
+        "page": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 1
+        },
+        "page_size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Optional opaque cursor for keyset pagination."
+        },
+        "sort_by": {
+          "type": "string"
+        },
+        "sort_order": {
+          "type": "string",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "default": "desc"
+        }
+      }
+    },
+    "approval_decision": {
+      "type": "object",
+      "description": "Approval/review decision record.",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approved",
+            "rejected",
+            "needs_changes",
+            "deferred"
+          ]
+        },
+        "approver_id": {
+          "type": "string"
+        },
+        "decided_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "decision",
+        "approver_id"
+      ]
+    },
+    "tag_set": {
+      "type": "object",
+      "description": "Free-form key/value tags for categorization and search.",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification.",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": [
+            "once",
+            "cron",
+            "interval",
+            "calendar"
+          ]
+        },
+        "cron_expression": {
+          "type": "string",
+          "description": "Standard 5-field cron expression."
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 60
+        },
+        "calendar": {
+          "type": "object",
+          "properties": {
+            "days_of_week": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "MON",
+                  "TUE",
+                  "WED",
+                  "THU",
+                  "FRI",
+                  "SAT",
+                  "SUN"
+                ]
+              }
+            },
+            "time_of_day": {
+              "type": "string",
+              "description": "HH:MM 24h local."
+            }
+          }
+        },
+        "time_zone": {
+          "type": "string",
+          "description": "IANA time zone."
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "max_runs": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mode"
+      ]
+    },
+    "policy_rule": {
+      "type": "object",
+      "description": "Generic policy rule with conditions and actions.",
+      "properties": {
+        "rule_id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "integer"
+        },
+        "conditions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "operator": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "gt",
+                  "gte",
+                  "lt",
+                  "lte",
+                  "in",
+                  "nin",
+                  "contains",
+                  "regex"
+                ]
+              },
+              "value": {
+                "description": "Value to compare against. Type depends on operator."
+              }
+            },
+            "required": [
+              "field",
+              "operator"
+            ]
+          }
+        },
+        "actions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string"
+              },
+              "parameters": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "type"
+            ]
+          }
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "name",
+        "conditions",
+        "actions"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "detect_sd_wan_incident",
+      "description": "Detect or register a new SD-WAN service incident from alarms, telemetry, or manual report.",
+      "stage": "detect",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Origin of the incident detection",
+            "enum": [
+              "monitoring_alarm",
+              "proactive_analytics",
+              "customer_ticket",
+              "manual_noc",
+              "external_integration"
+            ]
+          },
+          "tenant": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "site": {
+            "$ref": "#/shared_entities/site_id"
+          },
+          "wan_edge": {
+            "$ref": "#/shared_entities/wan_edge_id"
+          },
+          "service": {
+            "$ref": "#/shared_entities/service_id"
+          },
+          "correlation_key": {
+            "type": "string",
+            "description": "Correlation identifier from alarm or external system to deduplicate events"
+          },
+          "symptoms": {
+            "type": "array",
+            "description": "High-level symptoms observed",
+            "items": {
+              "type": "string",
+              "enum": [
+                "site_down",
+                "performance_degradation",
+                "packet_loss",
+                "latency_spike",
+                "jitter_spike",
+                "routing_flap",
+                "tunnel_down",
+                "config_out_of_sync",
+                "security_block",
+                "unknown"
+              ]
+            }
+          },
+          "reported_by": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "initial_description": {
+            "type": "string",
+            "description": "Free-form description of the problem"
+          },
+          "sla_impact": {
+            "$ref": "#/shared_entities/sla_impact"
+          },
+          "detected_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When the issue was first observed; defaults to now if omitted"
+          },
+          "attachments": {
+            "type": "array",
+            "description": "Optional supporting artifacts at detection time",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "screenshot",
+                    "pcap_reference",
+                    "log_file_reference",
+                    "email_thread",
+                    "other"
+                  ]
+                },
+                "reference": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "reference"
+              ]
+            }
+          }
+        },
+        "required": [
+          "source",
+          "tenant",
+          "symptoms"
+        ]
+      },
+      "returns": "New or correlated incident record with incident_id, initial classification, and detection metadata."
+    },
+    {
+      "name": "classify_sd_wan_incident",
+      "description": "Classify and prioritize an incident, including impact, affected objects, and routing to the right support queue.",
+      "stage": "triage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "classifier": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "connectivity",
+              "performance",
+              "routing",
+              "security",
+              "configuration",
+              "access_circuit",
+              "overlay_tunnel",
+              "controller_platform",
+              "unknown"
+            ]
+          },
+          "sub_category": {
+            "type": "string",
+            "description": "More granular type within the main category, free-form or taxonomy-specific"
+          },
+          "root_cause_hypothesis": {
+            "type": "string",
+            "description": "Initial hypothesis about root cause"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "p1",
+              "p2",
+              "p3",
+              "p4"
+            ]
+          },
+          "sla_impact": {
+            "$ref": "#/shared_entities/sla_impact"
+          },
+          "affected_entities": {
+            "type": "array",
+            "description": "Entities impacted by this incident",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "tenant",
+                    "site",
+                    "wan_edge",
+                    "service",
+                    "underlay_circuit",
+                    "overlay_tunnel",
+                    "security_policy"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "description": "Identifier of the entity (according to type)"
+                },
+                "role": {
+                  "type": "string",
+                  "description": "How this entity is affected",
+                  "enum": [
+                    "primary_affected",
+                    "secondary_affected",
+                    "suspected_cause",
+                    "monitoring_only"
+                  ]
+                }
+              },
+              "required": [
+                "type",
+                "id"
+              ]
+            }
+          },
+          "assignment": {
+            "type": "object",
+            "description": "Assignment to a team or engineer",
+            "properties": {
+              "queue": {
+                "type": "string",
+                "description": "Support queue name",
+                "enum": [
+                  "noc_l1",
+                  "noc_l2",
+                  "routing_specialist",
+                  "security_ops",
+                  "field_ops",
+                  "platform_ops",
+                  "managed_services"
+                ]
+              },
+              "assignee": {
+                "$ref": "#/shared_entities/user_ref"
+              },
+              "urgency_notes": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "incident_id",
+          "classifier",
+          "category",
+          "priority"
+        ]
+      },
+      "returns": "Updated incident classification, impact, and assignment details."
+    },
+    {
+      "name": "run_sd_wan_diagnostics",
+      "description": "Run automated diagnostics for a given incident and associated SD-WAN components.",
+      "stage": "diagnose",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "scope": {
+            "type": "object",
+            "description": "Scope of diagnostics to run",
+            "properties": {
+              "tenant": {
+                "$ref": "#/shared_entities/tenant_id"
+              },
+              "sites": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/site_id"
+                }
+              },
+              "wan_edges": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/wan_edge_id"
+                }
+              },
+              "services": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/service_id"
+                }
+              }
+            }
+          },
+          "tests": {
+            "type": "array",
+            "description": "List of diagnostic tests to run",
+            "items": {
+              "type": "object",
+              "properties": {
+                "test_type": {
+                  "type": "string",
+                  "enum": [
+                    "ping",
+                    "traceroute",
+                    "path_trace_overlay",
+                    "underlay_health_check",
+                    "tunnel_status",
+                    "controller_connectivity",
+                    "policy_consistency",
+                    "config_drift",
+                    "throughput_test"
+                  ]
+                },
+                "target": {
+                  "type": "object",
+                  "description": "Target of the diagnostic test",
+                  "properties": {
+                    "ip": {
+                      "type": "string"
+                    },
+                    "hostname": {
+                      "type": "string"
+                    },
+                    "site_id": {
+                      "$ref": "#/shared_entities/site_id"
+                    },
+                    "wan_edge_id": {
+                      "$ref": "#/shared_entities/wan_edge_id"
+                    }
+                  }
+                },
+                "parameters": {
+                  "type": "object",
+                  "description": "Test-specific parameters",
+                  "properties": {
+                    "packet_count": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 100
+                    },
+                    "timeout_ms": {
+                      "type": "integer",
+                      "minimum": 100,
+                      "maximum": 10000
+                    },
+                    "prefer_overlay": {
+                      "type": "boolean",
+                      "description": "Prefer SD-WAN overlay path where applicable"
+                    },
+                    "max_hops": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 64
+                    }
+                  }
+                }
+              },
+              "required": [
+                "test_type"
+              ]
+            }
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "synchronous",
+              "asynchronous"
+            ],
+            "default": "asynchronous"
+          },
+          "requested_by": {
+            "$ref": "#/shared_entities/user_ref"
+          }
+        },
+        "required": [
+          "incident_id",
+          "tests"
+        ]
+      },
+      "returns": "Diagnostic session with test IDs, initial status, and (for synchronous mode) results for each test."
+    },
+    {
+      "name": "get_sd_wan_diagnostics_result",
+      "description": "Retrieve results of previously run SD-WAN diagnostic tests for an incident.",
+      "stage": "diagnose",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "test_ids": {
+            "type": "array",
+            "description": "Specific test IDs to retrieve; if omitted, returns latest for incident",
+            "items": {
+              "type": "string"
+            }
+          },
+          "include_raw_outputs": {
+            "type": "boolean",
+            "default": false,
+            "description": "Whether to include raw command outputs/log snippets"
+          }
+        },
+        "required": [
+          "incident_id"
+        ]
+      },
+      "returns": "Collection of diagnostic_result objects with optional raw evidence for each requested test."
+    },
+    {
+      "name": "propose_sd_wan_remediation",
+      "description": "Generate or register a remediation plan for an incident, optionally requiring a change request.",
+      "stage": "plan",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "created_by": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "remediation_strategy": {
+            "type": "string",
+            "enum": [
+              "config_change",
+              "path_reroute",
+              "policy_adjustment",
+              "hardware_replacement",
+              "provider_escalation",
+              "monitor_only",
+              "no_action",
+              "manual_investigation"
+            ]
+          },
+          "actions": {
+            "type": "array",
+            "description": "Ordered list of remediation actions to execute",
+            "items": {
+              "type": "object",
+              "properties": {
+                "step_number": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "config_push",
+                    "traffic_migration",
+                    "policy_rollback",
+                    "site_failover",
+                    "circuit_switchover",
+                    "controller_restart",
+                    "notify_third_party",
+                    "request_field_visit"
+                  ]
+                },
+                "target": {
+                  "type": "object",
+                  "properties": {
+                    "site_id": {
+                      "$ref": "#/shared_entities/site_id"
+                    },
+                    "wan_edge_id": {
+                      "$ref": "#/shared_entities/wan_edge_id"
+                    },
+                    "service_id": {
+                      "$ref": "#/shared_entities/service_id"
+                    }
+                  }
+                },
+                "parameters": {
+                  "type": "object",
+                  "description": "Action-specific parameters, polymorphic",
+                  "properties": {
+                    "candidate_config_id": {
+                      "type": "string",
+                      "description": "Reference to a candidate configuration template/version"
+                    },
+                    "bandwidth_profile": {
+                      "type": "string",
+                      "description": "QoS or bandwidth profile name"
+                    },
+                    "preferred_underlay": {
+                      "type": "string",
+                      "enum": [
+                        "mpls",
+                        "internet",
+                        "lte_5g",
+                        "any"
+                      ]
+                    },
+                    "rollback_timeout_minutes": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 240
+                    }
+                  }
+                },
+                "requires_change_request": {
+                  "type": "boolean",
+                  "description": "Whether this step must be governed by a formal change request"
+                },
+                "risk_level": {
+                  "type": "string",
+                  "enum": [
+                    "high",
+                    "medium",
+                    "low"
+                  ]
+                },
+                "customer_impact": {
+                  "type": "string",
+                  "description": "Expected customer impact during this action"
+                }
+              },
+              "required": [
+                "step_number",
+                "type"
+              ]
+            }
+          },
+          "requires_customer_approval": {
+            "type": "boolean",
+            "default": false
+          },
+          "notes": {
+            "type": "string",
+            "description": "Additional notes or rationale for the plan"
+          }
+        },
+        "required": [
+          "incident_id",
+          "created_by",
+          "remediation_strategy",
+          "actions"
+        ]
+      },
+      "returns": "Remediation plan with internal identifier, linkage to incident, and indication if change_request is required."
+    },
+    {
+      "name": "create_sd_wan_change_request",
+      "description": "Create a formal change request linked to an incident and remediation plan.",
+      "stage": "plan",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "requested_by": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "change_type": {
+            "type": "string",
+            "enum": [
+              "standard",
+              "normal",
+              "emergency"
+            ]
+          },
+          "window": {
+            "type": "object",
+            "description": "Planned implementation window",
+            "properties": {
+              "start": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string",
+                "description": "IANA time zone identifier"
+              }
+            },
+            "required": [
+              "start",
+              "end"
+            ]
+          },
+          "scope": {
+            "type": "object",
+            "description": "Scope of the change",
+            "properties": {
+              "sites": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/site_id"
+                }
+              },
+              "wan_edges": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/wan_edge_id"
+                }
+              },
+              "services": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/service_id"
+                }
+              }
+            }
+          },
+          "risk_assessment": {
+            "type": "object",
+            "properties": {
+              "risk_level": {
+                "type": "string",
+                "enum": [
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              "risk_description": {
+                "type": "string"
+              },
+              "rollback_plan": {
+                "type": "string"
+              },
+              "test_plan": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "risk_level"
+            ]
+          },
+          "customer_communication_required": {
+            "type": "boolean",
+            "default": true
+          },
+          "external_reference": {
+            "type": "string",
+            "description": "Optional reference to external change system (e.g., ServiceNow ID)"
+          }
+        },
+        "required": [
+          "incident_id",
+          "requested_by",
+          "change_type",
+          "window",
+          "risk_assessment"
+        ]
+      },
+      "returns": "Created change request with change_request_id, status (e.g., pending_approval), and linkage to incident."
+    },
+    {
+      "name": "execute_sd_wan_remediation",
+      "description": "Execute remediation actions for an incident, optionally under an approved change request, with rollback options.",
+      "stage": "resolve",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "executed_by": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "change_request_id": {
+            "$ref": "#/shared_entities/change_request_id"
+          },
+          "execution_mode": {
+            "type": "string",
+            "enum": [
+              "dry_run",
+              "partial",
+              "full"
+            ],
+            "description": "Whether to simulate, run a subset of actions, or all actions"
+          },
+          "steps": {
+            "type": "array",
+            "description": "Specific remediation steps to execute; if empty, uses full plan",
+            "items": {
+              "type": "object",
+              "properties": {
+                "step_number": {
+                  "type": "integer"
+                },
+                "override_parameters": {
+                  "type": "object",
+                  "description": "Optional overrides for parameters defined in the plan",
+                  "additionalProperties": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "null"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "step_number"
+              ]
+            }
+          },
+          "pre_checks": {
+            "type": "array",
+            "description": "Checks that must pass before execution",
+            "items": {
+              "type": "object",
+              "properties": {
+                "check_type": {
+                  "type": "string",
+                  "enum": [
+                    "change_approved",
+                    "within_window",
+                    "no_active_maintenance",
+                    "customer_approval_received",
+                    "sla_breach_imminent"
+                  ]
+                },
+                "enforce": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "check_type"
+              ]
+            }
+          },
+          "rollback_on_failure": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "incident_id",
+          "executed_by",
+          "execution_mode"
+        ]
+      },
+      "returns": "Execution report with per-step status, any applied rollbacks, and updated incident state."
+    },
+    {
+      "name": "rollback_sd_wan_change",
+      "description": "Perform a targeted rollback of SD-WAN changes associated with an incident or change request.",
+      "stage": "resolve",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "change_request_id": {
+            "$ref": "#/shared_entities/change_request_id"
+          },
+          "rollback_scope": {
+            "type": "object",
+            "description": "Defines what to rollback",
+            "properties": {
+              "steps": {
+                "type": "array",
+                "description": "Specific remediation steps to rollback, if known",
+                "items": {
+                  "type": "integer"
+                }
+              },
+              "entities": {
+                "type": "array",
+                "description": "Entities whose configurations should be rolled back",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "site_id": {
+                      "$ref": "#/shared_entities/site_id"
+                    },
+                    "wan_edge_id": {
+                      "$ref": "#/shared_entities/wan_edge_id"
+                    },
+                    "service_id": {
+                      "$ref": "#/shared_entities/service_id"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "initiated_by": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for rollback (e.g., regression, customer request)"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, attempt rollback even if change is not fully tracked"
+          }
+        },
+        "required": [
+          "initiated_by"
+        ]
+      },
+      "returns": "Rollback execution summary with list of reverted items, any failures, and updated incident/change status."
+    },
+    {
+      "name": "update_sd_wan_incident_status",
+      "description": "Update status, state transitions, and resolution details for an SD-WAN incident.",
+      "stage": "lifecycle",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "updated_by": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "new",
+              "in_progress",
+              "on_hold",
+              "awaiting_customer",
+              "awaiting_third_party",
+              "pending_change",
+              "monitoring",
+              "resolved",
+              "cancelled"
+            ]
+          },
+          "resolution": {
+            "type": "object",
+            "description": "Resolution details, required when status is resolved or cancelled",
+            "properties": {
+              "resolution_code": {
+                "type": "string",
+                "enum": [
+                  "config_fixed",
+                  "provider_issue",
+                  "hardware_replaced",
+                  "no_issue_found",
+                  "customer_side_issue",
+                  "duplicate",
+                  "monitoring_noise",
+                  "other"
+                ]
+              },
+              "resolution_summary": {
+                "type": "string"
+              },
+              "permanent_fix": {
+                "type": "string",
+                "description": "Description of permanent remediation (if different from quick fix)"
+              },
+              "known_error_record_id": {
+                "type": "string",
+                "description": "Link to knowledge base / problem record"
+              }
+            }
+          },
+          "hold_reason": {
+            "type": "string",
+            "description": "Reason for putting incident on hold",
+            "enum": [
+              "awaiting_customer_info",
+              "awaiting_third_party",
+              "maintenance_window",
+              "resource_constraint",
+              "other"
+            ]
+          },
+          "customer_visible_state": {
+            "type": "string",
+            "description": "Simplified state presented to customer portal",
+            "enum": [
+              "open",
+              "investigating",
+              "fix_in_progress",
+              "monitoring",
+              "closed"
+            ]
+          },
+          "metadata_updates": {
+            "type": "object",
+            "description": "Free-form metadata or tags to update",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        },
+        "required": [
+          "incident_id",
+          "updated_by",
+          "status"
+        ]
+      },
+      "returns": "Updated incident record with new status, resolution details, and timestamps for state transition."
+    },
+    {
+      "name": "notify_sd_wan_incident_stakeholders",
+      "description": "Send notifications and updates about an incident to internal and external stakeholders.",
+      "stage": "communicate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "initiated_by": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "audience": {
+            "type": "array",
+            "description": "Target audiences for the notification",
+            "items": {
+              "type": "string",
+              "enum": [
+                "customer_admins",
+                "all_customer_users",
+                "internal_noc",
+                "service_management",
+                "executive_briefing",
+                "third_party_provider"
+              ]
+            }
+          },
+          "channels": {
+            "type": "array",
+            "description": "Notification channels to use",
+            "items": {
+              "type": "string",
+              "enum": [
+                "email",
+                "sms",
+                "portal_banner",
+                "webhook",
+                "teams",
+                "slack"
+              ]
+            }
+          },
+          "template": {
+            "type": "string",
+            "description": "Notification template identifier",
+            "enum": [
+              "incident_opened",
+              "incident_update",
+              "maintenance_planned",
+              "incident_resolved",
+              "incident_cancelled",
+              "sla_breach_risk"
+            ]
+          },
+          "custom_message": {
+            "type": "string",
+            "description": "Optional custom message body to override template content"
+          },
+          "include_technical_details": {
+            "type": "boolean",
+            "default": false
+          },
+          "attachments": {
+            "type": "array",
+            "description": "Optional attachments or links for the notification",
+            "items": {
+              "type": "object",
+              "properties": {
+                "title": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string",
+                  "format": "uri"
+                }
+              },
+              "required": [
+                "title",
+                "url"
+              ]
+            }
+          }
+        },
+        "required": [
+          "incident_id",
+          "initiated_by",
+          "audience",
+          "channels",
+          "template"
+        ]
+      },
+      "returns": "Notification dispatch report including per-channel status, failures, and message identifiers."
+    },
+    {
+      "name": "list_sd_wan_incidents",
+      "description": "Search and list SD-WAN incidents with filtering, pagination, and sorting.",
+      "stage": "observe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "new",
+                    "in_progress",
+                    "on_hold",
+                    "awaiting_customer",
+                    "awaiting_third_party",
+                    "pending_change",
+                    "monitoring",
+                    "resolved",
+                    "cancelled"
+                  ]
+                }
+              },
+              "severity": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "critical",
+                    "major",
+                    "minor",
+                    "warning",
+                    "info"
+                  ]
+                }
+              },
+              "site_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/site_id"
+                }
+              },
+              "wan_edge_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/wan_edge_id"
+                }
+              },
+              "created_from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "assigned_queue": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "text_search": {
+                "type": "string",
+                "description": "Free-text search across title, description, and notes"
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "severity",
+              "priority"
+            ],
+            "default": "created_at"
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 200,
+            "default": 50
+          },
+          "include_counts": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      },
+      "returns": "Paginated list of incidents with summary fields and optional aggregate counts by status/severity."
+    },
+    {
+      "name": "retry_sd_wan_action",
+      "description": "Retry a failed automation or workflow action related to an SD-WAN incident, with override options.",
+      "stage": "recover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "failed_task_id": {
+            "$ref": "#/shared_entities/task_id"
+          },
+          "retry_reason": {
+            "type": "string",
+            "description": "Reason for retrying the action"
+          },
+          "retry_strategy": {
+            "type": "object",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "scheduled",
+                  "backoff"
+                ]
+              },
+              "scheduled_for": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When to perform retry if mode=scheduled"
+              },
+              "max_attempts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10,
+                "default": 3
+              },
+              "backoff_seconds": {
+                "type": "integer",
+                "minimum": 10,
+                "maximum": 3600,
+                "description": "Base backoff interval if mode=backoff"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "override_parameters": {
+            "type": "object",
+            "description": "Optional parameters to override for the task being retried",
+            "additionalProperties": {
+              "type": [
+                "string",
+                "number",
+                "boolean",
+                "null"
+              ]
+            }
+          },
+          "requested_by": {
+            "$ref": "#/shared_entities/user_ref"
+          }
+        },
+        "required": [
+          "failed_task_id",
+          "retry_strategy",
+          "requested_by"
+        ]
+      },
+      "returns": "Retry job details including new task_id, status, and planned execution time."
+    },
+    {
+      "name": "get_sd_wan_incident_timeline",
+      "description": "Retrieve the full lifecycle timeline for an SD-WAN incident, including state changes, diagnostics, changes, and communications.",
+      "stage": "observe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "incident_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "include": {
+            "type": "array",
+            "description": "Types of timeline entries to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "status_changes",
+                "diagnostics",
+                "remediation_steps",
+                "change_requests",
+                "notifications",
+                "comments",
+                "automation_tasks"
+              ]
+            }
+          },
+          "time_range": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "max_entries": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 200
+          }
+        },
+        "required": [
+          "incident_id"
+        ]
+      },
+      "returns": "Ordered list of timeline events providing a full audit trail of the incident lifecycle."
+    },
+    {
+      "name": "sd_wan_incident_bulk_import",
+      "description": "Bulk import sd wan incident entities from an external source (CSV, JSON, or upstream system) with validation, mapping, and partial-commit support.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "source": {
+            "type": "object",
+            "description": "Source of records being imported.",
+            "properties": {
+              "source_type": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "json",
+                  "xml",
+                  "upstream_system",
+                  "uploaded_file"
+                ]
+              },
+              "attachment": {
+                "$ref": "#/shared_entities/attachment_ref"
+              },
+              "upstream_system": {
+                "type": "string"
+              },
+              "external_query": {
+                "type": "string",
+                "description": "Optional query used to pull records from upstream."
+              }
+            },
+            "required": [
+              "source_type"
+            ]
+          },
+          "records": {
+            "type": "array",
+            "description": "Inline records, used when source_type is 'json'.",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "field_mapping": {
+            "type": "object",
+            "description": "Map of source field names to target schema fields.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "deduplication": {
+            "type": "object",
+            "properties": {
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "by_external_id",
+                  "by_natural_key",
+                  "by_hash"
+                ]
+              },
+              "natural_key_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "validation_mode": {
+            "type": "string",
+            "enum": [
+              "strict",
+              "lenient",
+              "report_only"
+            ],
+            "default": "strict"
+          },
+          "commit_mode": {
+            "type": "string",
+            "enum": [
+              "all_or_nothing",
+              "partial_commit"
+            ],
+            "default": "partial_commit"
+          },
+          "tags": {
+            "$ref": "#/shared_entities/tag_set"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "actor",
+          "source"
+        ]
+      },
+      "returns": "Bulk import outcome including counts of created/updated/skipped/failed records, per-record errors, and a batch reference."
+    },
+    {
+      "name": "sd_wan_incident_bulk_update",
+      "description": "Apply a single update payload across many sd wan incident entities matching a filter or explicit id list.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "selector": {
+            "type": "object",
+            "description": "How to choose entities for the update.",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/incident_id"
+                }
+              },
+              "filter": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "tags": {
+                    "$ref": "#/shared_entities/tag_set"
+                  },
+                  "created_within": {
+                    "$ref": "#/shared_entities/time_range"
+                  },
+                  "expression": {
+                    "type": "string",
+                    "description": "Optional SQL-like filter expression."
+                  }
+                }
+              },
+              "limit": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10000
+              }
+            }
+          },
+          "update": {
+            "type": "object",
+            "description": "Field-level updates to apply. Polymorphic - one of set/unset/append.",
+            "properties": {
+              "set": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "unset": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "append": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "if_match": {
+            "type": "object",
+            "description": "Optimistic concurrency check.",
+            "properties": {
+              "version": {
+                "type": "integer"
+              },
+              "etag": {
+                "type": "string"
+              }
+            }
+          },
+          "batch_size": {
+            "type": "integer",
+            "default": 100
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "actor",
+          "selector",
+          "update"
+        ]
+      },
+      "returns": "Bulk update summary including total matched, updated, skipped (e.g. due to concurrency), and failures."
+    },
+    {
+      "name": "sd_wan_incident_bulk_delete",
+      "description": "Soft- or hard-delete (or archive) many sd wan incident entities in a single operation with dependency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/incident_id"
+            }
+          },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "older_than": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              }
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft_delete",
+              "hard_delete",
+              "archive"
+            ],
+            "default": "soft_delete"
+          },
+          "cascade": {
+            "type": "object",
+            "description": "Whether to cascade to related entities.",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "include": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "List of relationship names to cascade through."
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false,
+            "description": "Skip non-critical dependency checks."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Bulk delete result including counts of deleted/archived/skipped entities, dependency conflicts, and a tombstone reference."
+    },
+    {
+      "name": "sd_wan_incident_bulk_export",
+      "description": "Export sd wan incident entities (and optional related data) to a downloadable artifact, optionally redacting sensitive fields.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/incident_id"
+                }
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_within": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "expression": {
+                "type": "string"
+              }
+            }
+          },
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "json",
+              "parquet",
+              "ndjson",
+              "xlsx"
+            ],
+            "default": "json"
+          },
+          "include_related": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Names of related collections to include."
+          },
+          "field_projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Subset of top-level fields to include."
+          },
+          "redact_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "delivery_type": {
+                "type": "string",
+                "enum": [
+                  "download_url",
+                  "s3",
+                  "sftp",
+                  "email"
+                ],
+                "default": "download_url"
+              },
+              "destination": {
+                "type": "string",
+                "description": "Destination URI/email depending on delivery_type."
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            },
+            "required": [
+              "delivery_type"
+            ]
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "actor",
+          "format",
+          "delivery"
+        ]
+      },
+      "returns": "Export job descriptor including job_id, expected size, status, and delivery details."
+    },
+    {
+      "name": "sd_wan_incident_search_advanced",
+      "description": "Faceted, full-text and structured search across sd wan incident entities with relevance ranking and facet aggregations.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "query": {
+            "type": "string",
+            "description": "Optional full-text query."
+          },
+          "entity_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "sd_wan_incident_record",
+                "incident",
+                "tenant",
+                "site",
+                "wan_edge",
+                "service",
+                "change_request",
+                "task"
+              ]
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "owner_id": {
+                "type": "string"
+              },
+              "created_within": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_within": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "custom_expression": {
+                "type": "string"
+              }
+            }
+          },
+          "facets": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Field names to compute aggregations over."
+          },
+          "highlight": {
+            "type": "boolean",
+            "default": false
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Search response with ranked hits, total count, facet bucket counts, and pagination cursor."
+    },
+    {
+      "name": "sd_wan_incident_subscribe_to_events",
+      "description": "Create a notification subscription for sd wan incident events using one or more channels and event-type filters.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "subscription_name": {
+            "type": "string"
+          },
+          "event_types": {
+            "type": "array",
+            "description": "Event types to subscribe to.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "created",
+                "updated",
+                "deleted",
+                "status_changed",
+                "failed",
+                "approved",
+                "rejected",
+                "rolled_back",
+                "completed",
+                "escalated"
+              ]
+            }
+          },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/incident_id"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "severity": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warning",
+                    "minor",
+                    "major",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/notification_channel"
+            },
+            "minItems": 1
+          },
+          "delivery_policy": {
+            "type": "object",
+            "properties": {
+              "rate_limit_per_minute": {
+                "type": "integer"
+              },
+              "deduplicate_within_seconds": {
+                "type": "integer"
+              },
+              "retry_policy": {
+                "type": "object",
+                "properties": {
+                  "max_attempts": {
+                    "type": "integer",
+                    "default": 5
+                  },
+                  "backoff_strategy": {
+                    "type": "string",
+                    "enum": [
+                      "fixed",
+                      "linear",
+                      "exponential"
+                    ],
+                    "default": "exponential"
+                  }
+                }
+              }
+            }
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "subscription_name",
+          "event_types",
+          "channels"
+        ]
+      },
+      "returns": "Subscription descriptor including subscription_id, enabled status, and validated channel configurations."
+    },
+    {
+      "name": "sd_wan_incident_list_webhook_deliveries",
+      "description": "List webhook delivery attempts for sd wan incident notifications with filters for status, time window, and subscription.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "subscription_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "delivered",
+                "failed",
+                "retrying",
+                "dead_letter"
+              ]
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "event_id": {
+            "type": "string"
+          },
+          "include_payload": {
+            "type": "boolean",
+            "default": false
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Paginated list of webhook delivery records including attempt counts, response codes, and last error."
+    },
+    {
+      "name": "sd_wan_incident_get_audit_log",
+      "description": "Retrieve the audit trail for one or more sd wan incident entities with actor, change, and diff information.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_ids": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/incident_id"
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "actor_filter": {
+            "type": "object",
+            "properties": {
+              "actor_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "event_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "create",
+                "update",
+                "delete",
+                "status_change",
+                "approval",
+                "rollback",
+                "access"
+              ]
+            }
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": true
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          }
+        },
+        "required": [
+          "actor"
+        ]
+      },
+      "returns": "Paginated audit events ordered by time with field-level diffs when requested."
+    },
+    {
+      "name": "sd_wan_incident_schedule_recurring_job",
+      "description": "Schedule a recurring job (e.g. health probe, report generation, sync) related to sd wan incident on a cron/interval/calendar schedule.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "job_name": {
+            "type": "string"
+          },
+          "job_kind": {
+            "type": "string",
+            "enum": [
+              "health_check",
+              "report",
+              "sync",
+              "rotation",
+              "cleanup",
+              "reconciliation",
+              "snapshot"
+            ]
+          },
+          "target": {
+            "type": "object",
+            "description": "Target scope of the job (entity ids and/or filter).",
+            "properties": {
+              "ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/incident_id"
+                }
+              },
+              "filter_expression": {
+                "type": "string"
+              }
+            }
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "parameters_payload": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Job-specific parameters passed at each run."
+          },
+          "notification_channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/notification_channel"
+            }
+          },
+          "max_concurrency": {
+            "type": "integer",
+            "default": 1
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "job_name",
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Scheduled job descriptor including job_id, next_run_at, enablement status, and schedule summary."
+    },
+    {
+      "name": "sd_wan_incident_simulate_operation",
+      "description": "Simulate a sd wan incident operation (e.g. change, deploy, terminate) without committing changes, returning predicted effects and warnings.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "operation": {
+            "type": "string",
+            "enum": [
+              "create",
+              "update",
+              "delete",
+              "deploy",
+              "rollback",
+              "scale",
+              "migrate",
+              "terminate",
+              "renew"
+            ]
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "The would-be request payload."
+          },
+          "scenario": {
+            "type": "object",
+            "description": "Optional what-if scenario overrides.",
+            "properties": {
+              "assume_load_factor": {
+                "type": "number"
+              },
+              "assume_failures": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "assume_traffic_pattern": {
+                "type": "string"
+              }
+            }
+          },
+          "snapshot_id": {
+            "type": "string",
+            "description": "Optional snapshot id to simulate against a frozen state."
+          },
+          "depth": {
+            "type": "string",
+            "enum": [
+              "shallow",
+              "deep"
+            ],
+            "default": "deep"
+          },
+          "include_cost_impact": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "operation"
+        ]
+      },
+      "returns": "Simulation report with predicted state diff, dependency impacts, warnings, errors, and cost estimate."
+    },
+    {
+      "name": "sd_wan_incident_request_approval",
+      "description": "Open an approval request for a pending sd wan incident change, with reviewers, justification, and SLA.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "change_summary": {
+            "type": "string"
+          },
+          "change_payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "approver_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "approver_id"
+              ]
+            },
+            "minItems": 1
+          },
+          "policy": {
+            "type": "object",
+            "properties": {
+              "quorum": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "veto_roles": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "auto_approve_if_no_response_hours": {
+                "type": "integer"
+              }
+            }
+          },
+          "sla_hours": {
+            "type": "integer"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "tags": {
+            "$ref": "#/shared_entities/tag_set"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id",
+          "change_summary",
+          "approvers"
+        ]
+      },
+      "returns": "Approval request record including approval_request_id, status, due_at, and current quorum."
+    },
+    {
+      "name": "sd_wan_incident_record_approval_decision",
+      "description": "Record an individual approver's decision on a pending sd wan incident approval request and advance the workflow.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "approval_request_id": {
+            "type": "string"
+          },
+          "decision": {
+            "$ref": "#/shared_entities/approval_decision"
+          },
+          "side_effects": {
+            "type": "object",
+            "description": "Optional side effects of this decision.",
+            "properties": {
+              "auto_execute_on_final_approval": {
+                "type": "boolean",
+                "default": false
+              },
+              "notify_requester": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "required": [
+          "actor",
+          "approval_request_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval request state including remaining required approvers and whether the request is now finalized."
+    },
+    {
+      "name": "sd_wan_incident_add_comment",
+      "description": "Attach a comment, internal note, or @-mention to a sd wan incident entity for collaboration.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "body": {
+            "type": "string",
+            "description": "Markdown or rich-text body of the comment."
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "internal",
+              "customer_visible",
+              "partner_visible"
+            ],
+            "default": "internal"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "description": "User IDs to notify."
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "parent_comment_id": {
+            "type": "string",
+            "description": "If replying to a thread."
+          },
+          "tags": {
+            "$ref": "#/shared_entities/tag_set"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id",
+          "body"
+        ]
+      },
+      "returns": "Created comment record including comment_id, created_at, and notification fan-out summary."
+    },
+    {
+      "name": "sd_wan_incident_attach_evidence",
+      "description": "Attach one or more evidence files (logs, screenshots, contracts, diagnostics) to a sd wan incident entity.",
+      "stage": "evidence",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            },
+            "minItems": 1
+          },
+          "evidence_type": {
+            "type": "string",
+            "enum": [
+              "diagnostic",
+              "screenshot",
+              "log_excerpt",
+              "contract",
+              "supporting_doc",
+              "telemetry"
+            ]
+          },
+          "redaction_policy": {
+            "type": "object",
+            "properties": {
+              "redact_pii": {
+                "type": "boolean",
+                "default": true
+              },
+              "redacted_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id",
+          "attachments"
+        ]
+      },
+      "returns": "Attachment registration result with stored attachment IDs, virus-scan status, and any redactions applied."
+    },
+    {
+      "name": "sd_wan_incident_create_snapshot",
+      "description": "Create a point-in-time snapshot of a sd wan incident entity (and optionally its dependencies) for restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "snapshot_name": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "include_related": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "exclude_fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "retention_days": {
+            "type": "integer",
+            "default": 90
+          },
+          "tags": {
+            "$ref": "#/shared_entities/tag_set"
+          },
+          "encryption_kms_key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id",
+          "snapshot_name"
+        ]
+      },
+      "returns": "Snapshot descriptor including snapshot_id, size, scope manifest, and retention date."
+    },
+    {
+      "name": "sd_wan_incident_restore_snapshot",
+      "description": "Restore a sd wan incident entity from a previously captured snapshot, with conflict-resolution and dry-run options.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_entity_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "create_new"
+            ],
+            "default": "overwrite"
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "snapshot_wins",
+              "current_wins",
+              "manual_resolution"
+            ],
+            "default": "snapshot_wins"
+          },
+          "include_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "exclude_paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "reason": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore result including restored entity id, conflicts, applied paths, and the resulting state version."
+    },
+    {
+      "name": "sd_wan_incident_get_kpi_metrics",
+      "description": "Compute aggregated KPIs and time series for sd wan incident activity over a time range, grouped by chosen dimensions.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "granularity": {
+            "type": "string",
+            "enum": [
+              "minute",
+              "hour",
+              "day",
+              "week",
+              "month"
+            ],
+            "default": "day"
+          },
+          "metrics": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Metric names (e.g., creations, success_rate, latency_p95)."
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "entity_ids": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/shared_entities/incident_id"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "compare_with_previous_period": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "actor",
+          "time_range",
+          "metrics"
+        ]
+      },
+      "returns": "Aggregated KPI snapshot with per-bucket time series, totals, and optional period-over-period deltas."
+    },
+    {
+      "name": "sd_wan_incident_pin_to_dashboard",
+      "description": "Pin a sd wan incident view, metric, or saved query to an operations dashboard for at-a-glance monitoring.",
+      "stage": "metrics",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "dashboard_id": {
+            "type": "string"
+          },
+          "tile_type": {
+            "type": "string",
+            "enum": [
+              "metric",
+              "list",
+              "kpi",
+              "timeseries",
+              "alert_feed",
+              "map"
+            ]
+          },
+          "tile_config": {
+            "type": "object",
+            "description": "Tile-type-specific configuration.",
+            "properties": {
+              "title": {
+                "type": "string"
+              },
+              "metric_name": {
+                "type": "string"
+              },
+              "filter_expression": {
+                "type": "string"
+              },
+              "time_window_seconds": {
+                "type": "integer"
+              },
+              "thresholds": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "level": {
+                      "type": "string",
+                      "enum": [
+                        "info",
+                        "warn",
+                        "critical"
+                      ]
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "gt",
+                        "gte",
+                        "lt",
+                        "lte"
+                      ]
+                    },
+                    "value": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "level",
+                    "operator",
+                    "value"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "title"
+            ]
+          },
+          "position": {
+            "type": "object",
+            "properties": {
+              "row": {
+                "type": "integer"
+              },
+              "column": {
+                "type": "integer"
+              },
+              "width": {
+                "type": "integer"
+              },
+              "height": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        "required": [
+          "actor",
+          "dashboard_id",
+          "tile_type",
+          "tile_config"
+        ]
+      },
+      "returns": "Created dashboard tile descriptor including tile_id, dashboard_id, and effective configuration."
+    },
+    {
+      "name": "sd_wan_incident_upsert_policy",
+      "description": "Create or update a governance/automation policy that applies to sd wan incident entities with rule conditions and actions.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "entity_filter": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "tenant_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/policy_rule"
+            },
+            "minItems": 1
+          },
+          "enforcement": {
+            "type": "string",
+            "enum": [
+              "advisory",
+              "blocking",
+              "auto_remediate"
+            ],
+            "default": "advisory"
+          },
+          "effective_from": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "effective_to": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version_note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "actor",
+          "name",
+          "rules"
+        ]
+      },
+      "returns": "Policy descriptor including policy_id, current version, rule count, and validation warnings."
+    },
+    {
+      "name": "sd_wan_incident_evaluate_policy",
+      "description": "Evaluate one or more policies against a given sd wan incident payload or live entity and return decisions and matched rules.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "policy_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "target": {
+            "type": "object",
+            "description": "Either an entity reference or an inline payload to evaluate.",
+            "properties": {
+              "entity_id": {
+                "$ref": "#/shared_entities/incident_id"
+              },
+              "payload": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "context": {
+                "type": "object",
+                "additionalProperties": true
+              }
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "advisory",
+              "blocking",
+              "auto_remediate"
+            ],
+            "default": "advisory"
+          },
+          "explain": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "target"
+        ]
+      },
+      "returns": "Policy evaluation report listing decisions (allow/deny/remediate), matched rules, and explanations per rule."
+    },
+    {
+      "name": "sd_wan_incident_get_dependency_graph",
+      "description": "Return the dependency or association graph for a sd wan incident entity, including inbound and outbound links.",
+      "stage": "query",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "inbound",
+              "outbound",
+              "both"
+            ],
+            "default": "both"
+          },
+          "max_depth": {
+            "type": "integer",
+            "default": 2,
+            "minimum": 1,
+            "maximum": 10
+          },
+          "edge_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "include_metadata": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id"
+        ]
+      },
+      "returns": "Graph response containing nodes and edges up to the requested depth with edge labels and metadata."
+    },
+    {
+      "name": "sd_wan_incident_manage_links_and_tags",
+      "description": "Add, remove or replace tags and cross-entity links for a sd wan incident entity in a single atomic operation.",
+      "stage": "annotate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "actor": {
+            "$ref": "#/shared_entities/actor_context"
+          },
+          "entity_id": {
+            "$ref": "#/shared_entities/incident_id"
+          },
+          "tags": {
+            "type": "object",
+            "properties": {
+              "set": {
+                "$ref": "#/shared_entities/tag_set"
+              },
+              "remove": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "links": {
+            "type": "array",
+            "description": "Links to add, remove, or update.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "add",
+                    "remove",
+                    "update"
+                  ]
+                },
+                "link_type": {
+                  "type": "string"
+                },
+                "target_entity_type": {
+                  "type": "string"
+                },
+                "target_id": {
+                  "type": "string"
+                },
+                "metadata": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "required": [
+                "op",
+                "link_type",
+                "target_entity_type",
+                "target_id"
+              ]
+            }
+          },
+          "if_match_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "actor",
+          "entity_id"
+        ]
+      },
+      "returns": "Updated entity reference with applied tag and link changes plus any conflicts encountered."
+    }
+  ]
+}

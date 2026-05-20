@@ -1,0 +1,3231 @@
+{
+  "workflow_name": "telco_notification_flow",
+  "description": "Event-driven notification and communication workflow for telco billing and tariff management, covering event ingestion, routing, template resolution, channel delivery, status tracking, retries, and customer preferences.",
+  "domain": "telco_billing/tariff_management",
+  "shared_entities": {
+    "customer_id": {
+      "type": "string",
+      "description": "Unique customer identifier in the telco billing system"
+    },
+    "account_id": {
+      "type": "string",
+      "description": "Billing account identifier associated with a customer"
+    },
+    "subscription_id": {
+      "type": "string",
+      "description": "Subscription or line identifier (e.g., MSISDN, SIM, or service line)"
+    },
+    "tariff_plan_id": {
+      "type": "string",
+      "description": "Tariff or rate plan identifier"
+    },
+    "notification_event_id": {
+      "type": "string",
+      "description": "Identifier for a business event that triggers notifications (e.g., bill_generated)"
+    },
+    "notification_rule_id": {
+      "type": "string",
+      "description": "Identifier for routing and template rules applied to events"
+    },
+    "template_id": {
+      "type": "string",
+      "description": "Identifier for a notification template"
+    },
+    "notification_batch_id": {
+      "type": "string",
+      "description": "Batch identifier grouping one or more notification jobs generated from a single event"
+    },
+    "notification_job_id": {
+      "type": "string",
+      "description": "Identifier of a single notification job for a specific customer and channel"
+    },
+    "channel": {
+      "type": "string",
+      "description": "Channel for delivering notifications",
+      "enum": [
+        "sms",
+        "email",
+        "push",
+        "whatsapp",
+        "ivr"
+      ]
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "ingest_notification_event",
+      "description": "Ingest a business event related to billing or tariff changes that may trigger notifications.",
+      "stage": "event_ingest",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "notification_event_id": {
+            "type": "string",
+            "description": "Optional external event reference; generated if not provided."
+          },
+          "event_type": {
+            "type": "string",
+            "description": "Type of business event that occurred.",
+            "enum": [
+              "bill_generated",
+              "bill_overdue",
+              "payment_received",
+              "tariff_change_proposed",
+              "tariff_change_confirmed",
+              "usage_threshold_crossed",
+              "roaming_activated",
+              "promotion_offer",
+              "account_suspended",
+              "account_reactivated"
+            ]
+          },
+          "source_system": {
+            "type": "string",
+            "description": "Originating system of the event.",
+            "enum": [
+              "billing_core",
+              "crm",
+              "usage_mediation",
+              "campaign_manager",
+              "selfcare_app",
+              "retail_pos"
+            ]
+          },
+          "customer_context": {
+            "type": "object",
+            "description": "Context about the customer and related entities.",
+            "properties": {
+              "customer_id": {
+                "type": "string"
+              },
+              "account_id": {
+                "type": "string"
+              },
+              "subscription_id": {
+                "type": "string"
+              },
+              "tariff_plan_id": {
+                "type": "string"
+              },
+              "segment": {
+                "type": "string",
+                "description": "Customer segment code (e.g., prepaid, postpaid, enterprise)."
+              },
+              "language_preference": {
+                "type": "string",
+                "description": "Preferred language code (ISO 639-1).",
+                "pattern": "^[a-z]{2}(-[A-Z]{2})?$"
+              }
+            }
+          },
+          "event_payload": {
+            "type": "object",
+            "description": "Structured payload with event-specific data.",
+            "properties": {
+              "billing": {
+                "type": "object",
+                "properties": {
+                  "bill_id": {
+                    "type": "string"
+                  },
+                  "billing_cycle": {
+                    "type": "string",
+                    "description": "Billing cycle identifier or date range."
+                  },
+                  "amount_due": {
+                    "type": "number"
+                  },
+                  "due_date": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "currency": {
+                    "type": "string"
+                  }
+                }
+              },
+              "tariff_change": {
+                "type": "object",
+                "properties": {
+                  "old_tariff_plan_id": {
+                    "type": "string"
+                  },
+                  "new_tariff_plan_id": {
+                    "type": "string"
+                  },
+                  "effective_date": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "requires_customer_consent": {
+                    "type": "boolean"
+                  }
+                }
+              },
+              "usage": {
+                "type": "object",
+                "properties": {
+                  "usage_type": {
+                    "type": "string",
+                    "enum": [
+                      "voice",
+                      "data",
+                      "sms",
+                      "roaming"
+                    ]
+                  },
+                  "threshold_type": {
+                    "type": "string",
+                    "enum": [
+                      "percentage",
+                      "absolute"
+                    ]
+                  },
+                  "threshold_value": {
+                    "type": "number"
+                  },
+                  "current_usage": {
+                    "type": "number"
+                  },
+                  "unit": {
+                    "type": "string"
+                  }
+                }
+              },
+              "promotion": {
+                "type": "object",
+                "properties": {
+                  "campaign_id": {
+                    "type": "string"
+                  },
+                  "offer_code": {
+                    "type": "string"
+                  },
+                  "valid_until": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "discount_type": {
+                    "type": "string",
+                    "enum": [
+                      "percentage",
+                      "fixed_amount",
+                      "bonus_allowance"
+                    ]
+                  }
+                }
+              },
+              "metadata": {
+                "type": "object",
+                "description": "Arbitrary key-value metadata for routing and auditing.",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          "priority": {
+            "type": "string",
+            "description": "Priority of the event for notification processing.",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "critical"
+            ],
+            "default": "normal"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Key for deduplication of events."
+          }
+        },
+        "required": [
+          "event_type",
+          "source_system",
+          "event_payload"
+        ]
+      },
+      "returns": "Created notification_event record with normalized notification_event_id and initial routing status."
+    },
+    {
+      "name": "evaluate_notification_rules",
+      "description": "Evaluate routing and template rules for an ingested notification event to determine which notifications to create.",
+      "stage": "routing",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "notification_event_id": {
+            "type": "string",
+            "description": "Identifier of the previously ingested event."
+          },
+          "rule_scope": {
+            "type": "string",
+            "description": "Scope for evaluating rules.",
+            "enum": [
+              "all_matching",
+              "first_match",
+              "test_only"
+            ],
+            "default": "all_matching"
+          },
+          "override_context": {
+            "type": "object",
+            "description": "Optional overrides for context used in rule conditions.",
+            "properties": {
+              "customer_id": {
+                "type": "string"
+              },
+              "account_id": {
+                "type": "string"
+              },
+              "subscription_id": {
+                "type": "string"
+              },
+              "channel_hints": {
+                "type": "array",
+                "description": "Preferred channels to try first.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "sms",
+                    "email",
+                    "push",
+                    "whatsapp",
+                    "ivr"
+                  ]
+                }
+              },
+              "locale": {
+                "type": "string",
+                "description": "Override locale for templates."
+              }
+            }
+          },
+          "rule_filters": {
+            "type": "object",
+            "description": "Filter rules by attributes before evaluation.",
+            "properties": {
+              "notification_rule_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "event_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "channels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "sms",
+                    "email",
+                    "push",
+                    "whatsapp",
+                    "ivr"
+                  ]
+                }
+              },
+              "enabled_only": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "required": [
+          "notification_event_id"
+        ]
+      },
+      "returns": "Evaluation result including matched notification_rule_ids, recommended channels, and a new notification_batch_id with preliminary jobs (pending template resolution)."
+    },
+    {
+      "name": "generate_notification_batch",
+      "description": "Generate a notification batch and individual jobs from evaluated rules and templates.",
+      "stage": "batch_generate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "notification_event_id": {
+            "type": "string"
+          },
+          "notification_rule_ids": {
+            "type": "array",
+            "description": "Specific rules to use; if omitted, engine uses previously evaluated rules for this event.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "batch_options": {
+            "type": "object",
+            "description": "Options controlling batch generation behavior.",
+            "properties": {
+              "max_recipients": {
+                "type": "integer",
+                "description": "Maximum number of recipients to include in this batch."
+              },
+              "split_by_channel": {
+                "type": "boolean",
+                "description": "Whether to create separate batches per channel.",
+                "default": true
+              },
+              "deduplicate_by": {
+                "type": "string",
+                "description": "Field used to deduplicate jobs.",
+                "enum": [
+                  "customer_id",
+                  "subscription_id",
+                  "account_id",
+                  "none"
+                ],
+                "default": "customer_id"
+              }
+            }
+          },
+          "override_templates": {
+            "type": "array",
+            "description": "Optional overrides for specific (rule, channel) pairs.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "notification_rule_id": {
+                  "type": "string"
+                },
+                "channel": {
+                  "type": "string",
+                  "enum": [
+                    "sms",
+                    "email",
+                    "push",
+                    "whatsapp",
+                    "ivr"
+                  ]
+                },
+                "template_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "notification_rule_id",
+                "channel",
+                "template_id"
+              ]
+            }
+          }
+        },
+        "required": [
+          "notification_event_id"
+        ]
+      },
+      "returns": "A notification_batch_id and a list of created notification_job_ids with assigned templates and channels in 'pending_delivery' state."
+    },
+    {
+      "name": "resolve_notification_template",
+      "description": "Resolve and render notification templates into channel-specific payloads for a given job.",
+      "stage": "template_resolution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "notification_job_id": {
+            "type": "string",
+            "description": "Identifier of the notification job to resolve."
+          },
+          "template_id": {
+            "type": "string",
+            "description": "Optional template override; otherwise job's assigned template is used."
+          },
+          "locale": {
+            "type": "string",
+            "description": "Locale for template rendering (e.g., en-US)."
+          },
+          "render_options": {
+            "type": "object",
+            "description": "Advanced rendering options.",
+            "properties": {
+              "fallback_locale": {
+                "type": "string",
+                "description": "Fallback locale if requested locale is not available."
+              },
+              "personalization_overrides": {
+                "type": "object",
+                "description": "Explicit values to override dynamic placeholders.",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              },
+              "sensitive_fields": {
+                "type": "array",
+                "description": "List of fields to mask or partially hide in the payload.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "preview_mode": {
+                "type": "boolean",
+                "description": "If true, does not persist final payload, only returns a preview.",
+                "default": false
+              }
+            }
+          }
+        },
+        "required": [
+          "notification_job_id"
+        ]
+      },
+      "returns": "Resolved channel-specific payload (e.g., SMS text, email subject/body, push JSON) and updated job status (ready_for_delivery or preview_only)."
+    },
+    {
+      "name": "send_notification_batch",
+      "description": "Dispatch all ready-for-delivery jobs in a notification batch to their respective channels.",
+      "stage": "delivery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "notification_batch_id": {
+            "type": "string"
+          },
+          "delivery_mode": {
+            "type": "string",
+            "description": "Controls how messages are dispatched.",
+            "enum": [
+              "synchronous",
+              "asynchronous",
+              "scheduled"
+            ],
+            "default": "asynchronous"
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Schedule options when delivery_mode is 'scheduled'.",
+            "properties": {
+              "send_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Time at which to start sending."
+              },
+              "time_zone": {
+                "type": "string",
+                "description": "IANA time zone for schedule interpretation."
+              },
+              "throttle": {
+                "type": "object",
+                "description": "Throttling configuration per time unit.",
+                "properties": {
+                  "max_per_minute": {
+                    "type": "integer"
+                  },
+                  "max_per_hour": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          },
+          "channel_overrides": {
+            "type": "object",
+            "description": "Per-channel delivery configurations.",
+            "properties": {
+              "sms": {
+                "type": "object",
+                "properties": {
+                  "sender_id": {
+                    "type": "string"
+                  },
+                  "provider": {
+                    "type": "string"
+                  }
+                }
+              },
+              "email": {
+                "type": "object",
+                "properties": {
+                  "from_address": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "reply_to": {
+                    "type": "string",
+                    "format": "email"
+                  }
+                }
+              },
+              "push": {
+                "type": "object",
+                "properties": {
+                  "app_id": {
+                    "type": "string"
+                  },
+                  "priority": {
+                    "type": "string",
+                    "enum": [
+                      "normal",
+                      "high"
+                    ]
+                  }
+                }
+              },
+              "whatsapp": {
+                "type": "object",
+                "properties": {
+                  "business_number": {
+                    "type": "string"
+                  }
+                }
+              },
+              "ivr": {
+                "type": "object",
+                "properties": {
+                  "caller_id": {
+                    "type": "string"
+                  },
+                  "max_retries": {
+                    "type": "integer"
+                  }
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "notification_batch_id"
+        ]
+      },
+      "returns": "Dispatch summary including counts per channel, list of notification_job_ids updated to 'sent', and any immediate delivery errors."
+    },
+    {
+      "name": "get_notification_status",
+      "description": "Retrieve status and delivery details for notification jobs or batches.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "notification_job_ids": {
+            "type": "array",
+            "description": "List of specific job IDs to query.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notification_batch_id": {
+            "type": "string",
+            "description": "Batch ID; if provided without job_ids, returns status for all jobs in the batch."
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional details to include.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "event",
+                "templates",
+                "payload_preview",
+                "delivery_attempts",
+                "provider_response",
+                "audit_log"
+              ]
+            }
+          },
+          "status_filter": {
+            "type": "array",
+            "description": "Filter by job status.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "pending_delivery",
+                "ready_for_delivery",
+                "sent",
+                "delivered",
+                "failed",
+                "canceled",
+                "suppressed"
+              ]
+            }
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "notification_job_ids"
+            ]
+          },
+          {
+            "required": [
+              "notification_batch_id"
+            ]
+          }
+        ]
+      },
+      "returns": "Status objects for each requested notification_job_id or for all jobs in the specified batch, with optional delivery and audit details."
+    },
+    {
+      "name": "retry_notification_delivery",
+      "description": "Retry delivery for failed or timed-out notification jobs, with optional modifications to channel or payload.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "notification_job_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "retry_strategy": {
+            "type": "object",
+            "description": "Controls when and how retries are executed.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "scheduled",
+                  "exponential_backoff"
+                ],
+                "default": "immediate"
+              },
+              "initial_delay_seconds": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "max_attempts": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "backoff_factor": {
+                "type": "number",
+                "description": "Multiplier for exponential backoff.",
+                "minimum": 1
+              }
+            }
+          },
+          "channel_fallbacks": {
+            "type": "array",
+            "description": "Channel fallback rules ordered by preference.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from_channel": {
+                  "type": "string",
+                  "enum": [
+                    "sms",
+                    "email",
+                    "push",
+                    "whatsapp",
+                    "ivr"
+                  ]
+                },
+                "to_channel": {
+                  "type": "string",
+                  "enum": [
+                    "sms",
+                    "email",
+                    "push",
+                    "whatsapp",
+                    "ivr"
+                  ]
+                },
+                "apply_on_error_codes": {
+                  "type": "array",
+                  "description": "Provider-specific error codes that trigger this fallback.",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "from_channel",
+                "to_channel"
+              ]
+            }
+          },
+          "limit_per_customer": {
+            "type": "integer",
+            "description": "Optional limit of retries per customer to avoid flooding."
+          }
+        },
+        "required": [
+          "notification_job_ids"
+        ]
+      },
+      "returns": "Retry plan and updated job records indicating which jobs were scheduled for retry and their new attempt counts."
+    },
+    {
+      "name": "cancel_or_suppress_notification",
+      "description": "Cancel pending notifications or mark them as suppressed due to updated customer state or errors.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "description": "Scope of cancel/suppress operation.",
+            "enum": [
+              "job",
+              "batch",
+              "customer",
+              "subscription"
+            ]
+          },
+          "notification_job_ids": {
+            "type": "array",
+            "description": "Required if scope is 'job'.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "notification_batch_id": {
+            "type": "string",
+            "description": "Required if scope is 'batch'."
+          },
+          "customer_id": {
+            "type": "string",
+            "description": "Required if scope is 'customer'."
+          },
+          "subscription_id": {
+            "type": "string",
+            "description": "Required if scope is 'subscription'."
+          },
+          "action": {
+            "type": "string",
+            "description": "Whether to cancel jobs or mark them as suppressed.",
+            "enum": [
+              "cancel",
+              "suppress"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Machine-readable reason code.",
+            "enum": [
+              "customer_opt_out",
+              "tariff_change_rejected",
+              "billing_error_corrected",
+              "duplicate_event",
+              "manual_operator_action",
+              "other"
+            ]
+          },
+          "reason_details": {
+            "type": "string",
+            "description": "Human-readable explanation of the reason."
+          }
+        },
+        "required": [
+          "scope",
+          "action"
+        ]
+      },
+      "returns": "Summary of affected notification_job_ids, their new status (canceled/suppressed), and any jobs that could not be updated due to terminal states."
+    },
+    {
+      "name": "update_customer_notification_preferences",
+      "description": "Create or update a customer's notification preferences across channels and event types.",
+      "stage": "preferences",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "type": "string"
+          },
+          "account_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string",
+            "description": "Applies preferences at customer or subscription level.",
+            "enum": [
+              "customer",
+              "subscription"
+            ],
+            "default": "customer"
+          },
+          "subscription_id": {
+            "type": "string",
+            "description": "Required if scope is 'subscription'."
+          },
+          "channel_preferences": {
+            "type": "array",
+            "description": "Per-channel preference configuration.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "string",
+                  "enum": [
+                    "sms",
+                    "email",
+                    "push",
+                    "whatsapp",
+                    "ivr"
+                  ]
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "opt_in",
+                    "opt_out",
+                    "opt_in_mandatory"
+                  ]
+                },
+                "allowed_event_types": {
+                  "type": "array",
+                  "description": "If set, only these event types can use this channel.",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "quiet_hours": {
+                  "type": "object",
+                  "description": "Time windows where notifications should be delayed or suppressed.",
+                  "properties": {
+                    "enabled": {
+                      "type": "boolean"
+                    },
+                    "start_time": {
+                      "type": "string",
+                      "description": "Local time start in HH:MM format.",
+                      "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+                    },
+                    "end_time": {
+                      "type": "string",
+                      "description": "Local time end in HH:MM format.",
+                      "pattern": "^[0-2][0-9]:[0-5][0-9]$"
+                    },
+                    "time_zone": {
+                      "type": "string"
+                    },
+                    "behavior": {
+                      "type": "string",
+                      "enum": [
+                        "delay_until_window_end",
+                        "suppress",
+                        "allow_critical_only"
+                      ]
+                    }
+                  }
+                }
+              },
+              "required": [
+                "channel",
+                "status"
+              ]
+            }
+          },
+          "event_specific_preferences": {
+            "type": "array",
+            "description": "Fine-grained preferences per event type.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "event_type": {
+                  "type": "string"
+                },
+                "enabled": {
+                  "type": "boolean"
+                },
+                "preferred_channels": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "sms",
+                      "email",
+                      "push",
+                      "whatsapp",
+                      "ivr"
+                    ]
+                  }
+                },
+                "priority_override": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "normal",
+                    "high",
+                    "critical"
+                  ]
+                }
+              },
+              "required": [
+                "event_type",
+                "enabled"
+              ]
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Audit metadata for the update.",
+            "properties": {
+              "updated_by": {
+                "type": "string"
+              },
+              "update_source": {
+                "type": "string",
+                "enum": [
+                  "selfcare_app",
+                  "ivr",
+                  "retail_agent",
+                  "crm",
+                  "bulk_import"
+                ]
+              },
+              "comment": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "customer_id",
+          "scope"
+        ]
+      },
+      "returns": "Updated customer notification preference record with effective per-channel and per-event settings."
+    },
+    {
+      "name": "get_customer_notification_preferences",
+      "description": "Retrieve effective notification preferences for a customer, optionally at subscription level.",
+      "stage": "preferences",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "type": "string"
+          },
+          "account_id": {
+            "type": "string"
+          },
+          "subscription_id": {
+            "type": "string"
+          },
+          "include_inherited": {
+            "type": "boolean",
+            "description": "Whether to show inherited preferences (e.g., account-level) in addition to direct settings.",
+            "default": true
+          },
+          "include_history": {
+            "type": "boolean",
+            "description": "Include change history and audit information.",
+            "default": false
+          }
+        },
+        "required": [
+          "customer_id"
+        ]
+      },
+      "returns": "Effective notification preferences across channels and event types, optionally including inheritance sources and change history."
+    },
+    {
+      "name": "list_notification_rules",
+      "description": "List or search notification routing rules configured for billing and tariff events.",
+      "stage": "administration",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "event_types": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "channels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "sms",
+                "email",
+                "push",
+                "whatsapp",
+                "ivr"
+              ]
+            }
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "priority_range": {
+            "type": "object",
+            "description": "Filter rules by their priority weight.",
+            "properties": {
+              "min": {
+                "type": "integer"
+              },
+              "max": {
+                "type": "integer"
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "default": 20,
+                "maximum": 200
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "priority",
+              "id"
+            ],
+            "default": "priority"
+          },
+          "sort_direction": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "asc"
+          }
+        }
+      },
+      "returns": "Paged list of notification rules with ids, conditions, channels, templates, and enablement status."
+    },
+    {
+      "name": "upsert_notification_rule",
+      "description": "Create or update a notification rule that maps events and conditions to channels and templates.",
+      "stage": "administration",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "notification_rule_id": {
+            "type": "string",
+            "description": "If provided, updates the existing rule; otherwise creates a new one."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable name for the rule."
+          },
+          "description": {
+            "type": "string"
+          },
+          "event_type": {
+            "type": "string",
+            "description": "Event type this rule applies to."
+          },
+          "conditions": {
+            "type": "object",
+            "description": "Match conditions for when this rule should apply.",
+            "properties": {
+              "customer_segments": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tariff_plans": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "billing_amount": {
+                "type": "object",
+                "properties": {
+                  "min": {
+                    "type": "number"
+                  },
+                  "max": {
+                    "type": "number"
+                  },
+                  "currency": {
+                    "type": "string"
+                  }
+                }
+              },
+              "usage_threshold_over": {
+                "type": "number",
+                "description": "Minimum usage threshold percentage for rule to apply."
+              },
+              "account_status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "active",
+                    "suspended",
+                    "pending_disconnection"
+                  ]
+                }
+              }
+            }
+          },
+          "channel_strategies": {
+            "type": "array",
+            "description": "Configuration per channel including templates and importance.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "channel": {
+                  "type": "string",
+                  "enum": [
+                    "sms",
+                    "email",
+                    "push",
+                    "whatsapp",
+                    "ivr"
+                  ]
+                },
+                "template_id": {
+                  "type": "string"
+                },
+                "mandatory": {
+                  "type": "boolean",
+                  "description": "If true, must attempt this channel even if others succeed.",
+                  "default": false
+                },
+                "fallback_order": {
+                  "type": "integer",
+                  "description": "Lower values mean higher priority for fallback."
+                },
+                "max_per_day": {
+                  "type": "integer",
+                  "description": "Rate limit for this rule and channel per customer per day."
+                }
+              },
+              "required": [
+                "channel",
+                "template_id"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "description": "Used to order rule evaluation; lower means higher priority.",
+            "default": 100
+          },
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "event_type",
+          "channel_strategies"
+        ]
+      },
+      "returns": "Created or updated notification_rule with notification_rule_id, version, and validation results for conditions and templates."
+    },
+    {
+      "name": "audit_notification_flow",
+      "description": "Retrieve an end-to-end audit trail for a notification event, including rules, batches, jobs, and delivery outcomes.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "notification_event_id": {
+            "type": "string",
+            "description": "Primary key for audit; required unless querying by customer and time range."
+          },
+          "customer_id": {
+            "type": "string"
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time window for searching events.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "include": {
+            "type": "array",
+            "description": "Detail levels to include in the audit trail.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "events",
+                "rules",
+                "batches",
+                "jobs",
+                "preferences",
+                "provider_responses"
+              ]
+            }
+          },
+          "redact_sensitive": {
+            "type": "boolean",
+            "description": "If true, masks PII and sensitive payload fields.",
+            "default": true
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "notification_event_id"
+            ]
+          },
+          {
+            "required": [
+              "customer_id",
+              "time_range"
+            ]
+          }
+        ]
+      },
+      "returns": "Structured audit report linking notification_event_id to evaluated rules, generated batches and jobs, customer preferences at the time, and detailed delivery timeline per channel."
+    },
+    {
+      "name": "search_telco_notification_entities",
+      "description": "Faceted search across telco_notification entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching telco_notification entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_telco_notification_records",
+      "description": "Bulk-create up to N telco_notification records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_telco_notification_records",
+      "description": "Apply a partial update patch to many telco_notification records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_telco_notification_records",
+      "description": "Delete or soft-delete many telco_notification records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_telco_notification_dataset",
+      "description": "Schedule or stream an export of telco_notification data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_telco_notification_dataset",
+      "description": "Validate and import a telco_notification dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_telco_notification_state",
+      "description": "Create a point-in-time snapshot of one or more telco_notification entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_telco_notification_snapshot",
+      "description": "Restore telco_notification state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_telco_notification_metrics",
+      "description": "Query aggregated metrics/KPIs for the telco_notification workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_telco_notification_dashboard",
+      "description": "Compose a dashboard view across telco_notification metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_telco_notification_audit_events",
+      "description": "Search the telco_notification audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_telco_notification_events",
+      "description": "Create a webhook subscription that delivers telco_notification workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_telco_notification_subscriptions",
+      "description": "List webhook subscriptions for telco_notification events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_telco_notification_subscription",
+      "description": "Remove a webhook subscription for telco_notification events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_telco_notification_job",
+      "description": "Schedule a recurring or one-off telco_notification job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_telco_notification_schedules",
+      "description": "List scheduled telco_notification jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_telco_notification_schedule",
+      "description": "Cancel or pause a scheduled telco_notification job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_telco_notification_operation",
+      "description": "Run a what-if simulation of a telco_notification operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_telco_notification_approval",
+      "description": "Open an approval request for a telco_notification action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_telco_notification_approval",
+      "description": "Record an approve/reject/abstain decision on a telco_notification approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_telco_notification_comment",
+      "description": "Add a threaded comment or annotation to any telco_notification entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_telco_notification_comments",
+      "description": "List comments/annotations attached to a telco_notification entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_telco_notification_policy",
+      "description": "Create or update a policy/rule controlling telco_notification behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_telco_notification_policies",
+      "description": "List telco_notification policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_telco_notification_entities",
+      "description": "Create a typed relationship between two telco_notification-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_telco_notification_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a telco_notification entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_telco_notification_entities",
+      "description": "Add, remove, or replace tags on one or many telco_notification entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}

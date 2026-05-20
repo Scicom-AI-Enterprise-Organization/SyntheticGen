@@ -1,0 +1,1209 @@
+{
+  "workflow_name": "software_deployment_booking_flow",
+  "description": "End-to-end reservation and execution flow for scheduling, approving, and managing software changes in a telco NOC environment",
+  "domain": "telco_noc/software_management",
+  "shared_entities": {
+    "deployment_window_id": {
+      "type": "string",
+      "description": "Identifier of a reservable maintenance/deployment window"
+    },
+    "deployment_request_id": {
+      "type": "string",
+      "description": "Identifier of a deployment booking/request"
+    },
+    "change_ticket_id": {
+      "type": "string",
+      "description": "Associated change management ticket identifier"
+    },
+    "environment_id": {
+      "type": "string",
+      "description": "Identifier for the target environment (e.g., PROD-EPC-1)"
+    },
+    "service_id": {
+      "type": "string",
+      "description": "Identifier for a managed network/service component"
+    },
+    "software_package_id": {
+      "type": "string",
+      "description": "Identifier for the software package, bundle, or version to be deployed"
+    },
+    "operator_id": {
+      "type": "string",
+      "description": "Identifier of the NOC engineer or automated agent initiating the action"
+    },
+    "approval_id": {
+      "type": "string",
+      "description": "Identifier of an approval decision for a deployment request"
+    },
+    "rollback_plan_id": {
+      "type": "string",
+      "description": "Identifier of a rollback plan associated with a deployment"
+    }
+  },
+  "functions": [
+    {
+      "name": "search_maintenance_windows",
+      "description": "Search and filter available maintenance windows for software deployments",
+      "stage": "discover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "time_range": {
+            "type": "object",
+            "description": "Desired time range for the deployment",
+            "properties": {
+              "start_after": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Filter windows starting after this timestamp"
+              },
+              "end_before": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Filter windows ending before this timestamp"
+              },
+              "time_zone": {
+                "type": "string",
+                "description": "IANA time zone identifier (e.g., 'UTC', 'Europe/Paris')"
+              }
+            }
+          },
+          "environment_filters": {
+            "type": "object",
+            "description": "Filters related to target environments",
+            "properties": {
+              "environment_ids": {
+                "type": "array",
+                "description": "Restrict search to specific environments",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "environment_types": {
+                "type": "array",
+                "description": "Filter by environment type",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "production",
+                    "staging",
+                    "lab",
+                    "dr_site"
+                  ]
+                }
+              },
+              "region_codes": {
+                "type": "array",
+                "description": "Filter by region or data center code",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "capacity_filters": {
+            "type": "object",
+            "description": "Filters related to capacity and conflicts",
+            "properties": {
+              "min_available_slots": {
+                "type": "integer",
+                "description": "Minimum number of available sub-slots required"
+              },
+              "exclude_conflicting_services": {
+                "type": "array",
+                "description": "Exclude windows where these services are already booked for another change",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "max_parallel_changes": {
+                "type": "integer",
+                "description": "Maximum number of parallel changes allowed in window"
+              }
+            }
+          },
+          "window_status": {
+            "type": "string",
+            "description": "Filter by window status",
+            "enum": [
+              "open",
+              "partially_booked",
+              "full"
+            ]
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "start_time",
+              "end_time",
+              "capacity",
+              "risk_score"
+            ],
+            "description": "Sorting key for returned windows"
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "asc"
+          },
+          "page": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 1,
+            "description": "Results page number"
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 20,
+            "maximum": 100,
+            "description": "Number of records per page"
+          }
+        }
+      },
+      "returns": "Paginated list of maintenance windows with capacity, environment, and conflict metadata"
+    },
+    {
+      "name": "get_maintenance_window_details",
+      "description": "Get detailed information and constraint rules for a specific maintenance window",
+      "stage": "discover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_window_id": {
+            "type": "string",
+            "description": "Target maintenance window identifier"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional details to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "capacity_breakdown",
+                "existing_bookings",
+                "change_freeze_rules",
+                "impact_analysis",
+                "blackout_periods"
+              ]
+            }
+          }
+        },
+        "required": [
+          "deployment_window_id"
+        ]
+      },
+      "returns": "Maintenance window details including timing, capacity, current bookings, and policy constraints"
+    },
+    {
+      "name": "check_software_deploy_eligibility",
+      "description": "Pre-validate if a software package and target environment are eligible for deployment in a given window",
+      "stage": "precheck",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_window_id": {
+            "type": "string",
+            "description": "Selected maintenance window identifier"
+          },
+          "environment_id": {
+            "type": "string",
+            "description": "Target environment identifier"
+          },
+          "services": {
+            "type": "array",
+            "description": "List of target services or components for the deployment",
+            "items": {
+              "type": "object",
+              "properties": {
+                "service_id": {
+                  "type": "string",
+                  "description": "Service or component identifier"
+                },
+                "software_package_id": {
+                  "type": "string",
+                  "description": "Desired software package/version identifier"
+                },
+                "deployment_mode": {
+                  "type": "string",
+                  "description": "Deployment mode for this service",
+                  "enum": [
+                    "rolling",
+                    "blue_green",
+                    "canary",
+                    "in_place"
+                  ]
+                },
+                "max_allowed_downtime_seconds": {
+                  "type": "integer",
+                  "description": "Service-specific downtime tolerance in seconds"
+                }
+              },
+              "required": [
+                "service_id",
+                "software_package_id"
+              ]
+            }
+          },
+          "risk_profile": {
+            "type": "object",
+            "description": "Declared risk parameters for the change",
+            "properties": {
+              "change_type": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "normal",
+                  "emergency"
+                ]
+              },
+              "impact_scope": {
+                "type": "string",
+                "enum": [
+                  "single_site",
+                  "multi_site",
+                  "network_wide"
+                ]
+              },
+              "customer_impact_level": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            }
+          },
+          "change_ticket_id": {
+            "type": "string",
+            "description": "Existing change ticket identifier, if already created"
+          }
+        },
+        "required": [
+          "deployment_window_id",
+          "environment_id",
+          "services"
+        ]
+      },
+      "returns": "Eligibility assessment including policy compliance, conflicts, risk score, and blocking conditions if any"
+    },
+    {
+      "name": "create_deployment_request",
+      "description": "Create and book a deployment request within a maintenance window",
+      "stage": "book",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_window_id": {
+            "type": "string",
+            "description": "Selected maintenance window identifier"
+          },
+          "environment_id": {
+            "type": "string",
+            "description": "Target environment identifier"
+          },
+          "operator_id": {
+            "type": "string",
+            "description": "Identifier of the requesting engineer or system"
+          },
+          "change_ticket": {
+            "type": "object",
+            "description": "Change ticket metadata, optionally used to auto-create or link a ticket",
+            "properties": {
+              "change_ticket_id": {
+                "type": "string",
+                "description": "Existing change ticket identifier if already created"
+              },
+              "auto_create_if_missing": {
+                "type": "boolean",
+                "default": false,
+                "description": "Create a new change ticket if change_ticket_id not provided"
+              },
+              "change_summary": {
+                "type": "string",
+                "description": "Short description of the change"
+              },
+              "risk_category": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ],
+                "description": "Risk category for the change"
+              }
+            }
+          },
+          "deployment_plan": {
+            "type": "object",
+            "description": "High-level deployment plan details",
+            "properties": {
+              "title": {
+                "type": "string",
+                "description": "Title or label for the deployment request"
+              },
+              "description": {
+                "type": "string",
+                "description": "Detailed description of what will be deployed"
+              },
+              "services": {
+                "type": "array",
+                "description": "List of services to be deployed as part of this request",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "service_id": {
+                      "type": "string",
+                      "description": "Service or component identifier"
+                    },
+                    "software_package_id": {
+                      "type": "string",
+                      "description": "Software package/version identifier"
+                    },
+                    "version_target": {
+                      "type": "string",
+                      "description": "Target software version string"
+                    },
+                    "deployment_strategy": {
+                      "type": "string",
+                      "enum": [
+                        "rolling",
+                        "blue_green",
+                        "canary",
+                        "in_place"
+                      ],
+                      "description": "Deployment strategy for this service"
+                    },
+                    "pre_checks": {
+                      "type": "array",
+                      "description": "List of pre-deployment checks to enforce",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "post_checks": {
+                      "type": "array",
+                      "description": "List of post-deployment checks to enforce",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": [
+                    "service_id",
+                    "software_package_id"
+                  ]
+                }
+              },
+              "constraints": {
+                "type": "object",
+                "description": "Operational constraints and guardrails",
+                "properties": {
+                  "max_total_downtime_seconds": {
+                    "type": "integer",
+                    "description": "Maximum total downtime allowed for the deployment"
+                  },
+                  "blackout_exceptions": {
+                    "type": "array",
+                    "description": "Explicit approvals or references to allow override of blackout rules",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "customer_comm_required": {
+                    "type": "boolean",
+                    "default": true,
+                    "description": "Whether customer communications are required before deployment"
+                  }
+                }
+              }
+            },
+            "required": [
+              "title",
+              "services"
+            ]
+          },
+          "rollback_plan": {
+            "type": "object",
+            "description": "Rollback plan associated with this deployment",
+            "properties": {
+              "rollback_plan_id": {
+                "type": "string",
+                "description": "Existing rollback plan identifier if referencing a template"
+              },
+              "steps": {
+                "type": "array",
+                "description": "Step-by-step rollback instructions",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "step_order": {
+                      "type": "integer",
+                      "description": "Order of execution"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "Description of the rollback step"
+                    },
+                    "estimated_duration_seconds": {
+                      "type": "integer",
+                      "description": "Estimated time to complete this step"
+                    }
+                  },
+                  "required": [
+                    "step_order",
+                    "description"
+                  ]
+                }
+              },
+              "validation_checks": {
+                "type": "array",
+                "description": "Checks to verify successful rollback",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "notifications": {
+            "type": "object",
+            "description": "Notification preferences for this deployment request",
+            "properties": {
+              "channels": {
+                "type": "array",
+                "description": "Notification channels to use",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "email",
+                    "sms",
+                    "slack",
+                    "webhook"
+                  ]
+                }
+              },
+              "recipients": {
+                "type": "array",
+                "description": "Recipient configuration for notifications",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "operator",
+                        "distribution_list",
+                        "external_contact"
+                      ]
+                    },
+                    "id_or_address": {
+                      "type": "string",
+                      "description": "Operator ID, mailing list, or external address"
+                    },
+                    "on_events": {
+                      "type": "array",
+                      "description": "Events that should trigger notifications",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "created",
+                          "approved",
+                          "rejected",
+                          "started",
+                          "completed",
+                          "failed",
+                          "rolled_back"
+                        ]
+                      }
+                    }
+                  },
+                  "required": [
+                    "type",
+                    "id_or_address"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "deployment_window_id",
+          "environment_id",
+          "operator_id",
+          "deployment_plan"
+        ]
+      },
+      "returns": "Deployment request booking with deployment_request_id, linked change_ticket_id, and initial status"
+    },
+    {
+      "name": "get_deployment_request",
+      "description": "Retrieve full details and current status for a deployment request",
+      "stage": "review",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_request_id": {
+            "type": "string",
+            "description": "Deployment request identifier"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional related entities to fetch",
+            "items": {
+              "type": "string",
+              "enum": [
+                "window",
+                "environment",
+                "services",
+                "approvals",
+                "execution_history",
+                "audit_log"
+              ]
+            }
+          }
+        },
+        "required": [
+          "deployment_request_id"
+        ]
+      },
+      "returns": "Deployment request details including window, plan, status, approvals, and execution history"
+    },
+    {
+      "name": "update_deployment_request",
+      "description": "Modify a pending deployment request before it is locked for execution",
+      "stage": "modify",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_request_id": {
+            "type": "string",
+            "description": "Deployment request identifier"
+          },
+          "operator_id": {
+            "type": "string",
+            "description": "Operator performing the update"
+          },
+          "updates": {
+            "type": "object",
+            "description": "Fields that can be updated on the deployment request",
+            "properties": {
+              "deployment_window_id": {
+                "type": "string",
+                "description": "Change the reserved maintenance window"
+              },
+              "deployment_plan": {
+                "type": "object",
+                "description": "Updates to the deployment plan",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "services": {
+                    "type": "array",
+                    "description": "Replace or alter service deployments",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "service_id": {
+                          "type": "string"
+                        },
+                        "software_package_id": {
+                          "type": "string"
+                        },
+                        "version_target": {
+                          "type": "string"
+                        },
+                        "deployment_strategy": {
+                          "type": "string",
+                          "enum": [
+                            "rolling",
+                            "blue_green",
+                            "canary",
+                            "in_place"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "service_id",
+                        "software_package_id"
+                      ]
+                    }
+                  }
+                }
+              },
+              "rollback_plan": {
+                "type": "object",
+                "description": "Updates to the rollback plan",
+                "properties": {
+                  "rollback_plan_id": {
+                    "type": "string"
+                  },
+                  "steps": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "step_order": {
+                          "type": "integer"
+                        },
+                        "description": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "notifications": {
+                "type": "object",
+                "description": "Updates to notification preferences",
+                "properties": {
+                  "channels": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "email",
+                        "sms",
+                        "slack",
+                        "webhook"
+                      ]
+                    }
+                  }
+                }
+              },
+              "metadata": {
+                "type": "object",
+                "description": "Arbitrary metadata or tags applied to the deployment request",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason or justification for the update"
+          }
+        },
+        "required": [
+          "deployment_request_id",
+          "operator_id",
+          "updates"
+        ]
+      },
+      "returns": "Updated deployment request with new details and validation results"
+    },
+    {
+      "name": "submit_deployment_for_approval",
+      "description": "Submit a deployment request into the approval workflow",
+      "stage": "approve",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_request_id": {
+            "type": "string",
+            "description": "Deployment request identifier"
+          },
+          "operator_id": {
+            "type": "string",
+            "description": "Operator submitting the request for approval"
+          },
+          "approval_routing": {
+            "type": "object",
+            "description": "Optional explicit routing for approvals",
+            "properties": {
+              "required_approver_roles": {
+                "type": "array",
+                "description": "List of roles that must approve",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "noc_supervisor",
+                    "change_manager",
+                    "service_owner",
+                    "security_officer"
+                  ]
+                }
+              },
+              "additional_approvers": {
+                "type": "array",
+                "description": "Explicit approver IDs to be added",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "auto_approve_if_low_risk": {
+                "type": "boolean",
+                "default": false,
+                "description": "Auto-approve if system-determined risk is below threshold"
+              }
+            }
+          },
+          "comments": {
+            "type": "string",
+            "description": "Comments or justification attached to approval submission"
+          }
+        },
+        "required": [
+          "deployment_request_id",
+          "operator_id"
+        ]
+      },
+      "returns": "Approval workflow status including pending approvers, SLA timers, and generated approval_id if applicable"
+    },
+    {
+      "name": "record_approval_decision",
+      "description": "Record an approval or rejection decision for a deployment request",
+      "stage": "approve",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_request_id": {
+            "type": "string",
+            "description": "Deployment request identifier"
+          },
+          "approval_id": {
+            "type": "string",
+            "description": "Existing approval workflow instance identifier"
+          },
+          "approver_id": {
+            "type": "string",
+            "description": "Identifier of the approver making this decision"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "rejected",
+              "needs_more_info"
+            ],
+            "description": "Approval decision outcome"
+          },
+          "decision_details": {
+            "type": "object",
+            "description": "Additional context for the decision",
+            "properties": {
+              "comment": {
+                "type": "string",
+                "description": "Comment from the approver"
+              },
+              "conditions": {
+                "type": "array",
+                "description": "Conditional requirements if approved with constraints",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "requested_changes": {
+                "type": "array",
+                "description": "Requested changes prior to approval",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "deployment_request_id",
+          "approver_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval status for the deployment request including whether it is now fully approved, rejected, or still pending"
+    },
+    {
+      "name": "start_deployment_execution",
+      "description": "Lock the booking and start executing the deployment according to the plan",
+      "stage": "execute",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_request_id": {
+            "type": "string",
+            "description": "Deployment request identifier"
+          },
+          "operator_id": {
+            "type": "string",
+            "description": "Operator initiating the deployment"
+          },
+          "execution_options": {
+            "type": "object",
+            "description": "Execution-time options and overrides",
+            "properties": {
+              "dry_run": {
+                "type": "boolean",
+                "default": false,
+                "description": "If true, simulate deployment without making changes"
+              },
+              "batch_size_override": {
+                "type": "integer",
+                "description": "Override default batch size for rolling/canary deployments"
+              },
+              "pause_on_validation_warnings": {
+                "type": "boolean",
+                "default": true,
+                "description": "Pause execution if pre-checks yield warnings"
+              },
+              "pre_execution_snapshot": {
+                "type": "boolean",
+                "default": true,
+                "description": "Capture a configuration/state snapshot before starting"
+              }
+            }
+          }
+        },
+        "required": [
+          "deployment_request_id",
+          "operator_id"
+        ]
+      },
+      "returns": "Execution handle with current status, locks acquired, and initial task breakdown"
+    },
+    {
+      "name": "get_deployment_status",
+      "description": "Get real-time status and progress details for an executing or completed deployment",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_request_id": {
+            "type": "string",
+            "description": "Deployment request identifier"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional details to include",
+            "items": {
+              "type": "string",
+              "enum": [
+                "task_breakdown",
+                "per_service_status",
+                "logs",
+                "metrics",
+                "events"
+              ]
+            }
+          },
+          "log_filter": {
+            "type": "object",
+            "description": "Optional filters when requesting logs or events",
+            "properties": {
+              "severity_levels": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "debug",
+                    "info",
+                    "warning",
+                    "error",
+                    "critical"
+                  ]
+                }
+              },
+              "since": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Return only items more recent than this time"
+              },
+              "max_entries": {
+                "type": "integer",
+                "description": "Maximum number of log or event entries to return"
+              }
+            }
+          }
+        },
+        "required": [
+          "deployment_request_id"
+        ]
+      },
+      "returns": "Deployment status summary including phase, percentage complete, per-service states, and optional logs/metrics"
+    },
+    {
+      "name": "cancel_deployment_request",
+      "description": "Cancel a pending or scheduled deployment request and release its booking",
+      "stage": "cancel",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_request_id": {
+            "type": "string",
+            "description": "Deployment request identifier to cancel"
+          },
+          "operator_id": {
+            "type": "string",
+            "description": "Operator requesting cancellation"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Short cancellation reason",
+            "enum": [
+              "change_scope_modified",
+              "risk_reassessment",
+              "dependency_not_ready",
+              "window_conflict",
+              "other"
+            ]
+          },
+          "reason_details": {
+            "type": "string",
+            "description": "Free-text explanation for the cancellation"
+          },
+          "force": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, attempt to cancel even if deployment is already in progress, subject to policy"
+          }
+        },
+        "required": [
+          "deployment_request_id",
+          "operator_id",
+          "reason"
+        ]
+      },
+      "returns": "Cancellation result indicating final status, whether booking was released, and any partial execution impact"
+    },
+    {
+      "name": "rollback_or_retry_deployment",
+      "description": "Trigger a rollback or retry strategy for a failed or partially failed deployment",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_request_id": {
+            "type": "string",
+            "description": "Deployment request identifier"
+          },
+          "operator_id": {
+            "type": "string",
+            "description": "Operator initiating rollback or retry"
+          },
+          "action_type": {
+            "type": "string",
+            "description": "Select whether to rollback or retry",
+            "enum": [
+              "rollback",
+              "retry"
+            ]
+          },
+          "scope": {
+            "type": "object",
+            "description": "Scope of rollback or retry",
+            "properties": {
+              "services": {
+                "type": "array",
+                "description": "Limit the action to specific services (empty means all applicable)",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "phases": {
+                "type": "array",
+                "description": "Limit the action to specific phases of the deployment pipeline",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pre_checks",
+                    "core_deploy",
+                    "post_checks"
+                  ]
+                }
+              }
+            }
+          },
+          "rollback_options": {
+            "type": "object",
+            "description": "Additional options when action_type is 'rollback'",
+            "properties": {
+              "rollback_plan_id": {
+                "type": "string",
+                "description": "Override or specify a rollback plan to use"
+              },
+              "validate_after_rollback": {
+                "type": "boolean",
+                "default": true,
+                "description": "Run validation checks after rollback completes"
+              },
+              "capture_post_rollback_snapshot": {
+                "type": "boolean",
+                "default": true,
+                "description": "Capture configuration/state snapshot after rollback"
+              }
+            }
+          },
+          "retry_options": {
+            "type": "object",
+            "description": "Additional options when action_type is 'retry'",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "description": "Maximum number of retry attempts allowed"
+              },
+              "backoff_strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "fixed",
+                  "exponential"
+                ],
+                "description": "Backoff strategy between retries"
+              },
+              "retry_failed_only": {
+                "type": "boolean",
+                "default": true,
+                "description": "Retry only failed components instead of the full plan"
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for rollback or retry"
+          }
+        },
+        "required": [
+          "deployment_request_id",
+          "operator_id",
+          "action_type"
+        ]
+      },
+      "returns": "Recovery action handle with resulting status, affected services, and next steps"
+    },
+    {
+      "name": "list_deployment_requests",
+      "description": "List and filter deployment requests across windows, environments, and statuses",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "description": "Filter criteria for deployment requests",
+            "properties": {
+              "statuses": {
+                "type": "array",
+                "description": "Filter by deployment request status",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "draft",
+                    "pending_approval",
+                    "approved",
+                    "rejected",
+                    "scheduled",
+                    "in_progress",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "rolled_back"
+                  ]
+                }
+              },
+              "environment_ids": {
+                "type": "array",
+                "description": "Filter by environment identifiers",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "service_ids": {
+                "type": "array",
+                "description": "Filter by service identifiers",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "operator_ids": {
+                "type": "array",
+                "description": "Filter by operators who created or executed the deployment",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "change_ticket_ids": {
+                "type": "array",
+                "description": "Filter by related change tickets",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_after": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Only include requests created after this timestamp"
+              },
+              "created_before": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Only include requests created before this timestamp"
+              },
+              "has_active_booking": {
+                "type": "boolean",
+                "description": "Filter by whether the request currently holds a booking"
+              },
+              "risk_categories": {
+                "type": "array",
+                "description": "Filter by risk category",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                }
+              },
+              "tags": {
+                "type": "array",
+                "description": "Filter by metadata tags associated with the request",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "scheduled_start",
+              "risk_category",
+              "status"
+            ],
+            "description": "Field to sort results by"
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          },
+          "page": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 25,
+            "maximum": 200
+          }
+        }
+      },
+      "returns": "Paginated list of deployment requests with key metadata and booking details"
+    }
+  ]
+}

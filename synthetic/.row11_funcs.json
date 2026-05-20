@@ -1,0 +1,401 @@
+{
+  "preview_migration_diff": {
+    "name": "preview_migration_diff",
+    "description": "Preview the configuration diff between legacy gateway APIs and the generated TAAS Deep configuration for a migration job.",
+    "stage": "validation",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "migration_job_id": {
+          "type": "string",
+          "description": "Migration job to preview."
+        },
+        "include": {
+          "type": "array",
+          "description": "Controls which parts of the diff to include.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "apis",
+              "routes",
+              "policies",
+              "traffic",
+              "runtime_settings"
+            ]
+          }
+        },
+        "format": {
+          "type": "string",
+          "description": "Preferred diff format.",
+          "enum": [
+            "summary",
+            "json",
+            "unified"
+          ],
+          "default": "summary"
+        },
+        "group_by": {
+          "type": "string",
+          "description": "How to group the diff entries.",
+          "enum": [
+            "api",
+            "route",
+            "policy_set",
+            "none"
+          ],
+          "default": "api"
+        }
+      },
+      "required": [
+        "migration_job_id"
+      ]
+    },
+    "returns": "Structured diff report showing planned TAAS Deep gateway configuration versus legacy configuration."
+  },
+  "get_migration_status": {
+    "name": "get_migration_status",
+    "description": "Get detailed status, progress, and any blocking issues for a migration job.",
+    "stage": "monitor",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "migration_job_id": {
+          "type": "string",
+          "description": "Migration job to inspect."
+        },
+        "include": {
+          "type": "array",
+          "description": "Additional sections of information to include in the response.",
+          "items": {
+            "type": "string",
+            "enum": [
+              "task_breakdown",
+              "error_details",
+              "event_log",
+              "traffic_shift",
+              "created_entities"
+            ]
+          }
+        },
+        "task_filter": {
+          "type": "object",
+          "description": "Optional filters to narrow down status to specific tasks.",
+          "properties": {
+            "api_ids": {
+              "type": "array",
+              "description": "Filter tasks by TAAS Deep API IDs.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "status": {
+              "type": "array",
+              "description": "Filter tasks by task status.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "running",
+                  "completed",
+                  "failed",
+                  "rolled_back",
+                  "skipped"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "migration_job_id"
+      ]
+    },
+    "returns": "Current status of the migration job, including progress percentages, per-task states, and links to created gateway entities."
+  },
+  "configure_traffic_shift": {
+    "name": "configure_traffic_shift",
+    "description": "Create or update a traffic shift strategy for a migration job, controlling how traffic is gradually moved from the legacy gateway to TAAS Deep.",
+    "stage": "traffic",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "migration_job_id": {
+          "type": "string",
+          "description": "Migration job whose traffic shift is being configured."
+        },
+        "traffic_shift_id": {
+          "type": "string",
+          "description": "Existing traffic shift configuration to update. Omit to create a new one."
+        },
+        "strategy": {
+          "type": "object",
+          "description": "Traffic shifting strategy configuration.",
+          "properties": {
+            "mode": {
+              "type": "string",
+              "description": "Traffic shifting mode.",
+              "enum": [
+                "canary",
+                "blue_green",
+                "shadow",
+                "manual"
+              ]
+            },
+            "stages": {
+              "type": "array",
+              "description": "Sequential traffic stages for canary/blue-green.",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Human-readable name for the stage."
+                  },
+                  "taas_percentage": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 100,
+                    "description": "Percentage of traffic to route to TAAS Deep."
+                  },
+                  "min_duration_minutes": {
+                    "type": "integer",
+                    "description": "Minimum time to stay in this stage before allowing advancement."
+                  },
+                  "exit_criteria": {
+                    "type": "object",
+                    "description": "Criteria to move from this stage to the next.",
+                    "properties": {
+                      "max_error_rate": {
+                        "type": "number",
+                        "description": "Maximum tolerated error rate in this stage."
+                      },
+                      "max_latency_p95_ms": {
+                        "type": "integer",
+                        "description": "Maximum tolerated p95 latency."
+                      },
+                      "require_manual_approval": {
+                        "type": "boolean",
+                        "description": "Whether manual approval is required to leave this stage.",
+                        "default": false
+                      }
+                    }
+                  }
+                },
+                "required": [
+                  "name",
+                  "taas_percentage"
+                ]
+              }
+            },
+            "shadow_settings": {
+              "type": "object",
+              "description": "Settings for shadow mode traffic mirroring.",
+              "properties": {
+                "mirror_percentage": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 100,
+                  "description": "Percentage of traffic to mirror to TAAS Deep."
+                },
+                "strip_sensitive_headers": {
+                  "type": "boolean",
+                  "description": "Whether to remove sensitive headers from mirrored requests.",
+                  "default": true
+                }
+              }
+            }
+          },
+          "required": [
+            "mode"
+          ]
+        },
+        "apply_immediately": {
+          "type": "boolean",
+          "description": "If true, apply the new traffic configuration immediately.",
+          "default": false
+        }
+      },
+      "required": [
+        "migration_job_id",
+        "strategy"
+      ]
+    },
+    "returns": "Traffic shift ID and current effective traffic distribution."
+  },
+  "approve_or_block_stage": {
+    "name": "approve_or_block_stage",
+    "description": "Approve advancement to the next migration or traffic stage, or block and pause progression due to issues.",
+    "stage": "governance",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "migration_job_id": {
+          "type": "string",
+          "description": "Migration job whose stage is being governed."
+        },
+        "stage_type": {
+          "type": "string",
+          "description": "Type of stage being controlled.",
+          "enum": [
+            "migration_execution",
+            "traffic_shift"
+          ]
+        },
+        "current_stage_name": {
+          "type": "string",
+          "description": "Name or identifier of the current stage, used for idempotency and validation."
+        },
+        "action": {
+          "type": "string",
+          "description": "Governance action to apply.",
+          "enum": [
+            "approve",
+            "block",
+            "request_changes"
+          ]
+        },
+        "reason": {
+          "type": "string",
+          "description": "Reason for the approval or block decision."
+        },
+        "requested_changes": {
+          "type": "array",
+          "description": "List of requested changes if the action is request_changes.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "category": {
+                "type": "string",
+                "enum": [
+                  "policy",
+                  "routing",
+                  "traffic",
+                  "security",
+                  "observability",
+                  "other"
+                ]
+              },
+              "description": {
+                "type": "string",
+                "description": "Description of the required change."
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              }
+            },
+            "required": [
+              "category",
+              "description"
+            ]
+          }
+        }
+      },
+      "required": [
+        "migration_job_id",
+        "stage_type",
+        "current_stage_name",
+        "action"
+      ]
+    },
+    "returns": "Updated stage state for the migration job, including whether execution/traffic progression is unblocked or paused."
+  },
+  "list_migration_jobs": {
+    "name": "list_migration_jobs",
+    "description": "List and filter migration jobs across plans and gateways.",
+    "stage": "utility",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "filters": {
+          "type": "object",
+          "description": "Filter options for narrowing down migration jobs.",
+          "properties": {
+            "migration_plan_id": {
+              "type": "string",
+              "description": "Filter jobs belonging to a specific plan."
+            },
+            "legacy_gateway_id": {
+              "type": "string",
+              "description": "Filter by legacy gateway."
+            },
+            "gateway_id": {
+              "type": "string",
+              "description": "Filter by target TAAS Deep gateway."
+            },
+            "status": {
+              "type": "array",
+              "description": "Filter by job lifecycle status.",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "pending",
+                  "running",
+                  "paused",
+                  "completed",
+                  "failed",
+                  "rolled_back",
+                  "finalized"
+                ]
+              }
+            },
+            "created_after": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Only include jobs created after this timestamp."
+            },
+            "created_before": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Only include jobs created before this timestamp."
+            },
+            "tags": {
+              "type": "array",
+              "description": "Match jobs that include all of these tag keys (any value).",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "sort_by": {
+          "type": "string",
+          "description": "Sort field.",
+          "enum": [
+            "created_at",
+            "updated_at",
+            "status",
+            "name"
+          ],
+          "default": "created_at"
+        },
+        "sort_order": {
+          "type": "string",
+          "description": "Sort order.",
+          "enum": [
+            "asc",
+            "desc"
+          ],
+          "default": "desc"
+        },
+        "page": {
+          "type": "integer",
+          "description": "Page number for pagination, starting at 1.",
+          "default": 1
+        },
+        "page_size": {
+          "type": "integer",
+          "description": "Number of items per page.",
+          "default": 20
+        }
+      }
+    },
+    "returns": "Paginated list of migration jobs with key metadata and status information."
+  }
+}

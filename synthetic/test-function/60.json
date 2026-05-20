@@ -1,0 +1,3246 @@
+{
+  "workflow_name": "review_moderation_email_flow",
+  "description": "End-to-end workflow for submitting, moderating, and dispatching transactional or campaign emails with human/automated review, escalation, and rollback.",
+  "domain": "taas_cpaas/email_api",
+  "shared_entities": {
+    "email_template_id": {
+      "type": "string",
+      "description": "Unique identifier for an email template stored in the system"
+    },
+    "email_submission_id": {
+      "type": "string",
+      "description": "Identifier for a specific email submission instance (template + recipients + content overrides)"
+    },
+    "moderation_request_id": {
+      "type": "string",
+      "description": "Identifier for a moderation request associated with an email submission"
+    },
+    "moderation_decision_id": {
+      "type": "string",
+      "description": "Identifier for a specific moderation decision record"
+    },
+    "dispatch_job_id": {
+      "type": "string",
+      "description": "Identifier for a batch email dispatch job"
+    },
+    "review_comment": {
+      "type": "object",
+      "description": "Comment left by a moderator or automated system",
+      "properties": {
+        "author_type": {
+          "type": "string",
+          "enum": [
+            "human",
+            "system"
+          ]
+        },
+        "author_id": {
+          "type": "string",
+          "description": "User ID for human moderators or system component ID"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "visibility": {
+          "type": "string",
+          "enum": [
+            "internal",
+            "requester"
+          ]
+        },
+        "category": {
+          "type": "string",
+          "enum": [
+            "policy",
+            "content_quality",
+            "compliance",
+            "spam_risk",
+            "other"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "suggested_changes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string",
+                "description": "Field the suggestion applies to (e.g., subject, body_html, preheader)"
+              },
+              "current_value_excerpt": {
+                "type": "string"
+              },
+              "suggested_value": {
+                "type": "string"
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "blocking": {
+                "type": "boolean",
+                "description": "If true, this suggestion must be resolved before approval"
+              }
+            },
+            "required": [
+              "field",
+              "suggested_value"
+            ]
+          }
+        }
+      },
+      "required": [
+        "author_type",
+        "message"
+      ]
+    },
+    "recipient_segment": {
+      "type": "object",
+      "description": "Dynamic segment or static list definition for recipients",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "static_list",
+            "dynamic_query"
+          ]
+        },
+        "segment_id": {
+          "type": "string",
+          "description": "Identifier of an existing segment for reuse"
+        },
+        "static_recipients": {
+          "type": "array",
+          "description": "Explicit list of recipients for static lists",
+          "items": {
+            "type": "object",
+            "properties": {
+              "email": {
+                "type": "string",
+                "format": "email"
+              },
+              "name": {
+                "type": "string"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "metadata": {
+                "type": "object",
+                "description": "Arbitrary key-value data associated with the recipient"
+              }
+            },
+            "required": [
+              "email"
+            ]
+          }
+        },
+        "query": {
+          "type": "object",
+          "description": "Dynamic query definition for selecting recipients from CRM-like data",
+          "properties": {
+            "source": {
+              "type": "string",
+              "enum": [
+                "crm",
+                "events",
+                "custom"
+              ]
+            },
+            "filters": {
+              "type": "array",
+              "description": "List of filter conditions combined with the specified logical operator",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "field": {
+                    "type": "string"
+                  },
+                  "operator": {
+                    "type": "string",
+                    "enum": [
+                      "eq",
+                      "neq",
+                      "gt",
+                      "lt",
+                      "gte",
+                      "lte",
+                      "in",
+                      "not_in",
+                      "contains"
+                    ]
+                  },
+                  "value": {
+                    "type": [
+                      "string",
+                      "number",
+                      "boolean",
+                      "array"
+                    ]
+                  }
+                },
+                "required": [
+                  "field",
+                  "operator",
+                  "value"
+                ]
+              }
+            },
+            "logical_operator": {
+              "type": "string",
+              "enum": [
+                "and",
+                "or"
+              ],
+              "default": "and"
+            },
+            "limit": {
+              "type": "integer",
+              "description": "Maximum number of recipients to resolve for preview or dispatch"
+            }
+          },
+          "required": [
+            "source",
+            "filters"
+          ]
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "moderation_policy": {
+      "type": "object",
+      "description": "Moderation policy snapshot applied to a request",
+      "properties": {
+        "policy_id": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "rule_id": {
+                "type": "string"
+              },
+              "category": {
+                "type": "string",
+                "enum": [
+                  "prohibited_content",
+                  "restricted_content",
+                  "branding",
+                  "deliverability",
+                  "frequency",
+                  "legal"
+                ]
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high",
+                  "critical"
+                ]
+              },
+              "description": {
+                "type": "string"
+              },
+              "auto_enforce": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "rule_id",
+              "category",
+              "severity"
+            ]
+          }
+        }
+      },
+      "required": [
+        "policy_id",
+        "version"
+      ]
+    },
+    "actor_ref": {
+      "type": "object",
+      "description": "Reference to the actor (human user or system) performing an action.",
+      "properties": {
+        "actor_id": {
+          "type": "string"
+        },
+        "actor_type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "service",
+            "automation",
+            "vendor"
+          ]
+        },
+        "tenant_id": {
+          "type": "string"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "session_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "actor_id",
+        "actor_type"
+      ]
+    },
+    "time_range": {
+      "type": "object",
+      "description": "Inclusive/exclusive time range.",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "inclusive_from": {
+          "type": "boolean",
+          "default": true
+        },
+        "inclusive_to": {
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    },
+    "pagination": {
+      "type": "object",
+      "description": "Pagination parameters for list/search endpoints.",
+      "properties": {
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 500,
+          "default": 50
+        },
+        "offset": {
+          "type": "integer",
+          "minimum": 0,
+          "default": 0
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "sort": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string"
+              },
+              "direction": {
+                "type": "string",
+                "enum": [
+                  "asc",
+                  "desc"
+                ]
+              }
+            },
+            "required": [
+              "field"
+            ]
+          }
+        }
+      }
+    },
+    "webhook_subscription": {
+      "type": "object",
+      "description": "Webhook subscription details.",
+      "properties": {
+        "subscription_id": {
+          "type": "string"
+        },
+        "target_url": {
+          "type": "string",
+          "format": "uri"
+        },
+        "secret": {
+          "type": "string"
+        },
+        "event_types": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "active": {
+          "type": "boolean",
+          "default": true
+        }
+      },
+      "required": [
+        "target_url",
+        "event_types"
+      ]
+    },
+    "attachment_ref": {
+      "type": "object",
+      "description": "Attachment reference: file or external link.",
+      "properties": {
+        "attachment_id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "file",
+            "link",
+            "evidence",
+            "screenshot",
+            "log"
+          ]
+        },
+        "mime_type": {
+          "type": "string"
+        },
+        "uri": {
+          "type": "string"
+        },
+        "size_bytes": {
+          "type": "integer"
+        },
+        "checksum": {
+          "type": "object",
+          "properties": {
+            "algorithm": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    },
+    "tag_filter": {
+      "type": "object",
+      "description": "Tag-based filter with key/value match and operators.",
+      "properties": {
+        "all_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "any_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "none_of": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "kv": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "op": {
+                "type": "string",
+                "enum": [
+                  "eq",
+                  "ne",
+                  "in",
+                  "nin",
+                  "exists"
+                ]
+              },
+              "values": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "key",
+              "op"
+            ]
+          }
+        }
+      }
+    },
+    "schedule_spec": {
+      "type": "object",
+      "description": "Recurring schedule specification (cron or RRULE).",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "cron",
+            "rrule",
+            "interval",
+            "one_shot"
+          ]
+        },
+        "cron_expression": {
+          "type": "string"
+        },
+        "rrule": {
+          "type": "string"
+        },
+        "interval_seconds": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "starts_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ends_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string"
+        },
+        "max_occurrences": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "kind"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "create_email_submission",
+      "description": "Create a new email submission for moderation, combining a template, content overrides, and recipient targeting.",
+      "stage": "submission",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "description": "Base email_template_id to use for this submission"
+          },
+          "submission_metadata": {
+            "type": "object",
+            "description": "High-level metadata for categorizing and describing the submission",
+            "properties": {
+              "submission_name": {
+                "type": "string",
+                "description": "Human-readable name of the campaign or transactional submission"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "transactional",
+                  "marketing",
+                  "system_alert",
+                  "other"
+                ]
+              },
+              "priority": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "normal",
+                  "high",
+                  "critical"
+                ],
+                "default": "normal"
+              },
+              "requested_by_user_id": {
+                "type": "string",
+                "description": "User who initiated the submission"
+              },
+              "external_reference": {
+                "type": "string",
+                "description": "Optional external system identifier (e.g., CRM campaign id)"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "submission_name",
+              "type"
+            ]
+          },
+          "content_overrides": {
+            "type": "object",
+            "description": "Optional overrides for the base template content",
+            "properties": {
+              "subject": {
+                "type": "string"
+              },
+              "preheader": {
+                "type": "string"
+              },
+              "body_html": {
+                "type": "string"
+              },
+              "body_text": {
+                "type": "string"
+              },
+              "from": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "sender_profile_id": {
+                    "type": "string",
+                    "description": "Identifier of a verified sender profile"
+                  }
+                }
+              },
+              "reply_to": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Custom email headers to set for this submission"
+              },
+              "placeholders_preview_data": {
+                "type": "object",
+                "description": "Key-value pairs for rendering a preview of dynamic placeholders",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean"
+                  ]
+                }
+              }
+            }
+          },
+          "recipients": {
+            "$ref": "#/shared_entities/recipient_segment"
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Scheduling options for when the email can be dispatched after approval",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "scheduled",
+                  "windowed"
+                ]
+              },
+              "send_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Exact time to start sending when mode is scheduled"
+              },
+              "window": {
+                "type": "object",
+                "description": "Delivery window constraints for large batches",
+                "properties": {
+                  "start_time": {
+                    "type": "string",
+                    "format": "time"
+                  },
+                  "end_time": {
+                    "type": "string",
+                    "format": "time"
+                  },
+                  "time_zone": {
+                    "type": "string"
+                  },
+                  "max_emails_per_hour": {
+                    "type": "integer"
+                  }
+                }
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "require_human_moderation": {
+            "type": "boolean",
+            "description": "If true, requires a human moderator even if automated checks pass",
+            "default": false
+          }
+        },
+        "required": [
+          "template_id",
+          "submission_metadata",
+          "recipients"
+        ]
+      },
+      "returns": "New email_submission_id with initial status and a summary of the submission."
+    },
+    {
+      "name": "run_automated_moderation",
+      "description": "Run automated policy checks and content analysis on an email submission prior to or in parallel with human review.",
+      "stage": "moderation_auto",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "email_submission_id": {
+            "type": "string"
+          },
+          "requested_checks": {
+            "type": "array",
+            "description": "List of automated checks to perform",
+            "items": {
+              "type": "string",
+              "enum": [
+                "spam_score",
+                "phishing_signals",
+                "brand_violations",
+                "prohibited_keywords",
+                "link_safety",
+                "unsubscribe_presence",
+                "sender_reputation"
+              ]
+            }
+          },
+          "policy": {
+            "$ref": "#/shared_entities/moderation_policy"
+          },
+          "options": {
+            "type": "object",
+            "description": "Options for controlling analysis behavior",
+            "properties": {
+              "max_runtime_ms": {
+                "type": "integer",
+                "description": "Soft limit for automated check execution time"
+              },
+              "strict_mode": {
+                "type": "boolean",
+                "description": "If true, treat warnings as blocking failures",
+                "default": false
+              },
+              "language_hint": {
+                "type": "string",
+                "description": "Preferred language code for content analysis",
+                "maxLength": 10
+              }
+            }
+          }
+        },
+        "required": [
+          "email_submission_id",
+          "requested_checks"
+        ]
+      },
+      "returns": "Automated moderation report including scores, detected issues, and a preliminary pass/fail recommendation."
+    },
+    {
+      "name": "create_moderation_request",
+      "description": "Create a human moderation request for an email submission, optionally including automated analysis results.",
+      "stage": "moderation_prepare",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "email_submission_id": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "standard_queue",
+              "priority_queue",
+              "compliance_team"
+            ]
+          },
+          "auto_moderation_result": {
+            "type": "object",
+            "description": "Optional reference or payload of automated moderation results",
+            "properties": {
+              "run_id": {
+                "type": "string"
+              },
+              "overall_recommendation": {
+                "type": "string",
+                "enum": [
+                  "approve",
+                  "reject",
+                  "needs_human_review"
+                ]
+              },
+              "issues_summary": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "rule_id": {
+                      "type": "string"
+                    },
+                    "severity": {
+                      "type": "string",
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high",
+                        "critical"
+                      ]
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "blocking": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": [
+                    "rule_id",
+                    "severity"
+                  ]
+                }
+              }
+            }
+          },
+          "sla": {
+            "type": "object",
+            "description": "Service-level expectations for handling the request",
+            "properties": {
+              "response_time_minutes": {
+                "type": "integer"
+              },
+              "escalate_if_overdue": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "additional_context": {
+            "type": "object",
+            "description": "Additional context for moderators",
+            "properties": {
+              "business_unit": {
+                "type": "string"
+              },
+              "campaign_goal": {
+                "type": "string"
+              },
+              "risk_tolerance": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "email_submission_id",
+          "channel"
+        ]
+      },
+      "returns": "Created moderation_request_id with queue placement, initial status, and SLA metadata."
+    },
+    {
+      "name": "get_moderation_queue",
+      "description": "List or page through moderation requests in a given queue, with filtering and sorting options.",
+      "stage": "moderation_view",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "queue": {
+            "type": "string",
+            "enum": [
+              "standard_queue",
+              "priority_queue",
+              "compliance_team"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "pending",
+                    "in_progress",
+                    "approved",
+                    "rejected",
+                    "returned_for_changes",
+                    "cancelled"
+                  ]
+                }
+              },
+              "min_created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "max_created_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "requested_by_user_id": {
+                "type": "string"
+              },
+              "tags": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "risk_tolerance": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "priority",
+              "sla_deadline"
+            ],
+            "default": "created_at"
+          },
+          "sort_direction": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "asc"
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 20,
+            "maximum": 100
+          }
+        },
+        "required": [
+          "queue"
+        ]
+      },
+      "returns": "Paged list of moderation_request_id items with summary information and queue statistics."
+    },
+    {
+      "name": "submit_moderation_decision",
+      "description": "Submit a human or system moderation decision for a specific request, including comments and requested changes.",
+      "stage": "moderation_decide",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "moderation_request_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approved",
+              "rejected",
+              "returned_for_changes",
+              "escalated"
+            ]
+          },
+          "decided_by": {
+            "type": "object",
+            "properties": {
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "system"
+                ]
+              },
+              "actor_id": {
+                "type": "string",
+                "description": "User ID or system component ID"
+              },
+              "role": {
+                "type": "string",
+                "description": "Role of the actor, e.g., moderator, compliance_officer"
+              }
+            },
+            "required": [
+              "actor_type",
+              "actor_id"
+            ]
+          },
+          "comments": {
+            "type": "array",
+            "description": "Comments explaining the decision or requested changes",
+            "items": {
+              "$ref": "#/shared_entities/review_comment"
+            }
+          },
+          "requested_changes": {
+            "type": "object",
+            "description": "High-level requested changes for the requester",
+            "properties": {
+              "must_fix": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "nice_to_have": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "escalation": {
+            "type": "object",
+            "description": "Escalation details when decision is 'escalated'",
+            "properties": {
+              "target_queue": {
+                "type": "string",
+                "enum": [
+                  "compliance_team",
+                  "legal_review",
+                  "senior_moderator"
+                ]
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "moderation_request_id",
+          "decision",
+          "decided_by"
+        ]
+      },
+      "returns": "Created moderation_decision_id, updated moderation request and email submission statuses."
+    },
+    {
+      "name": "apply_content_changes_and_resubmit",
+      "description": "Apply content changes to an email submission based on moderation feedback and optionally resubmit for review.",
+      "stage": "revision",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "email_submission_id": {
+            "type": "string"
+          },
+          "source_decision_id": {
+            "type": "string",
+            "description": "Optional reference to the moderation_decision_id that triggered the changes"
+          },
+          "content_patches": {
+            "type": "array",
+            "description": "List of granular content patches to apply",
+            "items": {
+              "type": "object",
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "JSON pointer-style path (e.g., /content_overrides/subject)"
+                },
+                "operation": {
+                  "type": "string",
+                  "enum": [
+                    "replace",
+                    "append",
+                    "prepend",
+                    "remove"
+                  ]
+                },
+                "value": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "object",
+                    "array",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "path",
+                "operation"
+              ]
+            }
+          },
+          "recipients_patch": {
+            "type": "object",
+            "description": "Optional changes to recipient segment, e.g., limit size or exclude risky segments",
+            "properties": {
+              "limit": {
+                "type": "integer"
+              },
+              "exclude_emails": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "format": "email"
+                }
+              },
+              "additional_filters": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "field": {
+                      "type": "string"
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "eq",
+                        "neq",
+                        "in",
+                        "not_in"
+                      ]
+                    },
+                    "value": {
+                      "type": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "array"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "field",
+                    "operator",
+                    "value"
+                  ]
+                }
+              }
+            }
+          },
+          "resubmit_for_moderation": {
+            "type": "boolean",
+            "description": "If true, automatically create a new moderation request after changes",
+            "default": true
+          }
+        },
+        "required": [
+          "email_submission_id",
+          "content_patches"
+        ]
+      },
+      "returns": "Updated email submission with applied changes and optionally a new moderation_request_id."
+    },
+    {
+      "name": "finalize_moderation_and_schedule_dispatch",
+      "description": "Lock a moderated email submission and create a dispatch job according to its schedule and approval state.",
+      "stage": "pre_dispatch",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "email_submission_id": {
+            "type": "string"
+          },
+          "require_final_approval": {
+            "type": "boolean",
+            "description": "If true, enforce that the latest decision is 'approved' before scheduling",
+            "default": true
+          },
+          "override_schedule": {
+            "type": "object",
+            "description": "Optional override of the submission's schedule settings at dispatch time",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "scheduled",
+                  "windowed"
+                ]
+              },
+              "send_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "window": {
+                "type": "object",
+                "properties": {
+                  "start_time": {
+                    "type": "string",
+                    "format": "time"
+                  },
+                  "end_time": {
+                    "type": "string",
+                    "format": "time"
+                  },
+                  "time_zone": {
+                    "type": "string"
+                  },
+                  "max_emails_per_hour": {
+                    "type": "integer"
+                  }
+                }
+              }
+            }
+          },
+          "safety_checks": {
+            "type": "object",
+            "description": "Final pre-dispatch safety checks",
+            "properties": {
+              "max_total_recipients": {
+                "type": "integer"
+              },
+              "require_unsubscribe_link": {
+                "type": "boolean",
+                "default": true
+              },
+              "block_if_recent_rejection": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "required": [
+          "email_submission_id"
+        ]
+      },
+      "returns": "Created dispatch_job_id with scheduling details and final moderation lock information."
+    },
+    {
+      "name": "get_dispatch_status",
+      "description": "Retrieve status and metrics for a dispatch job, including per-phase progress and basic deliverability stats.",
+      "stage": "dispatch_monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dispatch_job_id": {
+            "type": "string"
+          },
+          "include_metrics": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_timeline": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "dispatch_job_id"
+        ]
+      },
+      "returns": "Dispatch job status, progress breakdown, and optional high-level metrics (sent, delivered, bounced, etc.)."
+    },
+    {
+      "name": "cancel_or_pause_dispatch",
+      "description": "Pause or cancel an in-progress or scheduled dispatch job for risk mitigation or emergency rollback.",
+      "stage": "dispatch_control",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dispatch_job_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "resume",
+              "cancel"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "initiated_by": {
+            "type": "object",
+            "properties": {
+              "actor_type": {
+                "type": "string",
+                "enum": [
+                  "human",
+                  "system"
+                ]
+              },
+              "actor_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "actor_type",
+              "actor_id"
+            ]
+          },
+          "scope": {
+            "type": "object",
+            "description": "Optional scope for partial cancel (e.g., specific segments or domains)",
+            "properties": {
+              "recipient_filter": {
+                "type": "object",
+                "properties": {
+                  "email_domains": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "segments": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "effective_from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "When the pause/cancel should take effect"
+              }
+            }
+          }
+        },
+        "required": [
+          "dispatch_job_id",
+          "action",
+          "initiated_by"
+        ]
+      },
+      "returns": "Updated dispatch job state, including which portion (if any) was affected and an audit record reference."
+    },
+    {
+      "name": "retry_failed_dispatch_portion",
+      "description": "Retry a subset of recipients that previously failed or bounced in a dispatch job, with optional template or sender adjustments.",
+      "stage": "dispatch_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dispatch_job_id": {
+            "type": "string"
+          },
+          "retry_scope": {
+            "type": "object",
+            "description": "Criteria for selecting which failed recipients to retry",
+            "properties": {
+              "failure_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "soft_bounce",
+                    "transient_error",
+                    "rate_limited",
+                    "provider_issue"
+                  ]
+                }
+              },
+              "max_attempts_per_recipient": {
+                "type": "integer",
+                "default": 3
+              },
+              "time_window": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              }
+            },
+            "required": [
+              "failure_types"
+            ]
+          },
+          "adjustments": {
+            "type": "object",
+            "description": "Optional adjustments to apply for the retry",
+            "properties": {
+              "sender_profile_id": {
+                "type": "string",
+                "description": "Override sender profile for the retry"
+              },
+              "throttle": {
+                "type": "object",
+                "properties": {
+                  "max_emails_per_minute": {
+                    "type": "integer"
+                  },
+                  "backoff_strategy": {
+                    "type": "string",
+                    "enum": [
+                      "none",
+                      "linear",
+                      "exponential"
+                    ]
+                  }
+                }
+              },
+              "content_note": {
+                "type": "string",
+                "description": "Short note appended to the email body indicating a retry or correction, if desired"
+              }
+            }
+          },
+          "create_new_dispatch_job": {
+            "type": "boolean",
+            "description": "If true, create a new dispatch_job_id for the retry instead of reusing the existing one",
+            "default": true
+          }
+        },
+        "required": [
+          "dispatch_job_id",
+          "retry_scope"
+        ]
+      },
+      "returns": "New or updated dispatch_job_id representing the retry attempt and a summary of selected recipients."
+    },
+    {
+      "name": "get_moderation_and_dispatch_timeline",
+      "description": "Retrieve a full audit timeline for an email submission, including moderation events and dispatch lifecycle.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "email_submission_id": {
+            "type": "string"
+          },
+          "include_details": {
+            "type": "boolean",
+            "default": false
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "event_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "submission_created",
+                    "auto_moderation_run",
+                    "moderation_requested",
+                    "moderation_decided",
+                    "content_changed",
+                    "dispatch_scheduled",
+                    "dispatch_started",
+                    "dispatch_paused",
+                    "dispatch_cancelled",
+                    "dispatch_completed",
+                    "retry_started"
+                  ]
+                }
+              },
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        },
+        "required": [
+          "email_submission_id"
+        ]
+      },
+      "returns": "Chronological list of events related to moderation and dispatch for the given email_submission_id, optionally with detailed payloads."
+    },
+    {
+      "name": "rollback_submission_to_previous_version",
+      "description": "Rollback an email submission to a previous version of its content and settings, typically used after problematic moderation or dispatch outcomes.",
+      "stage": "rollback",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "email_submission_id": {
+            "type": "string"
+          },
+          "target_version": {
+            "type": "integer",
+            "description": "Target version number to rollback to"
+          },
+          "rollback_reason": {
+            "type": "string"
+          },
+          "preserve_moderation_history": {
+            "type": "boolean",
+            "description": "If true, keep previous moderation artifacts but mark them as superseded",
+            "default": true
+          },
+          "options": {
+            "type": "object",
+            "properties": {
+              "lock_after_rollback": {
+                "type": "boolean",
+                "description": "If true, prevent further edits until re-moderated",
+                "default": true
+              },
+              "create_new_moderation_request": {
+                "type": "boolean",
+                "description": "If true, automatically queue the rolled-back version for moderation",
+                "default": false
+              }
+            }
+          }
+        },
+        "required": [
+          "email_submission_id",
+          "target_version"
+        ]
+      },
+      "returns": "Updated email submission state pointing to the rolled-back version and information on any new moderation request created."
+    },
+    {
+      "name": "get_email_submission_overview",
+      "description": "Utility function to get a consolidated overview of an email submission, including current content, moderation state, and dispatch links.",
+      "stage": "overview",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "email_submission_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "content",
+                "recipients_preview",
+                "latest_moderation",
+                "all_moderation_decisions",
+                "dispatch_jobs"
+              ]
+            }
+          },
+          "recipients_preview_limit": {
+            "type": "integer",
+            "description": "Maximum number of recipients to return in preview when include contains 'recipients_preview'",
+            "default": 20
+          }
+        },
+        "required": [
+          "email_submission_id"
+        ]
+      },
+      "returns": "High-level overview object containing current submission data, moderation and dispatch linkage, based on the requested includes."
+    },
+    {
+      "name": "search_email_review_entities",
+      "description": "Faceted search across email_review entities supporting tag filters, time windows, full-text, status, and pagination.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "properties": {
+              "free_text": {
+                "type": "string"
+              },
+              "facets": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "values": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "operator": {
+                      "type": "string",
+                      "enum": [
+                        "any",
+                        "all",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "values"
+                  ]
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "updated_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "projection": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Optional list of fields to project in the response."
+          },
+          "include_facet_counts": {
+            "type": "boolean",
+            "default": false
+          },
+          "highlight": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "fields": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fragment_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching email_review entities, optional facet counts, and pagination cursors."
+    },
+    {
+      "name": "bulk_create_email_review_records",
+      "description": "Bulk-create up to N email_review records in a single atomic-or-best-effort batch with per-item validation results.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_ref": {
+                  "type": "string"
+                },
+                "payload": {
+                  "type": "object"
+                },
+                "tags": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "idempotency_key": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "payload"
+              ]
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "atomic",
+              "best_effort",
+              "fail_fast"
+            ],
+            "default": "best_effort"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "validate_only": {
+            "type": "boolean",
+            "default": false
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "correlation_id": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "records"
+        ]
+      },
+      "returns": "Per-record outcome with assigned ids or validation errors, plus an overall batch summary."
+    },
+    {
+      "name": "bulk_update_email_review_records",
+      "description": "Apply a partial update patch to many email_review records, optionally with optimistic concurrency checks.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "updates": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "properties": {
+                "target_id": {
+                  "type": "string"
+                },
+                "patch": {
+                  "type": "object"
+                },
+                "expected_version": {
+                  "type": "integer"
+                },
+                "tag_changes": {
+                  "type": "object",
+                  "properties": {
+                    "add": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    },
+                    "remove": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  }
+                }
+              },
+              "required": [
+                "target_id",
+                "patch"
+              ]
+            }
+          },
+          "concurrency_mode": {
+            "type": "string",
+            "enum": [
+              "optimistic",
+              "last_writer_wins"
+            ],
+            "default": "optimistic"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "stop_on_error": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "updates"
+        ]
+      },
+      "returns": "Per-update result with new version ids and a count of successes/failures."
+    },
+    {
+      "name": "bulk_delete_email_review_records",
+      "description": "Delete or soft-delete many email_review records in one call, with cascade and dry-run options.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "soft",
+              "hard"
+            ],
+            "default": "soft"
+          },
+          "cascade": {
+            "type": "object",
+            "properties": {
+              "related_entities": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "block",
+                  "detach",
+                  "cascade"
+                ],
+                "default": "block"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Per-id deletion outcome and references to any cascaded entities."
+    },
+    {
+      "name": "export_email_review_dataset",
+      "description": "Schedule or stream an export of email_review data to CSV/JSONL/Parquet, with field selection and filters.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "format": {
+            "type": "string",
+            "enum": [
+              "csv",
+              "jsonl",
+              "parquet",
+              "xlsx"
+            ],
+            "default": "csv"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "download",
+                  "s3",
+                  "gcs",
+                  "azure_blob",
+                  "sftp"
+                ]
+              },
+              "uri": {
+                "type": "string"
+              },
+              "credentials_ref": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "compression": {
+            "type": "string",
+            "enum": [
+              "none",
+              "gzip",
+              "zstd"
+            ],
+            "default": "none"
+          },
+          "include_pii": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "destination"
+        ]
+      },
+      "returns": "Export job id, estimated row count, and status tracking endpoint."
+    },
+    {
+      "name": "import_email_review_dataset",
+      "description": "Validate and import a email_review dataset from a remote URI; supports dry-run and conflict handling.",
+      "stage": "bulk",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "properties": {
+              "uri": {
+                "type": "string"
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "jsonl",
+                  "parquet",
+                  "xlsx"
+                ]
+              },
+              "credentials_ref": {
+                "type": "string"
+              },
+              "header_row": {
+                "type": "boolean",
+                "default": true
+              },
+              "delimiter": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "uri",
+              "format"
+            ]
+          },
+          "mapping": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "description": "Source column to target field mapping."
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "on_conflict": {
+            "type": "string",
+            "enum": [
+              "error",
+              "skip",
+              "upsert"
+            ],
+            "default": "error"
+          },
+          "max_errors": {
+            "type": "integer",
+            "default": 100
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "source"
+        ]
+      },
+      "returns": "Import job id, row counts (succeeded/failed/skipped), and a sample of validation errors."
+    },
+    {
+      "name": "snapshot_email_review_state",
+      "description": "Create a point-in-time snapshot of one or more email_review entities for later restore or comparison.",
+      "stage": "snapshot",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scope": {
+            "type": "string",
+            "enum": [
+              "entity",
+              "tenant",
+              "workflow"
+            ],
+            "default": "entity"
+          },
+          "label": {
+            "type": "string"
+          },
+          "retention_days": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "include_children": {
+            "type": "boolean",
+            "default": true
+          },
+          "encryption": {
+            "type": "object",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": true
+              },
+              "kms_key_id": {
+                "type": "string"
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids"
+        ]
+      },
+      "returns": "Snapshot id, size estimate, and retention expiry timestamp."
+    },
+    {
+      "name": "restore_email_review_snapshot",
+      "description": "Restore email_review state from a prior snapshot with dry-run preview and conflict resolution.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "snapshot_id": {
+            "type": "string"
+          },
+          "target_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "overwrite",
+              "merge",
+              "side_by_side"
+            ],
+            "default": "merge"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": true
+          },
+          "conflict_strategy": {
+            "type": "string",
+            "enum": [
+              "keep_current",
+              "keep_snapshot",
+              "prompt"
+            ],
+            "default": "keep_current"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "snapshot_id"
+        ]
+      },
+      "returns": "Restore plan or actual restore result with per-entity status."
+    },
+    {
+      "name": "get_email_review_metrics",
+      "description": "Query aggregated metrics/KPIs for the email_review workflow with grouping, filters, and time ranges.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "metrics": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "group_by": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "status_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "bucket": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "minute",
+                  "hour",
+                  "day",
+                  "week",
+                  "month"
+                ]
+              },
+              "size": {
+                "type": "integer",
+                "minimum": 1,
+                "default": 1
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "limit_series": {
+            "type": "integer",
+            "default": 50
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "metrics",
+          "time_range"
+        ]
+      },
+      "returns": "Time-series points per metric and group, with totals and percentiles."
+    },
+    {
+      "name": "build_email_review_dashboard",
+      "description": "Compose a dashboard view across email_review metrics, with panels, filters, and a shareable link.",
+      "stage": "report",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "panels": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "timeseries",
+                    "table",
+                    "single_stat",
+                    "heatmap",
+                    "histogram"
+                  ]
+                },
+                "metric_id": {
+                  "type": "string"
+                },
+                "filters": {
+                  "type": "object"
+                },
+                "options": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "default_time_range": {
+            "$ref": "#/shared_entities/time_range"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "private",
+              "team",
+              "tenant",
+              "public"
+            ],
+            "default": "team"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "title",
+          "panels"
+        ]
+      },
+      "returns": "Dashboard id, share URL, and resolved layout metadata."
+    },
+    {
+      "name": "query_email_review_audit_events",
+      "description": "Search the email_review audit/change log with filters across actors, actions, resources, and time windows.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "actor_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "action_types": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "occurred_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "severity_in": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "info",
+                    "warn",
+                    "error",
+                    "critical"
+                  ]
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "include_diff": {
+            "type": "boolean",
+            "default": false
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "filters"
+        ]
+      },
+      "returns": "Paginated audit events with optional before/after diffs."
+    },
+    {
+      "name": "subscribe_email_review_events",
+      "description": "Create a webhook subscription that delivers email_review workflow events to a target URL with retries and signing.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription": {
+            "$ref": "#/shared_entities/webhook_subscription"
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "resource_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "min_severity": {
+                "type": "string",
+                "enum": [
+                  "info",
+                  "warn",
+                  "error",
+                  "critical"
+                ]
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 5
+              },
+              "retry_backoff": {
+                "type": "string",
+                "enum": [
+                  "linear",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 30
+              }
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription"
+        ]
+      },
+      "returns": "Subscription id, verification challenge if applicable, and active flag."
+    },
+    {
+      "name": "list_email_review_subscriptions",
+      "description": "List webhook subscriptions for email_review events with filters and status counts.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "event_type_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of subscriptions with last delivery status."
+    },
+    {
+      "name": "delete_email_review_subscription",
+      "description": "Remove a webhook subscription for email_review events.",
+      "stage": "subscribe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscription_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subscription_id"
+        ]
+      },
+      "returns": "Confirmation with final delivery counters."
+    },
+    {
+      "name": "schedule_email_review_job",
+      "description": "Schedule a recurring or one-off email_review job (cron/rrule/interval) with arguments and an owner.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "job_kind": {
+            "type": "string"
+          },
+          "arguments": {
+            "type": "object"
+          },
+          "schedule": {
+            "$ref": "#/shared_entities/schedule_spec"
+          },
+          "owner": {
+            "$ref": "#/shared_entities/actor_ref"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "max_concurrent_runs": {
+            "type": "integer",
+            "default": 1
+          },
+          "on_failure": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "retry",
+                  "skip",
+                  "page",
+                  "open_incident"
+                ],
+                "default": "retry"
+              },
+              "max_retries": {
+                "type": "integer",
+                "default": 3
+              }
+            }
+          }
+        },
+        "required": [
+          "job_kind",
+          "schedule"
+        ]
+      },
+      "returns": "Schedule id and next computed run time."
+    },
+    {
+      "name": "list_email_review_schedules",
+      "description": "List scheduled email_review jobs with filters and pagination.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "job_kinds": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owners": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of schedules with last/next run timestamps."
+    },
+    {
+      "name": "cancel_email_review_schedule",
+      "description": "Cancel or pause a scheduled email_review job.",
+      "stage": "schedule",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "schedule_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "pause",
+              "cancel"
+            ],
+            "default": "cancel"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "schedule_id"
+        ]
+      },
+      "returns": "Updated schedule state."
+    },
+    {
+      "name": "simulate_email_review_operation",
+      "description": "Run a what-if simulation of a email_review operation without committing side effects, returning predicted outcomes.",
+      "stage": "simulate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              },
+              "target_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "what_if": {
+            "type": "object",
+            "properties": {
+              "policy_overrides": {
+                "type": "object"
+              },
+              "feature_flags": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "boolean"
+                }
+              },
+              "assume_inputs": {
+                "type": "object"
+              }
+            }
+          },
+          "include_warnings": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "operation"
+        ]
+      },
+      "returns": "Predicted outcomes, side-effect summary, warnings, and policy hits."
+    },
+    {
+      "name": "request_email_review_approval",
+      "description": "Open an approval request for a email_review action, routing to the right approvers and policies.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subject": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "target_id": {
+                "type": "string"
+              },
+              "change_summary": {
+                "type": "string"
+              },
+              "payload": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          "approvers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "actor_id": {
+                  "type": "string"
+                },
+                "role": {
+                  "type": "string"
+                },
+                "required": {
+                  "type": "boolean",
+                  "default": true
+                }
+              },
+              "required": [
+                "actor_id"
+              ]
+            }
+          },
+          "policy_id": {
+            "type": "string"
+          },
+          "due_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "context_attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "subject"
+        ]
+      },
+      "returns": "Approval request id, routed approver list, and SLA timer."
+    },
+    {
+      "name": "decide_email_review_approval",
+      "description": "Record an approve/reject/abstain decision on a email_review approval request with required justification.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_id": {
+            "type": "string"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject",
+              "abstain",
+              "request_changes"
+            ]
+          },
+          "justification": {
+            "type": "string"
+          },
+          "constraints": {
+            "type": "object",
+            "properties": {
+              "valid_until": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "applies_to_versions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "approval_id",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval state and downstream effects (e.g., gate releases)."
+    },
+    {
+      "name": "add_email_review_comment",
+      "description": "Add a threaded comment or annotation to any email_review entity, supporting mentions and attachments.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              },
+              "anchor": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "body": {
+            "type": "string"
+          },
+          "mentions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/shared_entities/attachment_ref"
+            }
+          },
+          "in_reply_to": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal",
+              "private"
+            ],
+            "default": "internal"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target",
+          "body"
+        ]
+      },
+      "returns": "Comment id, thread id, and updated thread state."
+    },
+    {
+      "name": "list_email_review_comments",
+      "description": "List comments/annotations attached to a email_review entity with pagination and filters.",
+      "stage": "collaborate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "object",
+            "properties": {
+              "entity_kind": {
+                "type": "string"
+              },
+              "entity_id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "entity_kind",
+              "entity_id"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "properties": {
+              "author_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "created_in": {
+                "$ref": "#/shared_entities/time_range"
+              },
+              "visibility_in": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "has_attachments": {
+                "type": "boolean"
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target"
+        ]
+      },
+      "returns": "Paginated comment threads with author/timestamp/mentions."
+    },
+    {
+      "name": "upsert_email_review_policy",
+      "description": "Create or update a policy/rule controlling email_review behavior, with conditions, effects, and a priority.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "policy_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "object",
+            "properties": {
+              "tenants": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "conditions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "field": {
+                  "type": "string"
+                },
+                "op": {
+                  "type": "string",
+                  "enum": [
+                    "eq",
+                    "ne",
+                    "in",
+                    "nin",
+                    "gt",
+                    "lt",
+                    "regex"
+                  ]
+                },
+                "value": {}
+              },
+              "required": [
+                "field",
+                "op"
+              ]
+            }
+          },
+          "effects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "allow",
+                    "deny",
+                    "require_approval",
+                    "throttle",
+                    "tag"
+                  ]
+                },
+                "params": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "priority": {
+            "type": "integer",
+            "default": 100
+          },
+          "active": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "name",
+          "conditions",
+          "effects"
+        ]
+      },
+      "returns": "Policy id, version, and any conflicts with existing policies."
+    },
+    {
+      "name": "list_email_review_policies",
+      "description": "List email_review policies/rules with filters and active flags.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "active": {
+                "type": "boolean"
+              },
+              "tags": {
+                "$ref": "#/shared_entities/tag_filter"
+              },
+              "applies_to": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "pagination": {
+            "$ref": "#/shared_entities/pagination"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        }
+      },
+      "returns": "Paginated list of policies with priority and last-modified info."
+    },
+    {
+      "name": "link_email_review_entities",
+      "description": "Create a typed relationship between two email_review-related entities (parent/child, depends_on, references).",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "to": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "relationship": {
+            "type": "string",
+            "enum": [
+              "depends_on",
+              "parent_of",
+              "references",
+              "blocks",
+              "duplicates"
+            ]
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "from",
+          "to",
+          "relationship"
+        ]
+      },
+      "returns": "Link id and a graph delta showing newly-created relationships."
+    },
+    {
+      "name": "get_email_review_dependency_graph",
+      "description": "Return the dependency/relationship graph rooted at a email_review entity, up to N hops, with cycle detection.",
+      "stage": "dependency",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "root": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "id"
+            ]
+          },
+          "max_depth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10,
+            "default": 3
+          },
+          "edge_kinds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "downstream",
+              "upstream",
+              "both"
+            ],
+            "default": "both"
+          },
+          "detect_cycles": {
+            "type": "boolean",
+            "default": true
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "root"
+        ]
+      },
+      "returns": "Nodes/edges of the dependency graph and any cycles detected."
+    },
+    {
+      "name": "tag_email_review_entities",
+      "description": "Add, remove, or replace tags on one or many email_review entities.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_ids": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string"
+            }
+          },
+          "entity_kind": {
+            "type": "string"
+          },
+          "add": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remove": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "replace": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "actor": {
+            "$ref": "#/shared_entities/actor_ref"
+          }
+        },
+        "required": [
+          "target_ids",
+          "entity_kind"
+        ]
+      },
+      "returns": "Updated tag set per entity and count of changes applied."
+    }
+  ]
+}
