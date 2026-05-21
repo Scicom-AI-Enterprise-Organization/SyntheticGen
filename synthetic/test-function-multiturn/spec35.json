@@ -1,0 +1,1358 @@
+{
+  "workflow_name": "lawful_intercept_request_lifecycle",
+  "description": "End-to-end lifecycle for telecom lawful intercept requests, including intake, validation, provisioning, monitoring, evidence handling, and closure with regulatory compliance controls.",
+  "domain": "telco_regulatory/lawful_intercept",
+  "shared_entities": {
+    "intercept_request_id": {
+      "type": "string",
+      "description": "Unique identifier for a lawful intercept request"
+    },
+    "warrant_id": {
+      "type": "string",
+      "description": "Identifier of the legal authorization (warrant, court order, etc.)"
+    },
+    "subscriber_id": {
+      "type": "string",
+      "description": "Internal subscriber identifier (e.g., IMSI, account ID, or mapped surrogate key)"
+    },
+    "case_id": {
+      "type": "string",
+      "description": "External case identifier from the requesting authority"
+    },
+    "intercept_session_id": {
+      "type": "string",
+      "description": "Identifier for a specific technical intercept session (e.g., per target or per interface)"
+    },
+    "evidence_package_id": {
+      "type": "string",
+      "description": "Identifier for a stored evidence package"
+    },
+    "error_reference_id": {
+      "type": "string",
+      "description": "Identifier that ties to an error log entry for audit and troubleshooting"
+    },
+    "agency_contact": {
+      "type": "object",
+      "description": "Contact details for the requesting agency",
+      "properties": {
+        "agency_name": {
+          "type": "string"
+        },
+        "department": {
+          "type": "string"
+        },
+        "jurisdiction": {
+          "type": "string",
+          "description": "Country/region or legal jurisdiction"
+        },
+        "primary_contact": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "role": {
+              "type": "string"
+            },
+            "email": {
+              "type": "string",
+              "format": "email"
+            },
+            "phone": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "email"
+          ]
+        },
+        "secondary_contacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string",
+                "format": "email"
+              },
+              "phone": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "agency_name",
+        "jurisdiction",
+        "primary_contact"
+      ]
+    },
+    "subscriber_selector": {
+      "type": "object",
+      "description": "Polymorphic selector to identify the target subscriber(s)",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "msisdn",
+            "imsi",
+            "account_id",
+            "imei",
+            "ip_address",
+            "multi"
+          ]
+        },
+        "value": {
+          "type": "string",
+          "description": "Single selector value if type != multi"
+        },
+        "multi_criteria": {
+          "type": "array",
+          "description": "Multiple selector criteria when type = multi",
+          "items": {
+            "type": "object",
+            "properties": {
+              "field": {
+                "type": "string",
+                "enum": [
+                  "msisdn",
+                  "imsi",
+                  "account_id",
+                  "imei",
+                  "ip_address"
+                ]
+              },
+              "value": {
+                "type": "string"
+              },
+              "match_type": {
+                "type": "string",
+                "enum": [
+                  "exact",
+                  "prefix",
+                  "suffix",
+                  "contains",
+                  "range"
+                ]
+              },
+              "range": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "to": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": [
+              "field",
+              "value"
+            ]
+          }
+        }
+      },
+      "required": [
+        "type"
+      ]
+    },
+    "intercept_scope": {
+      "type": "object",
+      "description": "Scope of the lawful intercept, including services and time window",
+      "properties": {
+        "services": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "voice_cs",
+              "voice_ps",
+              "sms",
+              "mms",
+              "data_ip",
+              "voip",
+              "ims",
+              "location",
+              "metadata_only"
+            ]
+          }
+        },
+        "start_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Requested start time in ISO 8601"
+        },
+        "end_time": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Requested end time in ISO 8601"
+        },
+        "retention_policy": {
+          "type": "object",
+          "properties": {
+            "storage_region": {
+              "type": "string"
+            },
+            "retention_days": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3650
+            },
+            "access_restrictions": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "enum": [
+                  "internal_compliance_only",
+                  "named_investigators_only",
+                  "time_limited_access",
+                  "agency_portal_only"
+                ]
+              }
+            }
+          }
+        },
+        "location_granularity": {
+          "type": "string",
+          "enum": [
+            "cell_id",
+            "sector",
+            "coarse",
+            "fine"
+          ]
+        },
+        "data_filters": {
+          "type": "object",
+          "description": "Optional filters to limit captured data",
+          "properties": {
+            "ip_ranges": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "port_ranges": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "integer"
+                  },
+                  "to": {
+                    "type": "integer"
+                  }
+                }
+              }
+            },
+            "domains": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "exclude_services": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "required": [
+        "services",
+        "start_time",
+        "end_time"
+      ]
+    },
+    "compliance_metadata": {
+      "type": "object",
+      "description": "Compliance and audit attributes attached to actions",
+      "properties": {
+        "operator_id": {
+          "type": "string",
+          "description": "Identifier of the operator user or system performing the action"
+        },
+        "role": {
+          "type": "string"
+        },
+        "performed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source_system": {
+          "type": "string"
+        },
+        "justification": {
+          "type": "string",
+          "description": "Free-text justification or reference to internal ticket"
+        }
+      },
+      "required": [
+        "operator_id",
+        "role",
+        "performed_at"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "intake_intercept_request",
+      "description": "Intake a new lawful intercept request from a law enforcement or regulatory agency, including warrant details, target selectors, and requested scope.",
+      "stage": "intake",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "warrant_id": {
+            "type": "string",
+            "description": "Legal instrument identifier as provided by the authority"
+          },
+          "case_id": {
+            "type": "string",
+            "description": "External case reference from the requesting authority"
+          },
+          "agency_contact": {
+            "$ref": "#/shared_entities/agency_contact"
+          },
+          "legal_basis": {
+            "type": "object",
+            "description": "Legal basis and classification of the request",
+            "properties": {
+              "instrument_type": {
+                "type": "string",
+                "enum": [
+                  "court_order",
+                  "warrant",
+                  "emergency_order",
+                  "administrative_order",
+                  "other"
+                ]
+              },
+              "jurisdiction": {
+                "type": "string"
+              },
+              "confidentiality_level": {
+                "type": "string",
+                "enum": [
+                  "restricted",
+                  "confidential",
+                  "secret",
+                  "top_secret"
+                ]
+              },
+              "received_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "expires_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "attachments": {
+                "type": "array",
+                "description": "Supporting legal documents",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "filename": {
+                      "type": "string"
+                    },
+                    "content_type": {
+                      "type": "string"
+                    },
+                    "hash": {
+                      "type": "string",
+                      "description": "Integrity hash (e.g., SHA-256)"
+                    },
+                    "storage_url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "filename",
+                    "hash"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "instrument_type",
+              "jurisdiction",
+              "received_at"
+            ]
+          },
+          "targets": {
+            "type": "array",
+            "description": "List of target selectors to be intercepted",
+            "items": {
+              "type": "object",
+              "properties": {
+                "subscriber_selector": {
+                  "$ref": "#/shared_entities/subscriber_selector"
+                },
+                "expected_subscriber_id": {
+                  "type": "string",
+                  "description": "If already known, the internal subscriber_id mapping"
+                },
+                "priority": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "normal",
+                    "high",
+                    "emergency"
+                  ]
+                }
+              },
+              "required": [
+                "subscriber_selector"
+              ]
+            }
+          },
+          "intercept_scope": {
+            "$ref": "#/shared_entities/intercept_scope"
+          },
+          "delivery_channel": {
+            "type": "object",
+            "description": "Where and how intercept product will be delivered",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "live_stream",
+                  "batch_export",
+                  "portal_access"
+                ]
+              },
+              "endpoints": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "endpoint_type": {
+                      "type": "string",
+                      "enum": [
+                        "ip",
+                        "sftp",
+                        "https",
+                        "agency_gateway"
+                      ]
+                    },
+                    "address": {
+                      "type": "string"
+                    },
+                    "port": {
+                      "type": "integer"
+                    },
+                    "encryption_profile": {
+                      "type": "string",
+                      "description": "Name or ID of the agreed cryptographic profile"
+                    }
+                  },
+                  "required": [
+                    "endpoint_type",
+                    "address"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "internal_routing": {
+            "type": "object",
+            "description": "Internal routing and classification metadata",
+            "properties": {
+              "business_unit": {
+                "type": "string"
+              },
+              "sensitivity_tag": {
+                "type": "string",
+                "enum": [
+                  "standard",
+                  "high_profile",
+                  "vip",
+                  "internal_staff"
+                ]
+              },
+              "assigned_team": {
+                "type": "string"
+              }
+            }
+          },
+          "compliance_metadata": {
+            "$ref": "#/shared_entities/compliance_metadata"
+          }
+        },
+        "required": [
+          "warrant_id",
+          "agency_contact",
+          "legal_basis",
+          "targets",
+          "intercept_scope",
+          "delivery_channel",
+          "compliance_metadata"
+        ]
+      },
+      "returns": "Created intercept request ID with initial status and routing information."
+    },
+    {
+      "name": "validate_legal_basis",
+      "description": "Validate the legal basis, jurisdiction, and temporal validity of a lawful intercept request prior to technical provisioning.",
+      "stage": "precheck",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "type": "string"
+          },
+          "warrant_id": {
+            "type": "string"
+          },
+          "case_id": {
+            "type": "string"
+          },
+          "cross_checks": {
+            "type": "object",
+            "description": "Controls for validation of the legal instrument and its constraints",
+            "properties": {
+              "validate_expiry": {
+                "type": "boolean",
+                "default": true
+              },
+              "validate_jurisdiction": {
+                "type": "boolean",
+                "default": true
+              },
+              "validate_scope_limits": {
+                "type": "boolean",
+                "default": true
+              },
+              "max_duration_days_allowed": {
+                "type": "integer",
+                "description": "Internal maximum allowed duration for an intercept",
+                "minimum": 1,
+                "maximum": 3650
+              }
+            }
+          },
+          "compliance_metadata": {
+            "$ref": "#/shared_entities/compliance_metadata"
+          }
+        },
+        "required": [
+          "intercept_request_id",
+          "warrant_id",
+          "cross_checks",
+          "compliance_metadata"
+        ]
+      },
+      "returns": "Validation result including pass/fail, warnings, and normalized legal constraints."
+    },
+    {
+      "name": "map_subscriber_targets",
+      "description": "Resolve target selectors (MSISDN, IMSI, etc.) to internal subscriber IDs and services, identifying ambiguous or missing mappings.",
+      "stage": "precheck",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "type": "string"
+          },
+          "targets": {
+            "type": "array",
+            "description": "Optional override of targets; when omitted, use stored request targets.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "subscriber_selector": {
+                  "$ref": "#/shared_entities/subscriber_selector"
+                },
+                "hint_subscriber_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "subscriber_selector"
+              ]
+            }
+          },
+          "resolution_options": {
+            "type": "object",
+            "properties": {
+              "allow_partial_resolution": {
+                "type": "boolean",
+                "default": false
+              },
+              "max_candidates_per_target": {
+                "type": "integer",
+                "default": 5
+              },
+              "include_service_profiles": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "compliance_metadata": {
+            "$ref": "#/shared_entities/compliance_metadata"
+          }
+        },
+        "required": [
+          "intercept_request_id",
+          "compliance_metadata"
+        ]
+      },
+      "returns": "Mapping results for each target including resolved subscriber_ids, service profiles, and ambiguity flags."
+    },
+    {
+      "name": "provision_intercept",
+      "description": "Provision technical intercept on network elements and mediation devices for the validated request and mapped subscribers.",
+      "stage": "provision",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "type": "string"
+          },
+          "subscribers": {
+            "type": "array",
+            "description": "List of subscriber_ids to provision; if omitted, use all successfully mapped targets.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "subscriber_id": {
+                  "type": "string"
+                },
+                "services": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "voice_cs",
+                      "voice_ps",
+                      "sms",
+                      "mms",
+                      "data_ip",
+                      "voip",
+                      "ims",
+                      "location",
+                      "metadata_only"
+                    ]
+                  }
+                },
+                "network_domains": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "2g",
+                      "3g",
+                      "4g",
+                      "5g",
+                      "fixed_broadband",
+                      "wifi"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "subscriber_id"
+              ]
+            }
+          },
+          "activation_mode": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "scheduled"
+            ],
+            "default": "immediate"
+          },
+          "activation_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When activation_mode is scheduled, the desired activation time."
+          },
+          "technical_profile": {
+            "type": "object",
+            "description": "Technical configuration template to be applied during provisioning",
+            "properties": {
+              "li_standard": {
+                "type": "string",
+                "enum": [
+                  "etsi",
+                  "caii",
+                  "custom"
+                ]
+              },
+              "mediation_profile": {
+                "type": "string"
+              },
+              "duplicate_delivery": {
+                "type": "boolean",
+                "description": "Send copies to an internal compliance archive"
+              },
+              "encryption_profile": {
+                "type": "string"
+              }
+            }
+          },
+          "compliance_metadata": {
+            "$ref": "#/shared_entities/compliance_metadata"
+          }
+        },
+        "required": [
+          "intercept_request_id",
+          "activation_mode",
+          "compliance_metadata"
+        ]
+      },
+      "returns": "Provisioning summary including created intercept_session_ids per subscriber and service, along with any partial failures."
+    },
+    {
+      "name": "get_intercept_request",
+      "description": "Retrieve the complete details and current status of a lawful intercept request.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional related information to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "legal_basis",
+                "targets",
+                "mapping_results",
+                "provisioning_status",
+                "sessions",
+                "audit_log",
+                "delivery_endpoints"
+              ]
+            }
+          }
+        },
+        "required": [
+          "intercept_request_id"
+        ]
+      },
+      "returns": "Full intercept request details, including legal, technical, and audit information based on requested includes."
+    },
+    {
+      "name": "list_intercept_requests",
+      "description": "List lawful intercept requests with filtering, sorting, and pagination for compliance and operational oversight.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "draft",
+                    "pending_legal_validation",
+                    "pending_provisioning",
+                    "active",
+                    "suspended",
+                    "expired",
+                    "terminated",
+                    "rejected",
+                    "failed"
+                  ]
+                }
+              },
+              "agency_name": {
+                "type": "string"
+              },
+              "jurisdiction": {
+                "type": "string"
+              },
+              "warrant_id": {
+                "type": "string"
+              },
+              "case_id": {
+                "type": "string"
+              },
+              "subscriber_id": {
+                "type": "string"
+              },
+              "created_from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "expires_before": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "high_risk_only": {
+                "type": "boolean"
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "expires_at",
+              "status",
+              "agency_name"
+            ],
+            "default": "created_at"
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50
+          }
+        },
+        "required": []
+      },
+      "returns": "Paginated list of intercept requests with summary fields and basic status."
+    },
+    {
+      "name": "update_intercept_scope",
+      "description": "Modify the scope, duration, or delivery details of an existing lawful intercept request based on updated legal authorization.",
+      "stage": "update",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "type": "string"
+          },
+          "warrant_id": {
+            "type": "string",
+            "description": "New or amended warrant ID if applicable"
+          },
+          "updated_scope": {
+            "type": "object",
+            "properties": {
+              "intercept_scope": {
+                "$ref": "#/shared_entities/intercept_scope"
+              },
+              "delivery_channel": {
+                "type": "object",
+                "properties": {
+                  "mode": {
+                    "type": "string",
+                    "enum": [
+                      "live_stream",
+                      "batch_export",
+                      "portal_access"
+                    ]
+                  },
+                  "endpoints": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "endpoint_type": {
+                          "type": "string",
+                          "enum": [
+                            "ip",
+                            "sftp",
+                            "https",
+                            "agency_gateway"
+                          ]
+                        },
+                        "address": {
+                          "type": "string"
+                        },
+                        "port": {
+                          "type": "integer"
+                        },
+                        "encryption_profile": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "endpoint_type",
+                        "address"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for scope modification and reference to amended legal instrument"
+          },
+          "revalidate_legal_basis": {
+            "type": "boolean",
+            "default": true
+          },
+          "compliance_metadata": {
+            "$ref": "#/shared_entities/compliance_metadata"
+          }
+        },
+        "required": [
+          "intercept_request_id",
+          "updated_scope",
+          "reason",
+          "compliance_metadata"
+        ]
+      },
+      "returns": "Updated intercept request with new scope, along with any required technical re-provisioning plan."
+    },
+    {
+      "name": "suspend_or_resume_intercept",
+      "description": "Temporarily suspend or resume an active intercept request or specific sessions, keeping full audit trail.",
+      "stage": "control",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "suspend",
+              "resume"
+            ]
+          },
+          "scope": {
+            "type": "object",
+            "description": "Whether the action applies to the entire request or specific sessions",
+            "properties": {
+              "level": {
+                "type": "string",
+                "enum": [
+                  "request",
+                  "session"
+                ],
+                "default": "request"
+              },
+              "intercept_session_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Required when level=session"
+              }
+            }
+          },
+          "reason": {
+            "type": "string"
+          },
+          "effective_time": {
+            "type": "string",
+            "format": "date-time",
+            "description": "When to perform the action; defaults to immediate."
+          },
+          "compliance_metadata": {
+            "$ref": "#/shared_entities/compliance_metadata"
+          }
+        },
+        "required": [
+          "intercept_request_id",
+          "action",
+          "reason",
+          "compliance_metadata"
+        ]
+      },
+      "returns": "Confirmation of suspension or resumption with updated status per session and any pending network changes."
+    },
+    {
+      "name": "terminate_intercept",
+      "description": "Permanently terminate an intercept request and deprovision all associated technical sessions in accordance with legal expiry or manual instruction.",
+      "stage": "terminate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "type": "string"
+          },
+          "termination_type": {
+            "type": "string",
+            "enum": [
+              "on_expiry",
+              "early_by_agency",
+              "early_by_operator",
+              "revoked_legal_basis"
+            ]
+          },
+          "legal_reference": {
+            "type": "object",
+            "properties": {
+              "warrant_id": {
+                "type": "string"
+              },
+              "revocation_document_id": {
+                "type": "string"
+              }
+            }
+          },
+          "data_retention_action": {
+            "type": "string",
+            "enum": [
+              "retain_until_policy_expiry",
+              "immediate_purge",
+              "archive_for_internal_audit"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Force termination even if some network elements cannot be reached.",
+            "default": false
+          },
+          "compliance_metadata": {
+            "$ref": "#/shared_entities/compliance_metadata"
+          }
+        },
+        "required": [
+          "intercept_request_id",
+          "termination_type",
+          "data_retention_action",
+          "reason",
+          "compliance_metadata"
+        ]
+      },
+      "returns": "Termination result including deprovisioning status across network domains and final retention plan."
+    },
+    {
+      "name": "retry_failed_provisioning",
+      "description": "Retry failed or partially successful provisioning operations for an intercept request and track recovery attempts.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "type": "string"
+          },
+          "error_reference_ids": {
+            "type": "array",
+            "description": "Specific error instances to retry; if omitted, retry all failed operations for the request.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "retry_strategy": {
+            "type": "object",
+            "properties": {
+              "max_attempts": {
+                "type": "integer",
+                "default": 3
+              },
+              "backoff_seconds": {
+                "type": "integer",
+                "default": 60
+              },
+              "target_network_elements": {
+                "type": "array",
+                "description": "Limit retry to specific network elements or domains.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "compliance_metadata": {
+            "$ref": "#/shared_entities/compliance_metadata"
+          }
+        },
+        "required": [
+          "intercept_request_id",
+          "compliance_metadata"
+        ]
+      },
+      "returns": "Updated provisioning status with details of retry attempts and any remaining failures."
+    },
+    {
+      "name": "generate_evidence_package",
+      "description": "Generate and register an evidence package for data captured under a specific intercept request or session, including cryptographic integrity metadata.",
+      "stage": "evidence",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "intercept_request_id": {
+            "type": "string"
+          },
+          "intercept_session_ids": {
+            "type": "array",
+            "description": "Limit to specific sessions; if omitted, generate for all relevant sessions.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "time_window": {
+            "type": "object",
+            "description": "Limit evidence to a specific time window.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          },
+          "content_types": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "call_audio",
+                "sms_content",
+                "ip_packets",
+                "location_records",
+                "metadata_only",
+                "logs"
+              ]
+            }
+          },
+          "packaging_options": {
+            "type": "object",
+            "properties": {
+              "format": {
+                "type": "string",
+                "enum": [
+                  "zip",
+                  "tar_gzip",
+                  "custom_container"
+                ]
+              },
+              "encrypt": {
+                "type": "boolean",
+                "default": true
+              },
+              "encryption_profile": {
+                "type": "string"
+              },
+              "include_chain_of_custody": {
+                "type": "boolean",
+                "default": true
+              },
+              "split_by": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "session",
+                  "day",
+                  "content_type"
+                ],
+                "default": "none"
+              }
+            }
+          },
+          "delivery": {
+            "type": "object",
+            "description": "Delivery preferences for the evidence package.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "make_available_in_portal",
+                  "push_to_agency_endpoint",
+                  "internal_archive_only"
+                ]
+              },
+              "target_endpoint_id": {
+                "type": "string",
+                "description": "If pushing to agency endpoint, the endpoint identifier."
+              }
+            }
+          },
+          "compliance_metadata": {
+            "$ref": "#/shared_entities/compliance_metadata"
+          }
+        },
+        "required": [
+          "intercept_request_id",
+          "content_types",
+          "packaging_options",
+          "compliance_metadata"
+        ]
+      },
+      "returns": "Evidence package ID, storage location, cryptographic hashes, and delivery status."
+    },
+    {
+      "name": "get_evidence_package",
+      "description": "Retrieve metadata and access details for a previously generated evidence package.",
+      "stage": "evidence_read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "evidence_package_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "hashes",
+                "chain_of_custody",
+                "download_links",
+                "delivery_history",
+                "associated_sessions"
+              ]
+            }
+          }
+        },
+        "required": [
+          "evidence_package_id"
+        ]
+      },
+      "returns": "Evidence package metadata, integrity information, and access details as requested."
+    },
+    {
+      "name": "audit_intercept_activity",
+      "description": "Query and export audit logs for activities related to one or more intercept requests, for internal or external oversight.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "intercept_request_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "warrant_id": {
+                "type": "string"
+              },
+              "case_id": {
+                "type": "string"
+              },
+              "operator_ids": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "intake",
+                    "validate_legal_basis",
+                    "map_targets",
+                    "provision",
+                    "update_scope",
+                    "suspend",
+                    "resume",
+                    "terminate",
+                    "retry_provisioning",
+                    "generate_evidence",
+                    "access_evidence",
+                    "export_audit"
+                  ]
+                }
+              },
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "result_status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "success",
+                    "failure",
+                    "partial"
+                  ]
+                }
+              }
+            }
+          },
+          "export_options": {
+            "type": "object",
+            "properties": {
+              "format": {
+                "type": "string",
+                "enum": [
+                  "json",
+                  "csv",
+                  "signed_pdf"
+                ],
+                "default": "json"
+              },
+              "include_raw_details": {
+                "type": "boolean",
+                "default": false
+              },
+              "sign_with_cert_id": {
+                "type": "string",
+                "description": "Certificate ID for digitally signing the export, if applicable."
+              }
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "default": 1000
+              }
+            }
+          },
+          "compliance_metadata": {
+            "$ref": "#/shared_entities/compliance_metadata"
+          }
+        },
+        "required": [
+          "filters",
+          "compliance_metadata"
+        ]
+      },
+      "returns": "Audit entries matching the filters and an optional export artifact with signing details if requested."
+    }
+  ]
+}

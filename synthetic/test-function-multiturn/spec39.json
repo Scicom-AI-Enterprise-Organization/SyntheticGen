@@ -1,0 +1,1520 @@
+{
+  "workflow_name": "udr_ml_policy_pipeline",
+  "description": "End-to-end pipeline for extracting, transforming, validating, deploying, and rolling back ML-driven policy models on 5G UDR (Unified Data Repository) subscriber data.",
+  "domain": "telco_5g_deep/udr_management",
+  "shared_entities": {
+    "udr_dataset_id": {
+      "type": "string",
+      "description": "Identifier for a logical snapshot or view of UDR subscriber data used by the pipeline."
+    },
+    "feature_view_id": {
+      "type": "string",
+      "description": "Identifier for a materialized feature view built from UDR data."
+    },
+    "training_job_id": {
+      "type": "string",
+      "description": "Identifier for a model training job on UDR features."
+    },
+    "model_version_id": {
+      "type": "string",
+      "description": "Identifier for a specific model version produced by a training job."
+    },
+    "deployment_id": {
+      "type": "string",
+      "description": "Identifier for a real-time policy model deployment bound to UDR-based decision flows."
+    },
+    "rollback_plan_id": {
+      "type": "string",
+      "description": "Identifier for a rollback plan created for a deployment or model version."
+    },
+    "udr_selector": {
+      "type": "object",
+      "description": "Selector describing which UDR slices (subscribers, DNNs, S-NSSAIs) to operate on.",
+      "properties": {
+        "subscriber_scope": {
+          "type": "object",
+          "description": "Definition of targeted subscribers.",
+          "properties": {
+            "type": {
+              "type": "string",
+              "enum": [
+                "all",
+                "plmn",
+                "imsi_range",
+                "imsi_list",
+                "segment"
+              ]
+            },
+            "plmn_id": {
+              "type": "string",
+              "description": "PLMN ID (MCC+MNC) when type=plmn."
+            },
+            "imsi_range": {
+              "type": "object",
+              "description": "Inclusive IMSI range when type=imsi_range.",
+              "properties": {
+                "start": {
+                  "type": "string"
+                },
+                "end": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "start",
+                "end"
+              ]
+            },
+            "imsi_list": {
+              "type": "array",
+              "description": "Explicit list of IMSIs when type=imsi_list.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "segment": {
+              "type": "string",
+              "description": "Logical subscriber segment name when type=segment (e.g., enterprise, vip, iot)."
+            }
+          },
+          "required": [
+            "type"
+          ]
+        },
+        "s_nssai_filters": {
+          "type": "array",
+          "description": "Optional list of S-NSSAI (slice) filters to narrow target scope.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "sst": {
+                "type": "integer",
+                "description": "Slice/Service Type."
+              },
+              "sd": {
+                "type": "string",
+                "description": "Slice Differentiator (3-byte hex string)."
+              }
+            },
+            "required": [
+              "sst"
+            ]
+          }
+        },
+        "dnn_list": {
+          "type": "array",
+          "description": "Targeted DNNs (data networks), e.g., 'internet', 'iot', 'private_apn'.",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "subscriber_scope"
+      ]
+    },
+    "policy_feature_spec": {
+      "type": "object",
+      "description": "Specification of which UDR attributes and derived signals are used as features.",
+      "properties": {
+        "raw_attributes": {
+          "type": "array",
+          "description": "Direct UDR attributes to include as features.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": [
+                  "subscription",
+                  "session",
+                  "am_policy",
+                  "sm_policy",
+                  "udm_profile",
+                  "custom_extension"
+                ]
+              },
+              "path": {
+                "type": "string",
+                "description": "JSONPath-like path in UDR schema, e.g., '$.amPolicyData.subscribedDnn[0].dnn'."
+              },
+              "alias": {
+                "type": "string",
+                "description": "Optional feature alias name."
+              },
+              "data_type": {
+                "type": "string",
+                "enum": [
+                  "string",
+                  "integer",
+                  "float",
+                  "boolean",
+                  "categorical",
+                  "timestamp"
+                ]
+              },
+              "nullable": {
+                "type": "boolean",
+                "default": true
+              }
+            },
+            "required": [
+              "source",
+              "path"
+            ]
+          }
+        },
+        "derived_features": {
+          "type": "array",
+          "description": "Features computed from raw attributes or external signals.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "expression": {
+                "type": "string",
+                "description": "Expression in pipeline DSL referencing other features, e.g., 'avg(dl_throughput_last_7d)'."
+              },
+              "output_type": {
+                "type": "string",
+                "enum": [
+                  "integer",
+                  "float",
+                  "boolean",
+                  "categorical"
+                ]
+              },
+              "dependencies": {
+                "type": "array",
+                "description": "Names or aliases of features this derived feature depends on.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "name",
+              "expression",
+              "output_type"
+            ]
+          }
+        },
+        "label_spec": {
+          "type": "object",
+          "description": "Label definition for supervised learning tasks.",
+          "properties": {
+            "task_type": {
+              "type": "string",
+              "enum": [
+                "binary_classification",
+                "multi_class_classification",
+                "regression",
+                "ranking"
+              ]
+            },
+            "label_source": {
+              "type": "string",
+              "enum": [
+                "udr_kpi",
+                "cdr_aggregate",
+                "external_feedback",
+                "simulated"
+              ]
+            },
+            "path_or_key": {
+              "type": "string",
+              "description": "Location of label signal in the chosen source."
+            },
+            "positive_class_value": {
+              "type": "string",
+              "description": "Value treated as positive class for binary classification."
+            }
+          },
+          "required": [
+            "task_type",
+            "label_source"
+          ]
+        }
+      },
+      "required": [
+        "raw_attributes"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "define_udr_dataset",
+      "description": "Create or update a logical UDR dataset definition that selects subscriber scope, time horizon, and privacy constraints for ML processing.",
+      "stage": "ingest",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "udr_dataset_id": {
+            "type": "string",
+            "description": "Provide to update existing dataset; omit to create a new dataset."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable dataset name."
+          },
+          "description": {
+            "type": "string",
+            "description": "Detailed description of how this dataset is intended to be used."
+          },
+          "selector": {
+            "$ref": "#/shared_entities/udr_selector"
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time bounds for historical data included in this dataset.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "rolling",
+                  "fixed"
+                ]
+              },
+              "start_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Required when mode=fixed."
+              },
+              "end_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Required when mode=fixed."
+              },
+              "rolling_window_days": {
+                "type": "integer",
+                "description": "Number of days in rolling window when mode=rolling."
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "privacy_policy": {
+            "type": "object",
+            "description": "Data minimization and anonymization settings.",
+            "properties": {
+              "pseudonymization": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "hash_imsi",
+                  "tokenize_imsi"
+                ],
+                "default": "hash_imsi"
+              },
+              "remove_pii_fields": {
+                "type": "array",
+                "description": "UDR paths for PII fields to drop.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "k_anonymity": {
+                "type": "integer",
+                "description": "Optional k-anonymity requirement for aggregates."
+              },
+              "consent_enforcement": {
+                "type": "object",
+                "description": "Consented usage enforcement configuration.",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "consent_type": {
+                    "type": "string",
+                    "enum": [
+                      "analytics",
+                      "personalization",
+                      "network_optimization"
+                    ]
+                  },
+                  "fallback_behavior": {
+                    "type": "string",
+                    "enum": [
+                      "exclude_subscriber",
+                      "include_aggregated_only"
+                    ],
+                    "default": "exclude_subscriber"
+                  }
+                },
+                "required": [
+                  "enabled"
+                ]
+              }
+            }
+          },
+          "refresh_schedule": {
+            "type": "object",
+            "description": "Automatic refresh schedule for this dataset.",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "cron": {
+                "type": "string",
+                "description": "Cron expression in UTC when enabled."
+              },
+              "max_backfill_days": {
+                "type": "integer",
+                "description": "Limit for historical backfill on refresh."
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          },
+          "tags": {
+            "type": "array",
+            "description": "Arbitrary labels for organizing datasets.",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name",
+          "selector",
+          "time_range"
+        ]
+      },
+      "returns": "Created or updated UDR dataset metadata including udr_dataset_id and current status."
+    },
+    {
+      "name": "preview_udr_sample",
+      "description": "Fetch a small, privacy-safe sample of UDR records from a defined dataset to validate selection and schema assumptions.",
+      "stage": "ingest",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "udr_dataset_id": {
+            "type": "string",
+            "description": "Target dataset to sample from."
+          },
+          "max_subscribers": {
+            "type": "integer",
+            "description": "Maximum number of logical subscribers in sample.",
+            "default": 50
+          },
+          "max_records_per_subscriber": {
+            "type": "integer",
+            "description": "Limit of records per subscriber to include.",
+            "default": 10
+          },
+          "include_sections": {
+            "type": "array",
+            "description": "Which UDR sections to include in sample.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "subscriptionData",
+                "amPolicyData",
+                "smPolicyData",
+                "sessionData",
+                "trafficInfluenceData",
+                "customExtensions"
+              ]
+            }
+          },
+          "masking_config": {
+            "type": "object",
+            "description": "Additional masking to apply only for preview.",
+            "properties": {
+              "mask_imsi": {
+                "type": "boolean",
+                "default": true
+              },
+              "mask_msisdn": {
+                "type": "boolean",
+                "default": true
+              },
+              "truncate_ipv4_octets": {
+                "type": "integer",
+                "enum": [
+                  1,
+                  2,
+                  3,
+                  4
+                ],
+                "description": "How many octets of IPv4 to preserve, remainder masked."
+              }
+            }
+          }
+        },
+        "required": [
+          "udr_dataset_id"
+        ]
+      },
+      "returns": "Sample UDR records, effective masking applied, and basic distribution stats per selected section."
+    },
+    {
+      "name": "build_feature_view",
+      "description": "Materialize a feature view on top of a UDR dataset using the specified policy_feature_spec, including transformations and quality checks.",
+      "stage": "feature_engineering",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "udr_dataset_id": {
+            "type": "string"
+          },
+          "feature_view_id": {
+            "type": "string",
+            "description": "Provide to update/rebuild an existing feature view; omit to create new."
+          },
+          "name": {
+            "type": "string",
+            "description": "Friendly name for this feature view."
+          },
+          "feature_spec": {
+            "$ref": "#/shared_entities/policy_feature_spec"
+          },
+          "storage": {
+            "type": "object",
+            "description": "Storage and materialization preferences.",
+            "properties": {
+              "backend": {
+                "type": "string",
+                "enum": [
+                  "feature_store",
+                  "data_warehouse",
+                  "lakehouse"
+                ]
+              },
+              "format": {
+                "type": "string",
+                "enum": [
+                  "parquet",
+                  "delta",
+                  "orc"
+                ]
+              },
+              "partitioning": {
+                "type": "object",
+                "properties": {
+                  "by": {
+                    "type": "string",
+                    "enum": [
+                      "day",
+                      "week",
+                      "month",
+                      "imsi_hash",
+                      "none"
+                    ]
+                  },
+                  "additional_keys": {
+                    "type": "array",
+                    "description": "Additional categorical columns used for partitioning.",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "online_serving_enabled": {
+                "type": "boolean",
+                "default": false
+              }
+            },
+            "required": [
+              "backend",
+              "format"
+            ]
+          },
+          "quality_rules": {
+            "type": "array",
+            "description": "Optional feature-level quality checks.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "feature_name": {
+                  "type": "string"
+                },
+                "rule_type": {
+                  "type": "string",
+                  "enum": [
+                    "range",
+                    "non_null_ratio",
+                    "categorical_domain",
+                    "custom_expression"
+                  ]
+                },
+                "params": {
+                  "type": "object",
+                  "description": "Rule-specific parameters."
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "warning",
+                    "error"
+                  ],
+                  "default": "error"
+                }
+              },
+              "required": [
+                "feature_name",
+                "rule_type"
+              ]
+            }
+          },
+          "materialization_mode": {
+            "type": "string",
+            "enum": [
+              "full",
+              "incremental"
+            ],
+            "default": "full"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "udr_dataset_id",
+          "name",
+          "feature_spec",
+          "storage"
+        ]
+      },
+      "returns": "Feature view metadata including feature_view_id, schema, quality rule results, and materialization status."
+    },
+    {
+      "name": "validate_feature_view",
+      "description": "Run data drift, schema, and quality validation checks on a feature view prior to model training.",
+      "stage": "validation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "feature_view_id": {
+            "type": "string"
+          },
+          "baseline_reference": {
+            "type": "object",
+            "description": "Reference distribution or schema to compare against.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "previous_run",
+                  "production_snapshot",
+                  "static_profile"
+                ]
+              },
+              "reference_feature_view_id": {
+                "type": "string",
+                "description": "Feature view to use as baseline when type=previous_run or production_snapshot."
+              },
+              "profile_uri": {
+                "type": "string",
+                "description": "URI to a stored profile when type=static_profile."
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "checks": {
+            "type": "array",
+            "description": "Set of checks to execute.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "check_type": {
+                  "type": "string",
+                  "enum": [
+                    "schema_compatibility",
+                    "missing_values",
+                    "drift_ks_test",
+                    "drift_population_stability",
+                    "correlation_change"
+                  ]
+                },
+                "target_features": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "thresholds": {
+                  "type": "object",
+                  "description": "Threshold values keyed by metric name.",
+                  "additionalProperties": {
+                    "type": "number"
+                  }
+                }
+              },
+              "required": [
+                "check_type"
+              ]
+            }
+          },
+          "auto_fix": {
+            "type": "object",
+            "description": "Configure automatic mitigations for certain violations.",
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "strategies": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "drop_feature_on_schema_mismatch",
+                    "impute_missing_with_median",
+                    "cap_outliers",
+                    "block_training_on_severe_drift"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "enabled"
+            ]
+          }
+        },
+        "required": [
+          "feature_view_id"
+        ]
+      },
+      "returns": "Validation report containing per-check results, detected issues, applied auto-fixes, and an overall pass/fail status."
+    },
+    {
+      "name": "start_training_job",
+      "description": "Launch a model training job using a validated feature view for UDR-based policy decisions.",
+      "stage": "training",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "feature_view_id": {
+            "type": "string"
+          },
+          "training_job_id": {
+            "type": "string",
+            "description": "If provided, resumes or retries a previous job with same ID where possible."
+          },
+          "objective": {
+            "type": "object",
+            "description": "Definition of what the model optimizes for.",
+            "properties": {
+              "task_type": {
+                "type": "string",
+                "enum": [
+                  "binary_classification",
+                  "multi_class_classification",
+                  "regression",
+                  "ranking"
+                ]
+              },
+              "primary_metric": {
+                "type": "string",
+                "enum": [
+                  "auc",
+                  "f1",
+                  "logloss",
+                  "mse",
+                  "ndcg",
+                  "custom"
+                ]
+              },
+              "maximize": {
+                "type": "boolean",
+                "default": true
+              },
+              "custom_metric_expression": {
+                "type": "string",
+                "description": "Expression for custom metric if primary_metric=custom."
+              }
+            },
+            "required": [
+              "task_type",
+              "primary_metric"
+            ]
+          },
+          "algorithm": {
+            "type": "object",
+            "description": "Model algorithm and hyperparameters.",
+            "properties": {
+              "family": {
+                "type": "string",
+                "enum": [
+                  "xgboost",
+                  "random_forest",
+                  "logistic_regression",
+                  "deep_neural_network",
+                  "gradient_boosted_trees"
+                ]
+              },
+              "hyperparameters": {
+                "type": "object",
+                "description": "Arbitrary hyperparameters, nested allowed.",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "array",
+                    "object"
+                  ]
+                }
+              },
+              "search_strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "grid",
+                  "random",
+                  "bayesian"
+                ],
+                "default": "none"
+              },
+              "search_space": {
+                "type": "object",
+                "description": "Hyperparameter search space definition when search_strategy != none.",
+                "additionalProperties": {
+                  "type": "object"
+                }
+              }
+            },
+            "required": [
+              "family"
+            ]
+          },
+          "data_splitting": {
+            "type": "object",
+            "description": "Train/validation/test split configuration.",
+            "properties": {
+              "method": {
+                "type": "string",
+                "enum": [
+                  "random",
+                  "time_based",
+                  "stratified"
+                ]
+              },
+              "train_ratio": {
+                "type": "number"
+              },
+              "validation_ratio": {
+                "type": "number"
+              },
+              "test_ratio": {
+                "type": "number"
+              },
+              "time_split_column": {
+                "type": "string",
+                "description": "When method=time_based, which timestamp feature to use."
+              }
+            },
+            "required": [
+              "method",
+              "train_ratio",
+              "validation_ratio",
+              "test_ratio"
+            ]
+          },
+          "resource_config": {
+            "type": "object",
+            "description": "Compute resource parameters for the job.",
+            "properties": {
+              "instance_type": {
+                "type": "string",
+                "enum": [
+                  "cpu_small",
+                  "cpu_medium",
+                  "cpu_large",
+                  "gpu_single",
+                  "gpu_multi"
+                ]
+              },
+              "max_runtime_minutes": {
+                "type": "integer",
+                "default": 60
+              },
+              "parallel_trials": {
+                "type": "integer",
+                "description": "For hyperparameter search."
+              }
+            },
+            "required": [
+              "instance_type"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Arbitrary metadata such as experiment name, owner, or JIRA link."
+          }
+        },
+        "required": [
+          "feature_view_id",
+          "objective",
+          "algorithm",
+          "data_splitting",
+          "resource_config"
+        ]
+      },
+      "returns": "Training job handle including training_job_id, initial status, and links to logs and metrics."
+    },
+    {
+      "name": "get_training_job_status",
+      "description": "Retrieve the current status, metrics, and potential errors for a training job.",
+      "stage": "training",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "training_job_id": {
+            "type": "string"
+          },
+          "include_metrics": {
+            "type": "boolean",
+            "default": true
+          },
+          "include_artifacts": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "training_job_id"
+        ]
+      },
+      "returns": "Training job status (queued, running, succeeded, failed), current metrics, and references to model artifacts when available."
+    },
+    {
+      "name": "register_model_version",
+      "description": "Register a model artifact from a completed training job as a versioned policy model, including validation summaries and metadata.",
+      "stage": "model_registry",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "training_job_id": {
+            "type": "string",
+            "description": "Training job to source model artifacts from."
+          },
+          "model_version_id": {
+            "type": "string",
+            "description": "Optional explicit version identifier; generated if omitted."
+          },
+          "name": {
+            "type": "string",
+            "description": "Logical model name, e.g., 'udr_congestion_mitigation_v1'."
+          },
+          "description": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "staging",
+              "production",
+              "archived"
+            ],
+            "default": "staging"
+          },
+          "policy_binding": {
+            "type": "object",
+            "description": "How this model outputs will be mapped to policy decisions.",
+            "properties": {
+              "output_schema": {
+                "type": "object",
+                "description": "Schema of the model's outputs.",
+                "properties": {
+                  "decision_type": {
+                    "type": "string",
+                    "enum": [
+                      "qos_adjustment",
+                      "routing_preference",
+                      "admission_control",
+                      "throttling",
+                      "custom"
+                    ]
+                  },
+                  "fields": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "string",
+                            "integer",
+                            "float",
+                            "boolean"
+                          ]
+                        }
+                      },
+                      "required": [
+                        "name",
+                        "type"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "decision_type",
+                  "fields"
+                ]
+              },
+              "amf_pcf_integration": {
+                "type": "object",
+                "description": "Integration points with AMF/PCF.",
+                "properties": {
+                  "amf_policy_event": {
+                    "type": "string",
+                    "enum": [
+                      "ue_mobility",
+                      "qos_change",
+                      "session_setup",
+                      "session_release"
+                    ]
+                  },
+                  "pcf_rule_template_id": {
+                    "type": "string",
+                    "description": "Base PCF rule to parameterize with model outputs."
+                  }
+                }
+              }
+            },
+            "required": [
+              "output_schema"
+            ]
+          },
+          "approval": {
+            "type": "object",
+            "description": "Governance and approval metadata.",
+            "properties": {
+              "approved_by": {
+                "type": "string"
+              },
+              "approval_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "risk_classification": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "medium",
+                  "high"
+                ]
+              }
+            }
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "training_job_id",
+          "name",
+          "policy_binding"
+        ]
+      },
+      "returns": "Registered model record including model_version_id, metadata, and links to artifacts and training lineage."
+    },
+    {
+      "name": "deploy_policy_model",
+      "description": "Deploy a registered model version into an online decisioning endpoint wired to UDR-backed policy flows.",
+      "stage": "deployment",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "model_version_id": {
+            "type": "string"
+          },
+          "deployment_id": {
+            "type": "string",
+            "description": "Optional ID to reuse or update an existing deployment."
+          },
+          "target_environment": {
+            "type": "string",
+            "enum": [
+              "dev",
+              "qa",
+              "preprod",
+              "prod"
+            ]
+          },
+          "traffic_routing": {
+            "type": "object",
+            "description": "How requests are routed to this deployment.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "shadow",
+                  "canary",
+                  "blue_green",
+                  "full"
+                ]
+              },
+              "initial_traffic_percent": {
+                "type": "integer",
+                "description": "Used for canary/blue_green/full.",
+                "minimum": 0,
+                "maximum": 100
+              },
+              "shadow_target_deployment_id": {
+                "type": "string",
+                "description": "Primary deployment to shadow when mode=shadow."
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "serving_config": {
+            "type": "object",
+            "description": "Runtime serving configuration.",
+            "properties": {
+              "max_p95_latency_ms": {
+                "type": "integer"
+              },
+              "autoscaling": {
+                "type": "object",
+                "properties": {
+                  "min_replicas": {
+                    "type": "integer"
+                  },
+                  "max_replicas": {
+                    "type": "integer"
+                  },
+                  "target_qps_per_replica": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "min_replicas",
+                  "max_replicas"
+                ]
+              },
+              "udr_cache_strategy": {
+                "type": "string",
+                "enum": [
+                  "no_cache",
+                  "short_lived",
+                  "long_lived"
+                ]
+              }
+            }
+          },
+          "safety_guards": {
+            "type": "object",
+            "description": "Guardrails to constrain model-driven policy decisions.",
+            "properties": {
+              "max_qos_upgrade_per_request": {
+                "type": "integer",
+                "description": "Maximum QoS class step up allowed versus baseline."
+              },
+              "blocklist_segments": {
+                "type": "array",
+                "description": "Subscriber segments where model decisions are never applied.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "fallback_strategy": {
+                "type": "string",
+                "enum": [
+                  "use_baseline_policy",
+                  "deny_change",
+                  "use_previous_model"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "model_version_id",
+          "target_environment",
+          "traffic_routing"
+        ]
+      },
+      "returns": "Deployment descriptor including deployment_id, endpoint details, routing configuration, and initial health status."
+    },
+    {
+      "name": "get_deployment_status",
+      "description": "Check the health, traffic allocation, and recent performance metrics of a deployed policy model.",
+      "stage": "deployment",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "deployment_id": {
+            "type": "string"
+          },
+          "include_live_metrics": {
+            "type": "boolean",
+            "default": true
+          },
+          "metrics_window_minutes": {
+            "type": "integer",
+            "description": "Time window for aggregating live metrics.",
+            "default": 15
+          }
+        },
+        "required": [
+          "deployment_id"
+        ]
+      },
+      "returns": "Deployment status (healthy, degraded, unhealthy), traffic split details, error rates, latency metrics, and key decision KPIs."
+    },
+    {
+      "name": "create_rollback_plan",
+      "description": "Create a rollback plan for an at-risk deployment or model version, defining triggers and target state.",
+      "stage": "rollback",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "description": "Entity this rollback plan is for.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "deployment",
+                  "model_version"
+                ]
+              },
+              "deployment_id": {
+                "type": "string",
+                "description": "Required when type=deployment."
+              },
+              "model_version_id": {
+                "type": "string",
+                "description": "Required when type=model_version."
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "rollback_plan_id": {
+            "type": "string",
+            "description": "Optional explicit rollback plan ID."
+          },
+          "target_state": {
+            "type": "object",
+            "description": "Desired state after rollback.",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "disable_model",
+                  "switch_to_previous_version",
+                  "switch_to_baseline_policy"
+                ]
+              },
+              "previous_model_version_id": {
+                "type": "string",
+                "description": "Explicit previous version if needed."
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "triggers": {
+            "type": "array",
+            "description": "Conditions under which rollback is automatically executed.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "metric": {
+                  "type": "string",
+                  "enum": [
+                    "decision_error_rate",
+                    "p95_latency_ms",
+                    "udr_read_errors",
+                    "complaint_rate",
+                    "custom"
+                  ]
+                },
+                "threshold": {
+                  "type": "number"
+                },
+                "comparison": {
+                  "type": "string",
+                  "enum": [
+                    "greater_than",
+                    "less_than"
+                  ]
+                },
+                "evaluation_window_minutes": {
+                  "type": "integer"
+                },
+                "custom_metric_expression": {
+                  "type": "string",
+                  "description": "If metric=custom, how to compute it."
+                }
+              },
+              "required": [
+                "metric",
+                "threshold",
+                "comparison"
+              ]
+            }
+          },
+          "manual_approval_required": {
+            "type": "boolean",
+            "default": true
+          },
+          "owner": {
+            "type": "string",
+            "description": "Team or user responsible for this plan."
+          }
+        },
+        "required": [
+          "source",
+          "target_state"
+        ]
+      },
+      "returns": "Rollback plan details including rollback_plan_id, current status, and trigger configuration."
+    },
+    {
+      "name": "execute_rollback_plan",
+      "description": "Execute or simulate execution of a rollback plan for a deployment or model version.",
+      "stage": "rollback",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "rollback_plan_id": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "dry_run",
+              "execute"
+            ],
+            "default": "execute"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for manual rollback execution, e.g., incident reference."
+          },
+          "force": {
+            "type": "boolean",
+            "description": "Bypass manual approval if allowed by policy.",
+            "default": false
+          }
+        },
+        "required": [
+          "rollback_plan_id"
+        ]
+      },
+      "returns": "Rollback execution result: actions performed or planned, affected deployments, and post-rollback status."
+    },
+    {
+      "name": "retry_pipeline_stage",
+      "description": "Retry a failed or partially completed pipeline stage (feature build, training, deployment) with optional overrides for error recovery.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "stage_type": {
+            "type": "string",
+            "enum": [
+              "feature_build",
+              "validation",
+              "training",
+              "deployment"
+            ]
+          },
+          "entity_ref": {
+            "type": "object",
+            "description": "Reference to the entity associated with the failed stage.",
+            "properties": {
+              "feature_view_id": {
+                "type": "string"
+              },
+              "training_job_id": {
+                "type": "string"
+              },
+              "deployment_id": {
+                "type": "string"
+              }
+            }
+          },
+          "retry_strategy": {
+            "type": "object",
+            "description": "How the retry should be performed.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "resume",
+                  "restart",
+                  "clone_with_overrides"
+                ]
+              },
+              "max_attempts": {
+                "type": "integer",
+                "default": 1
+              },
+              "backoff_seconds": {
+                "type": "integer",
+                "default": 60
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "overrides": {
+            "type": "object",
+            "description": "Stage-specific configuration overrides when mode=clone_with_overrides.",
+            "properties": {
+              "feature_build": {
+                "type": "object",
+                "properties": {
+                  "materialization_mode": {
+                    "type": "string",
+                    "enum": [
+                      "full",
+                      "incremental"
+                    ]
+                  },
+                  "quality_rules": {
+                    "type": "array",
+                    "items": {
+                      "type": "object"
+                    }
+                  }
+                }
+              },
+              "training": {
+                "type": "object",
+                "properties": {
+                  "resource_config": {
+                    "type": "object"
+                  },
+                  "algorithm": {
+                    "type": "object"
+                  }
+                }
+              },
+              "deployment": {
+                "type": "object",
+                "properties": {
+                  "traffic_routing": {
+                    "type": "object"
+                  },
+                  "serving_config": {
+                    "type": "object"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "stage_type",
+          "entity_ref",
+          "retry_strategy"
+        ]
+      },
+      "returns": "Retry operation descriptor including new entity IDs if cloned, attempt schedule, and initial retry status."
+    },
+    {
+      "name": "list_pipeline_artifacts",
+      "description": "List and filter datasets, feature views, training jobs, model versions, and deployments related to UDR ML policy pipelines.",
+      "stage": "observe",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "artifact_types": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "udr_dataset",
+                    "feature_view",
+                    "training_job",
+                    "model_version",
+                    "deployment",
+                    "rollback_plan"
+                  ]
+                }
+              },
+              "status": {
+                "type": "array",
+                "description": "Status filter interpreted per artifact type.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "owner": {
+                "type": "string"
+              },
+              "tag": {
+                "type": "string",
+                "description": "Return artifacts that contain this tag."
+              },
+              "created_after": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_before": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "related_to_deployment_id": {
+                "type": "string",
+                "description": "Return artifacts in lineage of a given deployment."
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at",
+              "updated_at",
+              "name",
+              "type"
+            ]
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          },
+          "page": {
+            "type": "integer",
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50
+          }
+        }
+      },
+      "returns": "Paginated list of pipeline artifacts with lightweight metadata and lineage pointers."
+    }
+  ]
+}

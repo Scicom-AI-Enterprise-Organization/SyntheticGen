@@ -1,0 +1,1225 @@
+{
+  "workflow_name": "email_order_to_cash",
+  "description": "End-to-end order-to-cash workflow for transactional and campaign email services in a CPaaS/TaaS environment, including provisioning, template management, sending, tracking, invoicing, and error recovery.",
+  "domain": "taas_cpaas/email_api",
+  "shared_entities": {
+    "tenant_id": {
+      "type": "string",
+      "description": "Identifier of the tenant/customer account"
+    },
+    "order_id": {
+      "type": "string",
+      "description": "Order identifier for email capacity or campaign purchase"
+    },
+    "email_project_id": {
+      "type": "string",
+      "description": "Identifier for an email project (e.g., product, application, or domain-specific grouping)"
+    },
+    "package_id": {
+      "type": "string",
+      "description": "Identifier for a purchasable email package (e.g., monthly volume, dedicated IP, advanced analytics)"
+    },
+    "template_id": {
+      "type": "string",
+      "description": "Identifier for an email template"
+    },
+    "send_batch_id": {
+      "type": "string",
+      "description": "Identifier for a batch send operation (campaign or bulk transactional send)"
+    },
+    "invoice_id": {
+      "type": "string",
+      "description": "Identifier for an invoice generated from one or more orders"
+    },
+    "email_address": {
+      "type": "string",
+      "format": "email",
+      "description": "Email address"
+    },
+    "money": {
+      "type": "object",
+      "description": "Monetary value with currency",
+      "properties": {
+        "amount": {
+          "type": "number"
+        },
+        "currency": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 3,
+          "description": "ISO 4217 currency code, e.g., USD, EUR"
+        }
+      },
+      "required": [
+        "amount",
+        "currency"
+      ]
+    },
+    "time_window": {
+      "type": "object",
+      "description": "Time window with optional timezone",
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "timezone": {
+          "type": "string",
+          "description": "IANA timezone name, e.g., Europe/Berlin"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "search_email_packages",
+      "description": "Search available email service packages and pricing for a tenant and project.",
+      "stage": "quote",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "email_project_id": {
+            "$ref": "#/shared_entities/email_project_id"
+          },
+          "usage_requirements": {
+            "type": "object",
+            "description": "Estimated usage requirements to filter packages.",
+            "properties": {
+              "monthly_volume": {
+                "type": "integer",
+                "description": "Expected monthly outbound email volume."
+              },
+              "max_daily_volume": {
+                "type": "integer",
+                "description": "Expected peak daily outbound volume."
+              },
+              "use_cases": {
+                "type": "array",
+                "description": "Intended use cases for the email API.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "transactional",
+                    "marketing",
+                    "newsletter",
+                    "system_alerts",
+                    "otp",
+                    "mixed"
+                  ]
+                }
+              },
+              "compliance_requirements": {
+                "type": "array",
+                "description": "Specific compliance or data residency requirements.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "gdpr",
+                    "hipaa",
+                    "pci",
+                    "soc2",
+                    "none"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "monthly_volume"
+            ]
+          },
+          "filters": {
+            "type": "object",
+            "description": "Additional filters for package search.",
+            "properties": {
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "description": "Region codes where infrastructure is hosted, e.g., eu-central-1."
+                }
+              },
+              "include_features": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "dedicated_ip",
+                    "shared_ip",
+                    "webhooks",
+                    "inbound_parsing",
+                    "advanced_analytics",
+                    "subaccounts",
+                    "a_b_testing",
+                    "ip_warmup"
+                  ]
+                }
+              },
+              "exclude_features": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "max_price": {
+                "$ref": "#/shared_entities/money"
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "price",
+              "volume",
+              "feature_score",
+              "region_proximity",
+              "default"
+            ],
+            "description": "Sorting criterion for packages."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "usage_requirements"
+        ]
+      },
+      "returns": "List of matching email packages with pricing, limits, and feature details."
+    },
+    {
+      "name": "create_email_order",
+      "description": "Create a new order for selected email packages and configuration.",
+      "stage": "order_create",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "email_project_id": {
+            "$ref": "#/shared_entities/email_project_id"
+          },
+          "items": {
+            "type": "array",
+            "description": "Ordered email service packages and add-ons.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "package_id": {
+                  "$ref": "#/shared_entities/package_id"
+                },
+                "quantity": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Number of units (e.g., volume blocks, months)."
+                },
+                "billing_term": {
+                  "type": "string",
+                  "enum": [
+                    "monthly",
+                    "yearly",
+                    "one_time"
+                  ]
+                },
+                "addons": {
+                  "type": "array",
+                  "description": "Optional add-ons for this package line.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "addon_code": {
+                        "type": "string",
+                        "description": "Code for the add-on feature."
+                      },
+                      "config": {
+                        "type": "object",
+                        "description": "Add-on specific configuration.",
+                        "properties": {
+                          "dedicated_ip_count": {
+                            "type": "integer",
+                            "minimum": 1
+                          },
+                          "warmup_strategy": {
+                            "type": "string",
+                            "enum": [
+                              "gradual_30_days",
+                              "gradual_60_days",
+                              "none"
+                            ]
+                          },
+                          "retention_days": {
+                            "type": "integer",
+                            "description": "For analytics/log retention add-ons."
+                          }
+                        }
+                      }
+                    },
+                    "required": [
+                      "addon_code"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "package_id",
+                "quantity",
+                "billing_term"
+              ]
+            }
+          },
+          "billing_profile": {
+            "type": "object",
+            "description": "Billing profile to use for this order.",
+            "properties": {
+              "billing_account_id": {
+                "type": "string",
+                "description": "Existing billing account ID."
+              },
+              "payment_method": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "card",
+                      "invoice",
+                      "wallet_credit"
+                    ]
+                  },
+                  "card_token": {
+                    "type": "string",
+                    "description": "Tokenized card reference for card payments."
+                  },
+                  "payment_terms_days": {
+                    "type": "integer",
+                    "description": "Net payment terms for invoicing."
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              "po_number": {
+                "type": "string",
+                "description": "Optional purchase order reference."
+              }
+            },
+            "required": [
+              "payment_method"
+            ]
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Arbitrary key-value metadata for internal tracking."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "items",
+          "billing_profile"
+        ]
+      },
+      "returns": "Created order with order_id, pricing breakdown, and pending payment status if applicable."
+    },
+    {
+      "name": "confirm_email_order_payment",
+      "description": "Confirm or process payment for an existing email order.",
+      "stage": "order_payment",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "payment_action": {
+            "type": "string",
+            "enum": [
+              "charge",
+              "capture",
+              "mark_as_paid"
+            ],
+            "description": "How to treat the payment for this order."
+          },
+          "payment_details": {
+            "type": "object",
+            "description": "Details required depending on payment action and method.",
+            "properties": {
+              "transaction_reference": {
+                "type": "string",
+                "description": "Reference from external payment gateway or bank."
+              },
+              "amount_override": {
+                "$ref": "#/shared_entities/money"
+              },
+              "payment_method": {
+                "type": "object",
+                "description": "Optional override of the default payment method on the order.",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "card",
+                      "invoice",
+                      "wallet_credit"
+                    ]
+                  },
+                  "card_token": {
+                    "type": "string"
+                  },
+                  "wallet_id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              }
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Client-supplied key to make payment retries idempotent."
+          }
+        },
+        "required": [
+          "order_id",
+          "tenant_id",
+          "payment_action"
+        ]
+      },
+      "returns": "Payment result with updated order status, payment receipt reference, and any error details if failed."
+    },
+    {
+      "name": "provision_email_project_resources",
+      "description": "Provision or update email project resources (domains, IPs, webhooks) after order payment.",
+      "stage": "provision",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "email_project_id": {
+            "$ref": "#/shared_entities/email_project_id"
+          },
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "provisioning_mode": {
+            "type": "string",
+            "enum": [
+              "initial",
+              "upgrade",
+              "downgrade",
+              "reprovision"
+            ],
+            "description": "Type of provisioning operation."
+          },
+          "resources": {
+            "type": "object",
+            "description": "Resources to be provisioned.",
+            "properties": {
+              "sending_domains": {
+                "type": "array",
+                "description": "Domains to configure for sending.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "domain": {
+                      "type": "string"
+                    },
+                    "dkim_selector": {
+                      "type": "string"
+                    },
+                    "spf_include": {
+                      "type": "string"
+                    },
+                    "tracking_subdomain": {
+                      "type": "string",
+                      "description": "Subdomain for click/open tracking links."
+                    },
+                    "ownership_verification_method": {
+                      "type": "string",
+                      "enum": [
+                        "dns_txt",
+                        "http_file",
+                        "manual"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "domain"
+                  ]
+                }
+              },
+              "ip_pools": {
+                "type": "array",
+                "description": "Dedicated/shared IP pools to assign.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "pool_name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "shared",
+                        "dedicated"
+                      ]
+                    },
+                    "warmup_profile": {
+                      "type": "string",
+                      "enum": [
+                        "standard_30d",
+                        "aggressive_14d",
+                        "custom",
+                        "none"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "pool_name",
+                    "type"
+                  ]
+                }
+              },
+              "webhook_endpoints": {
+                "type": "array",
+                "description": "Webhooks for event delivery.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "events": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "delivered",
+                          "bounced",
+                          "complained",
+                          "opened",
+                          "clicked",
+                          "dropped",
+                          "unsubscribed"
+                        ]
+                      }
+                    },
+                    "auth": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "none",
+                            "basic",
+                            "bearer",
+                            "hmac"
+                          ]
+                        },
+                        "username": {
+                          "type": "string"
+                        },
+                        "password": {
+                          "type": "string"
+                        },
+                        "token": {
+                          "type": "string"
+                        },
+                        "hmac_secret": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "url",
+                    "events"
+                  ]
+                }
+              }
+            }
+          },
+          "async": {
+            "type": "boolean",
+            "description": "If true, provisioning is queued and status must be polled later.",
+            "default": true
+          }
+        },
+        "required": [
+          "order_id",
+          "email_project_id",
+          "tenant_id",
+          "provisioning_mode"
+        ]
+      },
+      "returns": "Provisioning job details including job_id, initial status, and any DNS records required for domain verification."
+    },
+    {
+      "name": "get_provisioning_status",
+      "description": "Get current provisioning status for project resources created from an order.",
+      "stage": "provision_status",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "email_project_id": {
+            "$ref": "#/shared_entities/email_project_id"
+          },
+          "order_id": {
+            "$ref": "#/shared_entities/order_id"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional sections to include.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "domains",
+                "ip_pools",
+                "webhooks",
+                "errors",
+                "audit_log"
+              ]
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "email_project_id"
+        ]
+      },
+      "returns": "Provisioning status summary with per-resource status, pending actions, and error details if any."
+    },
+    {
+      "name": "create_email_template",
+      "description": "Create or update a reusable email template for the project.",
+      "stage": "configure",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "email_project_id": {
+            "$ref": "#/shared_entities/email_project_id"
+          },
+          "template_id": {
+            "$ref": "#/shared_entities/template_id",
+            "description": "Provide to update an existing template; omit to create new."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable template name."
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "transactional",
+              "marketing",
+              "system"
+            ]
+          },
+          "content": {
+            "type": "object",
+            "description": "Template content and structure.",
+            "properties": {
+              "subject": {
+                "type": "string"
+              },
+              "from": {
+                "type": "object",
+                "properties": {
+                  "email": {
+                    "$ref": "#/shared_entities/email_address"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "email"
+                ]
+              },
+              "html_body": {
+                "type": "string",
+                "description": "HTML version of the email body with placeholders."
+              },
+              "text_body": {
+                "type": "string",
+                "description": "Plain-text version of the email body."
+              },
+              "placeholders": {
+                "type": "array",
+                "description": "Declared placeholders and types for this template.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "key": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "string",
+                        "number",
+                        "boolean",
+                        "date",
+                        "object",
+                        "array"
+                      ]
+                    },
+                    "required": {
+                      "type": "boolean",
+                      "default": false
+                    },
+                    "description": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "key",
+                    "type"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "subject",
+              "from"
+            ]
+          },
+          "settings": {
+            "type": "object",
+            "description": "Template-level sending settings.",
+            "properties": {
+              "track_opens": {
+                "type": "boolean",
+                "default": true
+              },
+              "track_clicks": {
+                "type": "boolean",
+                "default": true
+              },
+              "unsubscribe_handling": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "header_only",
+                  "footer_link"
+                ],
+                "default": "footer_link"
+              },
+              "ip_pool": {
+                "type": "string",
+                "description": "IP pool name to use by default."
+              },
+              "category": {
+                "type": "string",
+                "description": "Analytics category for grouping."
+              }
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "email_project_id",
+          "name",
+          "type",
+          "content"
+        ]
+      },
+      "returns": "Template definition with template_id, version info, and validation of placeholders."
+    },
+    {
+      "name": "send_email_batch",
+      "description": "Send a batch of emails using a template and per-recipient variables, optionally scheduling for later.",
+      "stage": "fulfillment_send",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "email_project_id": {
+            "$ref": "#/shared_entities/email_project_id"
+          },
+          "template_id": {
+            "$ref": "#/shared_entities/template_id"
+          },
+          "send_type": {
+            "type": "string",
+            "enum": [
+              "transactional",
+              "campaign"
+            ]
+          },
+          "recipients": {
+            "type": "array",
+            "description": "Recipient list with personalization data.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "to": {
+                  "$ref": "#/shared_entities/email_address"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "substitutions": {
+                  "type": "object",
+                  "description": "Key-value mapping for placeholders in the template."
+                },
+                "custom_args": {
+                  "type": "object",
+                  "description": "Custom arguments that will be echoed in webhooks/events."
+                }
+              },
+              "required": [
+                "to"
+              ]
+            }
+          },
+          "options": {
+            "type": "object",
+            "description": "Per-batch options for sending.",
+            "properties": {
+              "schedule": {
+                "type": "object",
+                "properties": {
+                  "send_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Time to schedule the batch for sending."
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "description": "Timezone for schedule interpretation."
+                  }
+                }
+              },
+              "batch_idempotency_key": {
+                "type": "string",
+                "description": "Idempotency key for the whole batch send."
+              },
+              "ip_pool": {
+                "type": "string",
+                "description": "Override IP pool for this batch."
+              },
+              "max_retries": {
+                "type": "integer",
+                "description": "Max automatic retry attempts for transient failures.",
+                "default": 3
+              },
+              "priority": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "normal",
+                  "high"
+                ],
+                "default": "normal"
+              }
+            }
+          },
+          "tracking_overrides": {
+            "type": "object",
+            "description": "Override template-level tracking configuration for this batch.",
+            "properties": {
+              "track_opens": {
+                "type": "boolean"
+              },
+              "track_clicks": {
+                "type": "boolean"
+              },
+              "utm_parameters": {
+                "type": "object",
+                "properties": {
+                  "utm_source": {
+                    "type": "string"
+                  },
+                  "utm_medium": {
+                    "type": "string"
+                  },
+                  "utm_campaign": {
+                    "type": "string"
+                  },
+                  "utm_content": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "email_project_id",
+          "template_id",
+          "send_type",
+          "recipients"
+        ]
+      },
+      "returns": "Batch send acknowledgment with send_batch_id, per-recipient queued status, and any immediate validation errors."
+    },
+    {
+      "name": "get_send_batch_status",
+      "description": "Retrieve status and performance metrics for a send batch, including delivery, opens, and clicks.",
+      "stage": "fulfillment_status",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "send_batch_id": {
+            "$ref": "#/shared_entities/send_batch_id"
+          },
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional sections to include.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "aggregate_metrics",
+                "per_recipient_status",
+                "events_sample",
+                "errors"
+              ]
+            }
+          },
+          "pagination": {
+            "type": "object",
+            "description": "Pagination for per recipient details.",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "default": 100
+              }
+            }
+          }
+        },
+        "required": [
+          "send_batch_id",
+          "tenant_id"
+        ]
+      },
+      "returns": "Batch status summary, aggregate engagement stats, and optional per-recipient delivery/engagement status."
+    },
+    {
+      "name": "generate_email_invoice",
+      "description": "Generate an invoice for email usage and orders over a specified period.",
+      "stage": "invoice_generate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "billing_period": {
+            "type": "object",
+            "description": "Billing period for which to generate the invoice.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date"
+              },
+              "to": {
+                "type": "string",
+                "format": "date"
+              }
+            },
+            "required": [
+              "from",
+              "to"
+            ]
+          },
+          "order_ids": {
+            "type": "array",
+            "description": "Optional list of specific orders to include.",
+            "items": {
+              "$ref": "#/shared_entities/order_id"
+            }
+          },
+          "group_by_project": {
+            "type": "boolean",
+            "description": "If true, line items are grouped per email project.",
+            "default": true
+          },
+          "preview_only": {
+            "type": "boolean",
+            "description": "If true, returns a preview without persisting an invoice.",
+            "default": false
+          },
+          "tax_profile": {
+            "type": "object",
+            "description": "Optional tax profile override.",
+            "properties": {
+              "country": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "vat_number": {
+                "type": "string"
+              },
+              "tax_exempt": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          }
+        },
+        "required": [
+          "tenant_id",
+          "billing_period"
+        ]
+      },
+      "returns": "Generated or preview invoice with invoice_id (if persisted), line items, taxes, totals, and payment due date."
+    },
+    {
+      "name": "get_invoice_details",
+      "description": "Retrieve details for an existing email invoice including status and line items.",
+      "stage": "invoice_status",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "invoice_id": {
+            "$ref": "#/shared_entities/invoice_id"
+          },
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "line_items",
+                "payments",
+                "adjustments",
+                "pdf_link"
+              ]
+            }
+          }
+        },
+        "required": [
+          "invoice_id",
+          "tenant_id"
+        ]
+      },
+      "returns": "Invoice header, financial breakdown, payment status, and optionally line items and documents."
+    },
+    {
+      "name": "retry_failed_email_batch",
+      "description": "Retry sending for failed or dropped recipients in a previous send batch.",
+      "stage": "error_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "send_batch_id": {
+            "$ref": "#/shared_entities/send_batch_id"
+          },
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "retry_strategy": {
+            "type": "object",
+            "description": "Configuration for retry behavior.",
+            "properties": {
+              "include_statuses": {
+                "type": "array",
+                "description": "Delivery statuses to retry.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "bounced_soft",
+                    "dropped_temporary",
+                    "dropped_throttled",
+                    "not_attempted"
+                  ]
+                }
+              },
+              "exclude_permanent_failures": {
+                "type": "boolean",
+                "default": true
+              },
+              "max_attempts_per_recipient": {
+                "type": "integer",
+                "default": 3
+              },
+              "backoff_policy": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "fixed_interval",
+                  "exponential"
+                ],
+                "default": "exponential"
+              },
+              "fixed_interval_seconds": {
+                "type": "integer",
+                "description": "Interval for fixed_interval policy."
+              }
+            },
+            "required": [
+              "include_statuses"
+            ]
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Optional schedule for retries.",
+            "properties": {
+              "send_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string"
+              }
+            }
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Idempotency key for this retry operation."
+          }
+        },
+        "required": [
+          "send_batch_id",
+          "tenant_id",
+          "retry_strategy"
+        ]
+      },
+      "returns": "New retry batch details including new send_batch_id, counts of recipients to be retried, and any exclusions."
+    },
+    {
+      "name": "cancel_email_order_or_batch",
+      "description": "Cancel an unpaid order or a scheduled/ongoing send batch when permissible.",
+      "stage": "cancellation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "cancel_target": {
+            "type": "object",
+            "description": "Polymorphic cancel target. Only one of order_id or send_batch_id must be provided.",
+            "properties": {
+              "order_id": {
+                "$ref": "#/shared_entities/order_id"
+              },
+              "send_batch_id": {
+                "$ref": "#/shared_entities/send_batch_id"
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Human-readable reason for cancellation."
+          },
+          "refund_policy": {
+            "type": "string",
+            "enum": [
+              "no_refund",
+              "prorated",
+              "full_if_not_started"
+            ],
+            "description": "Requested refund behavior; will be validated against contract.",
+            "default": "prorated"
+          },
+          "force": {
+            "type": "boolean",
+            "description": "If true, attempts forced cancellation within allowed constraints.",
+            "default": false
+          }
+        },
+        "required": [
+          "tenant_id",
+          "cancel_target"
+        ]
+      },
+      "returns": "Cancellation result with updated status, any refund details, and a list of non-cancellable items if applicable."
+    },
+    {
+      "name": "rollback_email_provisioning",
+      "description": "Rollback or partially revert provisioning changes made for a project due to order cancellation or critical failure.",
+      "stage": "rollback",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "tenant_id": {
+            "$ref": "#/shared_entities/tenant_id"
+          },
+          "email_project_id": {
+            "$ref": "#/shared_entities/email_project_id"
+          },
+          "order_id": {
+            "$ref": "#/shared_entities/order_id",
+            "description": "Order that triggered the provisioning to roll back."
+          },
+          "rollback_scope": {
+            "type": "array",
+            "description": "Resources to rollback.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "domains",
+                "ip_pools",
+                "webhooks",
+                "api_keys",
+                "all"
+              ]
+            }
+          },
+          "preserve_for_grace_period": {
+            "type": "boolean",
+            "description": "If true, marks resources as pending deletion after a grace period rather than immediate removal.",
+            "default": true
+          },
+          "grace_period_hours": {
+            "type": "integer",
+            "description": "Grace period before hard delete, if enabled.",
+            "default": 72
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for rollback, used for audit trail."
+          }
+        },
+        "required": [
+          "tenant_id",
+          "email_project_id",
+          "rollback_scope"
+        ]
+      },
+      "returns": "Rollback job details with impacted resources, status, and any manual actions required."
+    }
+  ]
+}

@@ -1,0 +1,1403 @@
+{
+  "workflow_name": "lpwan_partner_management",
+  "description": "End-to-end partner lifecycle for managing LPWAN connectivity-as-a-service: onboarding, tenant provisioning, network configuration, device fleet onboarding, billing setup, monitoring, and incident handling.",
+  "domain": "taas_iot/lpwan_service",
+  "shared_entities": {
+    "partner_id": {
+      "type": "string",
+      "description": "Unique identifier for a partner organization"
+    },
+    "tenant_id": {
+      "type": "string",
+      "description": "Identifier for a logical tenant under a partner (e.g., customer account or business unit)"
+    },
+    "network_profile_id": {
+      "type": "string",
+      "description": "Identifier for a reusable LPWAN network configuration profile"
+    },
+    "device_group_id": {
+      "type": "string",
+      "description": "Identifier for a group of devices associated with a tenant"
+    },
+    "service_plan_id": {
+      "type": "string",
+      "description": "Identifier for a connectivity service plan (data, messages, SLA)"
+    },
+    "onboarding_session_id": {
+      "type": "string",
+      "description": "Identifier for a multi-step partner onboarding session"
+    },
+    "billing_profile_id": {
+      "type": "string",
+      "description": "Identifier for a configured billing profile"
+    },
+    "operation_id": {
+      "type": "string",
+      "description": "Identifier for a long-running or async operation"
+    }
+  },
+  "functions": [
+    {
+      "name": "start_partner_onboarding",
+      "description": "Initialize a new partner onboarding session with basic organization details and initial preferences.",
+      "stage": "onboarding",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "organization": {
+            "type": "object",
+            "description": "Basic organization details of the partner",
+            "properties": {
+              "legal_name": {
+                "type": "string"
+              },
+              "trading_name": {
+                "type": "string"
+              },
+              "registration_number": {
+                "type": "string",
+                "description": "Company registration or tax ID"
+              },
+              "country": {
+                "type": "string"
+              },
+              "website": {
+                "type": "string",
+                "format": "uri"
+              },
+              "primary_contact": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  },
+                  "phone": {
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name",
+                  "email"
+                ]
+              }
+            },
+            "required": [
+              "legal_name",
+              "country",
+              "primary_contact"
+            ]
+          },
+          "technical_profile": {
+            "type": "object",
+            "description": "Initial technical capabilities and preferences",
+            "properties": {
+              "lpwan_technologies": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "lorawan",
+                    "sigfox",
+                    "lte_m",
+                    "nb_iot"
+                  ]
+                },
+                "minItems": 1
+              },
+              "regions_of_operation": {
+                "type": "array",
+                "description": "ISO country codes or region identifiers",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "expected_device_volume": {
+                "type": "integer",
+                "description": "Estimated number of devices over next 12 months"
+              },
+              "integration_preferences": {
+                "type": "object",
+                "properties": {
+                  "api_style": {
+                    "type": "string",
+                    "enum": [
+                      "rest",
+                      "mqtt",
+                      "webhook",
+                      "mixed"
+                    ]
+                  },
+                  "data_formats": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "json",
+                        "protobuf",
+                        "cbor"
+                      ]
+                    }
+                  },
+                  "callback_endpoints": {
+                    "type": "array",
+                    "description": "Optional pre-declared callback endpoints",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "type": "string",
+                          "enum": [
+                            "uplink",
+                            "downlink_status",
+                            "lifecycle",
+                            "billing"
+                          ]
+                        },
+                        "url": {
+                          "type": "string",
+                          "format": "uri"
+                        }
+                      },
+                      "required": [
+                        "type",
+                        "url"
+                      ]
+                    }
+                  }
+                }
+              }
+            },
+            "required": [
+              "lpwan_technologies"
+            ]
+          },
+          "trial_mode": {
+            "type": "boolean",
+            "description": "Whether to create the partner in trial mode with limited quotas",
+            "default": true
+          }
+        },
+        "required": [
+          "organization",
+          "technical_profile"
+        ]
+      },
+      "returns": "Onboarding session object including onboarding_session_id and provisional partner_id (may be pending verification)."
+    },
+    {
+      "name": "complete_partner_verification",
+      "description": "Submit compliance and technical verification details to complete partner onboarding.",
+      "stage": "onboarding",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "onboarding_session_id": {
+            "type": "string"
+          },
+          "partner_id": {
+            "type": "string",
+            "description": "Provisional partner identifier if already issued"
+          },
+          "compliance_documents": {
+            "type": "array",
+            "description": "List of references to uploaded compliance documents",
+            "items": {
+              "type": "object",
+              "properties": {
+                "doc_type": {
+                  "type": "string",
+                  "enum": [
+                    "nda",
+                    "msa",
+                    "dpa",
+                    "reseller_agreement",
+                    "other"
+                  ]
+                },
+                "document_id": {
+                  "type": "string",
+                  "description": "Storage reference for the document"
+                },
+                "issued_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "expires_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              },
+              "required": [
+                "doc_type",
+                "document_id"
+              ]
+            }
+          },
+          "technical_validation": {
+            "type": "object",
+            "description": "Results of technical validation tests",
+            "properties": {
+              "callback_tests": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "endpoint_url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "passed",
+                        "failed"
+                      ]
+                    },
+                    "last_tested_at": {
+                      "type": "string",
+                      "format": "date-time"
+                    },
+                    "failure_reason": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "endpoint_url",
+                    "status"
+                  ]
+                }
+              },
+              "security_review": {
+                "type": "object",
+                "properties": {
+                  "completed": {
+                    "type": "boolean"
+                  },
+                  "risk_level": {
+                    "type": "string",
+                    "enum": [
+                      "low",
+                      "medium",
+                      "high"
+                    ]
+                  },
+                  "notes": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "force_activation": {
+            "type": "boolean",
+            "description": "Override pending checks and attempt activation (may be rejected by policy).",
+            "default": false
+          }
+        },
+        "required": [
+          "onboarding_session_id"
+        ]
+      },
+      "returns": "Finalized partner record with partner_id, verification status, and any pending actions."
+    },
+    {
+      "name": "provision_tenant",
+      "description": "Create a new tenant under a partner with initial quotas, service plans, and administrative contacts.",
+      "stage": "tenant_provisioning",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "partner_id": {
+            "type": "string"
+          },
+          "tenant_name": {
+            "type": "string"
+          },
+          "reference_code": {
+            "type": "string",
+            "description": "Optional external reference (e.g., CRM ID)"
+          },
+          "service_plan_id": {
+            "type": "string"
+          },
+          "quotas": {
+            "type": "object",
+            "properties": {
+              "max_devices": {
+                "type": "integer"
+              },
+              "max_device_groups": {
+                "type": "integer"
+              },
+              "monthly_uplink_messages": {
+                "type": "integer"
+              },
+              "monthly_downlink_messages": {
+                "type": "integer"
+              }
+            }
+          },
+          "admin_contacts": {
+            "type": "array",
+            "description": "List of administrative contacts for this tenant",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "email": {
+                  "type": "string",
+                  "format": "email"
+                },
+                "phone": {
+                  "type": "string"
+                },
+                "roles": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "enum": [
+                      "billing_admin",
+                      "technical_admin",
+                      "operations",
+                      "read_only"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "email"
+              ]
+            }
+          },
+          "default_network_profile_id": {
+            "type": "string",
+            "description": "Optional default network profile to attach to this tenant"
+          }
+        },
+        "required": [
+          "partner_id",
+          "tenant_name",
+          "service_plan_id"
+        ]
+      },
+      "returns": "Tenant object including tenant_id, effective quotas, and links to service plan and network profiles."
+    },
+    {
+      "name": "configure_network_profile",
+      "description": "Create or update an LPWAN network profile for a partner or tenant, defining routing, radio parameters, and QoS.",
+      "stage": "network_configuration",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "partner",
+              "tenant"
+            ],
+            "description": "Determines whether the profile applies at partner-wide or tenant-specific level."
+          },
+          "partner_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Required when scope is tenant"
+          },
+          "network_profile_id": {
+            "type": "string",
+            "description": "If provided, update existing profile; if omitted, create a new one."
+          },
+          "profile": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "lpwan_technology": {
+                "type": "string",
+                "enum": [
+                  "lorawan",
+                  "sigfox",
+                  "lte_m",
+                  "nb_iot"
+                ]
+              },
+              "radio_settings": {
+                "type": "object",
+                "properties": {
+                  "lorawan": {
+                    "type": "object",
+                    "description": "LoRaWAN-specific configuration (used when lpwan_technology=lorawan)",
+                    "properties": {
+                      "region": {
+                        "type": "string",
+                        "enum": [
+                          "EU868",
+                          "US915",
+                          "AS923",
+                          "AU915",
+                          "IN865",
+                          "KR920"
+                        ]
+                      },
+                      "rx_window": {
+                        "type": "string",
+                        "enum": [
+                          "rx1",
+                          "rx2"
+                        ]
+                      },
+                      "rx2_data_rate": {
+                        "type": "integer"
+                      },
+                      "rx_delay_seconds": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 15
+                      },
+                      "duty_cycle_enforcement": {
+                        "type": "boolean"
+                      }
+                    }
+                  },
+                  "cellular": {
+                    "type": "object",
+                    "description": "Cellular LPWAN settings (lte_m, nb_iot)",
+                    "properties": {
+                      "plmn_whitelist": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "description": "PLMN (MCCMNC) code"
+                        }
+                      },
+                      "apn": {
+                        "type": "string"
+                      },
+                      "psm_enabled": {
+                        "type": "boolean"
+                      },
+                      "eDRX_cycle_seconds": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              },
+              "routing": {
+                "type": "object",
+                "properties": {
+                  "uplink": {
+                    "type": "object",
+                    "properties": {
+                      "target_type": {
+                        "type": "string",
+                        "enum": [
+                          "webhook",
+                          "mqtt",
+                          "kafka",
+                          "internal"
+                        ]
+                      },
+                      "endpoints": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "url": {
+                              "type": "string",
+                              "format": "uri"
+                            },
+                            "auth": {
+                              "type": "object",
+                              "properties": {
+                                "type": {
+                                  "type": "string",
+                                  "enum": [
+                                    "none",
+                                    "basic",
+                                    "bearer",
+                                    "api_key"
+                                  ]
+                                },
+                                "credentials_ref": {
+                                  "type": "string",
+                                  "description": "Reference to stored credentials/secret"
+                                }
+                              },
+                              "required": [
+                                "type"
+                              ]
+                            },
+                            "batch_size": {
+                              "type": "integer",
+                              "default": 1
+                            }
+                          },
+                          "required": [
+                            "url"
+                          ]
+                        }
+                      }
+                    },
+                    "required": [
+                      "target_type"
+                    ]
+                  },
+                  "downlink": {
+                    "type": "object",
+                    "properties": {
+                      "queue_mode": {
+                        "type": "string",
+                        "enum": [
+                          "fifo",
+                          "lifo"
+                        ]
+                      },
+                      "max_queue_size": {
+                        "type": "integer"
+                      },
+                      "ttl_seconds": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              },
+              "qos": {
+                "type": "object",
+                "properties": {
+                  "latency_class": {
+                    "type": "string",
+                    "enum": [
+                      "best_effort",
+                      "standard",
+                      "priority"
+                    ]
+                  },
+                  "availability_sla": {
+                    "type": "string",
+                    "enum": [
+                      "99.0",
+                      "99.5",
+                      "99.9"
+                    ]
+                  },
+                  "burst_limits": {
+                    "type": "object",
+                    "properties": {
+                      "max_uplink_per_minute": {
+                        "type": "integer"
+                      },
+                      "max_downlink_per_minute": {
+                        "type": "integer"
+                      }
+                    }
+                  }
+                }
+              },
+              "status": {
+                "type": "string",
+                "enum": [
+                  "draft",
+                  "active",
+                  "suspended"
+                ],
+                "default": "draft"
+              }
+            },
+            "required": [
+              "name",
+              "lpwan_technology",
+              "routing"
+            ]
+          }
+        },
+        "required": [
+          "scope",
+          "partner_id",
+          "profile"
+        ]
+      },
+      "returns": "Network profile object including network_profile_id, scope (partner/tenant), and effective configuration."
+    },
+    {
+      "name": "create_billing_profile",
+      "description": "Configure or update a billing profile for a partner or tenant, including rating, invoicing, and payment terms.",
+      "stage": "commercials",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "string",
+            "enum": [
+              "partner",
+              "tenant"
+            ],
+            "description": "Billing profile application level."
+          },
+          "partner_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Required when level is tenant."
+          },
+          "billing_profile_id": {
+            "type": "string",
+            "description": "Existing billing profile ID to update, if any."
+          },
+          "billing_details": {
+            "type": "object",
+            "properties": {
+              "currency": {
+                "type": "string"
+              },
+              "payment_terms": {
+                "type": "string",
+                "enum": [
+                  "prepaid",
+                  "net_15",
+                  "net_30",
+                  "net_45"
+                ]
+              },
+              "invoicing": {
+                "type": "object",
+                "properties": {
+                  "frequency": {
+                    "type": "string",
+                    "enum": [
+                      "monthly",
+                      "quarterly",
+                      "annually"
+                    ]
+                  },
+                  "day_of_month": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 28
+                  },
+                  "send_to": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "email": {
+                          "type": "string",
+                          "format": "email"
+                        },
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "email"
+                      ]
+                    }
+                  }
+                },
+                "required": [
+                  "frequency"
+                ]
+              },
+              "rating_model": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "flat",
+                      "tiered_by_volume",
+                      "pay_as_you_go"
+                    ]
+                  },
+                  "base_fee": {
+                    "type": "number"
+                  },
+                  "tiers": {
+                    "type": "array",
+                    "description": "Used when type=tiered_by_volume",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "from_devices": {
+                          "type": "integer"
+                        },
+                        "to_devices": {
+                          "type": "integer"
+                        },
+                        "price_per_device": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "from_devices",
+                        "to_devices",
+                        "price_per_device"
+                      ]
+                    }
+                  },
+                  "per_message_rate": {
+                    "type": "number",
+                    "description": "Applies to pay_as_you_go uplink messages"
+                  }
+                },
+                "required": [
+                  "type"
+                ]
+              },
+              "tax_configuration": {
+                "type": "object",
+                "properties": {
+                  "vat_registered": {
+                    "type": "boolean"
+                  },
+                  "vat_number": {
+                    "type": "string"
+                  },
+                  "tax_region": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": [
+              "currency",
+              "payment_terms",
+              "rating_model"
+            ]
+          }
+        },
+        "required": [
+          "level",
+          "partner_id",
+          "billing_details"
+        ]
+      },
+      "returns": "Billing profile with billing_profile_id, effective rating model, and invoicing configuration."
+    },
+    {
+      "name": "create_device_group",
+      "description": "Create a device group within a tenant, associate a network profile and default policies, and optionally bulk-enroll devices.",
+      "stage": "device_onboarding",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "partner_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "group_name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "network_profile_id": {
+            "type": "string",
+            "description": "Network profile to apply to this device group."
+          },
+          "default_policies": {
+            "type": "object",
+            "properties": {
+              "allowed_regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "firmware_update_strategy": {
+                "type": "string",
+                "enum": [
+                  "manual",
+                  "windowed",
+                  "immediate"
+                ]
+              },
+              "uplink_rate_limit_per_hour": {
+                "type": "integer"
+              },
+              "downlink_rate_limit_per_hour": {
+                "type": "integer"
+              }
+            }
+          },
+          "initial_devices": {
+            "type": "array",
+            "description": "Optional list of devices to enroll into the group during creation.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "device_eui": {
+                  "type": "string",
+                  "description": "EUI or IMEI depending on LPWAN technology"
+                },
+                "activation_method": {
+                  "type": "string",
+                  "enum": [
+                    "otaa",
+                    "abp",
+                    "bootstrap_profile"
+                  ]
+                },
+                "credentials": {
+                  "type": "object",
+                  "properties": {
+                    "app_key": {
+                      "type": "string"
+                    },
+                    "nwk_key": {
+                      "type": "string"
+                    },
+                    "bootstrap_profile_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "tags": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "device_eui",
+                "activation_method"
+              ]
+            }
+          }
+        },
+        "required": [
+          "partner_id",
+          "tenant_id",
+          "group_name",
+          "network_profile_id"
+        ]
+      },
+      "returns": "Device group object with device_group_id, summary of enrolled devices, and default policies."
+    },
+    {
+      "name": "bulk_onboard_devices",
+      "description": "Bulk onboard or update devices into a device group, with per-device status and error reporting.",
+      "stage": "device_onboarding",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "partner_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "device_group_id": {
+            "type": "string"
+          },
+          "operation_mode": {
+            "type": "string",
+            "enum": [
+              "create_only",
+              "update_only",
+              "upsert"
+            ],
+            "default": "upsert"
+          },
+          "devices": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "properties": {
+                "external_id": {
+                  "type": "string",
+                  "description": "Caller-side device identifier"
+                },
+                "device_eui": {
+                  "type": "string"
+                },
+                "serial_number": {
+                  "type": "string"
+                },
+                "activation_method": {
+                  "type": "string",
+                  "enum": [
+                    "otaa",
+                    "abp",
+                    "bootstrap_profile"
+                  ]
+                },
+                "credentials": {
+                  "type": "object",
+                  "properties": {
+                    "app_eui": {
+                      "type": "string"
+                    },
+                    "app_key": {
+                      "type": "string"
+                    },
+                    "dev_addr": {
+                      "type": "string"
+                    },
+                    "nwk_s_key": {
+                      "type": "string"
+                    },
+                    "app_s_key": {
+                      "type": "string"
+                    },
+                    "bootstrap_profile_id": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "metadata": {
+                  "type": "object",
+                  "properties": {
+                    "model": {
+                      "type": "string"
+                    },
+                    "manufacturer": {
+                      "type": "string"
+                    },
+                    "firmware_version": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "tags": {
+                  "type": "object",
+                  "additionalProperties": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "device_eui",
+                "activation_method"
+              ]
+            }
+          },
+          "async": {
+            "type": "boolean",
+            "description": "Whether to process onboarding asynchronously.",
+            "default": true
+          }
+        },
+        "required": [
+          "partner_id",
+          "tenant_id",
+          "device_group_id",
+          "devices"
+        ]
+      },
+      "returns": "If async=true, returns an operation reference (operation_id) to track progress; otherwise returns per-device result statuses."
+    },
+    {
+      "name": "get_operation_status",
+      "description": "Retrieve status and partial results of a long-running operation, such as bulk device onboarding.",
+      "stage": "operations",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "include_details": {
+            "type": "boolean",
+            "default": false
+          },
+          "detail_page": {
+            "type": "object",
+            "description": "Pagination for detailed result entries when include_details=true.",
+            "properties": {
+              "page": {
+                "type": "integer",
+                "default": 1
+              },
+              "page_size": {
+                "type": "integer",
+                "default": 100,
+                "maximum": 1000
+              },
+              "status_filter": {
+                "type": "string",
+                "enum": [
+                  "pending",
+                  "succeeded",
+                  "failed"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "operation_id"
+        ]
+      },
+      "returns": "Operation status with progress percentage, high-level summary, and optionally paginated detailed results."
+    },
+    {
+      "name": "get_partner_overview",
+      "description": "Retrieve a consolidated overview of a partner including tenants, usage summary, billing status, and active incidents.",
+      "stage": "management",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "partner_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "tenants",
+                "usage_summary",
+                "billing_profiles",
+                "network_profiles",
+                "open_incidents"
+              ]
+            }
+          }
+        },
+        "required": [
+          "partner_id"
+        ]
+      },
+      "returns": "Partner overview including partner profile, list of tenants, aggregated usage, billing status, and any open incidents."
+    },
+    {
+      "name": "get_tenant_usage",
+      "description": "Get detailed usage metrics and quota status for a tenant over a specified time window.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "partner_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "time_window": {
+            "type": "object",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "preset": {
+                "type": "string",
+                "enum": [
+                  "last_24h",
+                  "last_7d",
+                  "last_30d",
+                  "current_billing_period"
+                ],
+                "description": "Mutually exclusive with from/to; if set, from/to can be omitted."
+              }
+            }
+          },
+          "granularity": {
+            "type": "string",
+            "enum": [
+              "hour",
+              "day",
+              "month"
+            ],
+            "default": "day"
+          },
+          "include_breakdown": {
+            "type": "array",
+            "description": "Specify dimensions to break down usage by.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "device_group",
+                "lpwan_technology",
+                "region"
+              ]
+            }
+          }
+        },
+        "required": [
+          "partner_id",
+          "tenant_id"
+        ]
+      },
+      "returns": "Usage report with total and time-series metrics (messages, data volume, active devices), quota status, and optional breakdowns."
+    },
+    {
+      "name": "update_partner_status",
+      "description": "Suspend, resume, or decommission a partner or specific tenant, with optional reason and effective schedule.",
+      "stage": "lifecycle",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "target_type": {
+            "type": "string",
+            "enum": [
+              "partner",
+              "tenant"
+            ]
+          },
+          "partner_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string",
+            "description": "Required when target_type=tenant"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "suspend",
+              "resume",
+              "decommission"
+            ]
+          },
+          "reason_code": {
+            "type": "string",
+            "enum": [
+              "non_payment",
+              "security_issue",
+              "contract_end",
+              "requested_by_partner",
+              "other"
+            ]
+          },
+          "reason_details": {
+            "type": "string"
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Optional scheduling of the lifecycle action.",
+            "properties": {
+              "effective_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "If omitted, action is applied immediately."
+              },
+              "grace_period_hours": {
+                "type": "integer",
+                "description": "Optional grace period before full enforcement."
+              }
+            }
+          },
+          "cascade_to_tenants": {
+            "type": "boolean",
+            "description": "When target_type=partner and suspending/decommissioning, cascade to all tenants.",
+            "default": true
+          }
+        },
+        "required": [
+          "target_type",
+          "partner_id",
+          "action"
+        ]
+      },
+      "returns": "Lifecycle update result with current and scheduled status, and any affected tenants or device groups."
+    },
+    {
+      "name": "raise_connectivity_incident",
+      "description": "Create an incident related to LPWAN connectivity for a partner or tenant, optionally attaching samples and proposed mitigations.",
+      "stage": "support",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "partner_id": {
+            "type": "string"
+          },
+          "tenant_id": {
+            "type": "string"
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "sev1",
+              "sev2",
+              "sev3",
+              "sev4"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "uplink_loss",
+              "downlink_failure",
+              "latency_spike",
+              "provisioning_error",
+              "billing_discrepancy",
+              "other"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "impacted_scope": {
+            "type": "object",
+            "properties": {
+              "lpwan_technologies": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "lorawan",
+                    "sigfox",
+                    "lte_m",
+                    "nb_iot"
+                  ]
+                }
+              },
+              "regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "device_groups": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "description": "device_group_id"
+                }
+              }
+            }
+          },
+          "attachments": {
+            "type": "array",
+            "description": "Optional references to sample messages, logs, or dashboards.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "uplink_sample",
+                    "event_log",
+                    "screenshot",
+                    "other"
+                  ]
+                },
+                "reference_id": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "type",
+                "reference_id"
+              ]
+            }
+          },
+          "preferred_communication_channel": {
+            "type": "string",
+            "enum": [
+              "email",
+              "portal",
+              "phone",
+              "slack"
+            ],
+            "default": "portal"
+          }
+        },
+        "required": [
+          "partner_id",
+          "severity",
+          "category",
+          "title",
+          "description"
+        ]
+      },
+      "returns": "Incident record with incident_id, initial status, assigned support queue, and SLA targets."
+    },
+    {
+      "name": "retry_or_rollback_operation",
+      "description": "Retry a failed operation (e.g., bulk onboarding) or rollback its partial effects when supported.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "operation_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "retry",
+              "rollback"
+            ]
+          },
+          "retry_policy": {
+            "type": "object",
+            "description": "Optional fine-grained retry configuration when action=retry.",
+            "properties": {
+              "max_attempts": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 10
+              },
+              "backoff_strategy": {
+                "type": "string",
+                "enum": [
+                  "fixed",
+                  "exponential"
+                ]
+              },
+              "backoff_seconds": {
+                "type": "integer"
+              },
+              "retry_failed_only": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "rollback_options": {
+            "type": "object",
+            "description": "Optional rollback options when action=rollback.",
+            "properties": {
+              "preserve_successful_items": {
+                "type": "boolean",
+                "default": true
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "operation_id",
+          "action"
+        ]
+      },
+      "returns": "New or updated operation reference describing the retry or rollback process, including new operation_id if forked."
+    }
+  ]
+}

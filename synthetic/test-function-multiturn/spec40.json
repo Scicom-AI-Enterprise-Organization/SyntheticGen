@@ -1,0 +1,1373 @@
+{
+  "workflow_name": "sd_wan_service_lifecycle",
+  "description": "End-to-end lifecycle management of a B2B SD-WAN service, from design and quoting through provisioning, activation, modification, monitoring, and decommissioning.",
+  "domain": "telco_b2b/sd_wan_service",
+  "shared_entities": {
+    "customer_id": {
+      "type": "string",
+      "description": "Unique identifier of the business customer (enterprise account)."
+    },
+    "site_id": {
+      "type": "string",
+      "description": "Unique identifier for a customer site/location."
+    },
+    "topology_id": {
+      "type": "string",
+      "description": "Identifier for an SD-WAN topology design (e.g., hub-and-spoke)."
+    },
+    "design_id": {
+      "type": "string",
+      "description": "Identifier for a specific SD-WAN network design proposal."
+    },
+    "quote_id": {
+      "type": "string",
+      "description": "Identifier for a commercial quote associated with an SD-WAN design."
+    },
+    "service_order_id": {
+      "type": "string",
+      "description": "Identifier for a service order representing a requested SD-WAN deployment or change."
+    },
+    "service_id": {
+      "type": "string",
+      "description": "Identifier for an instantiated SD-WAN service (live or in-progress)."
+    },
+    "change_request_id": {
+      "type": "string",
+      "description": "Identifier for a change request against an existing SD-WAN service."
+    },
+    "device_id": {
+      "type": "string",
+      "description": "Unique identifier for a CPE or edge device used in the SD-WAN solution."
+    },
+    "ticket_id": {
+      "type": "string",
+      "description": "Identifier for a support or incident ticket related to the SD-WAN service."
+    }
+  },
+  "functions": [
+    {
+      "name": "design_sd_wan_topology",
+      "description": "Create a high-level SD-WAN topology design for a customer, including sites, bandwidth, and redundancy requirements.",
+      "stage": "design",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "description": "Customer for whom the topology is being designed."
+          },
+          "name": {
+            "type": "string",
+            "description": "Human-readable name of the topology design."
+          },
+          "topology_type": {
+            "type": "string",
+            "description": "Overall logical topology.",
+            "enum": [
+              "hub_and_spoke",
+              "full_mesh",
+              "partial_mesh",
+              "dual_hub",
+              "custom"
+            ]
+          },
+          "sites": {
+            "type": "array",
+            "description": "List of sites to be included in the topology.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "site_id": {
+                  "type": "string",
+                  "description": "Existing site identifier, if already registered."
+                },
+                "external_site_ref": {
+                  "type": "string",
+                  "description": "External reference for the site (e.g., CRM or address ID)."
+                },
+                "role": {
+                  "type": "string",
+                  "description": "Role of the site in the topology.",
+                  "enum": [
+                    "hub",
+                    "spoke",
+                    "data_center",
+                    "internet_breakout",
+                    "branch"
+                  ]
+                },
+                "bandwidth_profile": {
+                  "type": "object",
+                  "description": "Requested WAN bandwidth profile for this site.",
+                  "properties": {
+                    "access_type": {
+                      "type": "string",
+                      "enum": [
+                        "mpls",
+                        "internet_broadband",
+                        "lte",
+                        "fiber",
+                        "satellite"
+                      ]
+                    },
+                    "primary_down_mbps": {
+                      "type": "number"
+                    },
+                    "primary_up_mbps": {
+                      "type": "number"
+                    },
+                    "backup_down_mbps": {
+                      "type": "number"
+                    },
+                    "backup_up_mbps": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "access_type",
+                    "primary_down_mbps",
+                    "primary_up_mbps"
+                  ]
+                },
+                "redundancy": {
+                  "type": "object",
+                  "description": "Redundancy and high availability options for the site.",
+                  "properties": {
+                    "ha_pair": {
+                      "type": "boolean",
+                      "description": "Whether high-availability CPE pair is required."
+                    },
+                    "dual_uplink": {
+                      "type": "boolean",
+                      "description": "Whether dual uplink (primary+backup underlay) is required."
+                    },
+                    "underlay_diversity": {
+                      "type": "string",
+                      "description": "Level of physical path or provider diversity requested.",
+                      "enum": [
+                        "none",
+                        "same_provider_diverse_path",
+                        "dual_provider"
+                      ]
+                    }
+                  }
+                }
+              },
+              "required": [
+                "role",
+                "bandwidth_profile"
+              ]
+            }
+          },
+          "policies": {
+            "type": "array",
+            "description": "High-level policies to be applied in the design.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "policy_type": {
+                  "type": "string",
+                  "enum": [
+                    "application_qos",
+                    "security",
+                    "routing",
+                    "internet_breakout"
+                  ]
+                },
+                "priority": {
+                  "type": "integer",
+                  "description": "Relative policy priority (lower is higher priority)."
+                },
+                "details": {
+                  "type": "object",
+                  "description": "Policy-specific configuration payload."
+                }
+              },
+              "required": [
+                "policy_type"
+              ]
+            }
+          },
+          "constraints": {
+            "type": "object",
+            "description": "Design constraints such as max latency or cloud region preferences.",
+            "properties": {
+              "latency_ms_max": {
+                "type": "number"
+              },
+              "preferred_cloud_regions": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "carrier_preferences": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "tags": {
+            "type": "object",
+            "description": "Arbitrary key-value tags for the design.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "customer_id",
+          "name",
+          "topology_type",
+          "sites"
+        ]
+      },
+      "returns": "Created topology and design metadata including topology_id and design_id."
+    },
+    {
+      "name": "validate_sd_wan_design",
+      "description": "Validate an SD-WAN design for technical feasibility, policy consistency, and capacity constraints.",
+      "stage": "design",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "design_id": {
+            "type": "string",
+            "description": "Identifier of the design to validate."
+          },
+          "validation_profile": {
+            "type": "string",
+            "description": "Depth and strictness of validation.",
+            "enum": [
+              "basic",
+              "standard",
+              "strict"
+            ]
+          },
+          "checks": {
+            "type": "object",
+            "description": "Optional fine-grained control of validation checks.",
+            "properties": {
+              "capacity": {
+                "type": "boolean",
+                "default": true
+              },
+              "policy_conflicts": {
+                "type": "boolean",
+                "default": true
+              },
+              "device_models": {
+                "type": "boolean",
+                "default": true
+              },
+              "underlay_availability": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          }
+        },
+        "required": [
+          "design_id"
+        ]
+      },
+      "returns": "Validation result with pass/fail status, list of issues, and suggested remediations."
+    },
+    {
+      "name": "generate_sd_wan_quote",
+      "description": "Generate a commercial quote for a validated SD-WAN design including recurring and non-recurring charges.",
+      "stage": "quote",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "design_id": {
+            "type": "string",
+            "description": "Design for which to generate the quote."
+          },
+          "term_months": {
+            "type": "integer",
+            "description": "Contract term in months.",
+            "enum": [
+              12,
+              24,
+              36,
+              48,
+              60
+            ]
+          },
+          "currency": {
+            "type": "string",
+            "description": "ISO currency code for pricing.",
+            "enum": [
+              "USD",
+              "EUR",
+              "GBP",
+              "SGD",
+              "AUD"
+            ]
+          },
+          "discounts": {
+            "type": "object",
+            "description": "Optional discounting parameters to apply.",
+            "properties": {
+              "partner_tier": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "silver",
+                  "gold",
+                  "platinum"
+                ]
+              },
+              "special_discount_pct": {
+                "type": "number",
+                "description": "Additional manual discount percentage.",
+                "minimum": 0,
+                "maximum": 50
+              },
+              "promo_codes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "quote_options": {
+            "type": "array",
+            "description": "Different option bundles to include in the quote.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "option_id": {
+                  "type": "string",
+                  "description": "Logical identifier for the quote option."
+                },
+                "description": {
+                  "type": "string"
+                },
+                "include_security_addon": {
+                  "type": "boolean",
+                  "default": false
+                },
+                "include_managed_service": {
+                  "type": "boolean",
+                  "default": true
+                },
+                "sla_tier": {
+                  "type": "string",
+                  "enum": [
+                    "standard",
+                    "enhanced",
+                    "premium"
+                  ]
+                }
+              },
+              "required": [
+                "option_id",
+                "sla_tier"
+              ]
+            }
+          }
+        },
+        "required": [
+          "design_id",
+          "term_months",
+          "currency"
+        ]
+      },
+      "returns": "Quote details including quote_id, line items, totals, and per-option pricing breakdown."
+    },
+    {
+      "name": "create_sd_wan_service_order",
+      "description": "Create a service order to provision an SD-WAN service based on an approved quote.",
+      "stage": "order",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "quote_id": {
+            "type": "string",
+            "description": "Approved quote on which the service order is based."
+          },
+          "customer_id": {
+            "type": "string",
+            "description": "Customer placing the order (for verification)."
+          },
+          "selected_option_id": {
+            "type": "string",
+            "description": "Identifier of the quote option selected by the customer."
+          },
+          "purchase_order_ref": {
+            "type": "string",
+            "description": "Customer purchase order reference."
+          },
+          "requested_start_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Requested service activation start date."
+          },
+          "contact_info": {
+            "type": "object",
+            "description": "Primary contact for implementation and escalations.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "phone": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "it_manager",
+                  "network_engineer",
+                  "procurement",
+                  "other"
+                ]
+              }
+            },
+            "required": [
+              "name",
+              "email"
+            ]
+          },
+          "site_contact_overrides": {
+            "type": "array",
+            "description": "Optional per-site contact details for installation.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "site_id": {
+                  "type": "string"
+                },
+                "contact": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "email": {
+                      "type": "string"
+                    },
+                    "phone": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "phone"
+                  ]
+                }
+              },
+              "required": [
+                "site_id",
+                "contact"
+              ]
+            }
+          },
+          "implementation_preferences": {
+            "type": "object",
+            "description": "Preferences regarding deployment windows and approach.",
+            "properties": {
+              "change_windows": {
+                "type": "array",
+                "description": "Preferred weekly change windows per site or global.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "scope": {
+                      "type": "string",
+                      "enum": [
+                        "global",
+                        "site"
+                      ]
+                    },
+                    "site_id": {
+                      "type": "string"
+                    },
+                    "weekday": {
+                      "type": "string",
+                      "enum": [
+                        "mon",
+                        "tue",
+                        "wed",
+                        "thu",
+                        "fri",
+                        "sat",
+                        "sun"
+                      ]
+                    },
+                    "start_time_local": {
+                      "type": "string",
+                      "description": "Start time in HH:MM format."
+                    },
+                    "duration_minutes": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "scope",
+                    "weekday",
+                    "start_time_local",
+                    "duration_minutes"
+                  ]
+                }
+              },
+              "migration_strategy": {
+                "type": "string",
+                "enum": [
+                  "big_bang",
+                  "phased_by_site",
+                  "pilot_then_rollout"
+                ]
+              }
+            }
+          },
+          "tags": {
+            "type": "object",
+            "description": "Free-form tags for the service order.",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "quote_id",
+          "customer_id",
+          "selected_option_id",
+          "contact_info"
+        ]
+      },
+      "returns": "Service order details including service_order_id, initial status, and target milestones."
+    },
+    {
+      "name": "check_site_eligibility_and_inventory",
+      "description": "Check underlay access eligibility and CPE inventory availability for each site in a service order.",
+      "stage": "feasibility",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "service_order_id": {
+            "type": "string",
+            "description": "Service order to check eligibility for."
+          },
+          "sites": {
+            "type": "array",
+            "description": "Optional subset of sites to check. If omitted, all sites in the order are checked.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "site_id": {
+                  "type": "string"
+                },
+                "override_access_options": {
+                  "type": "array",
+                  "description": "Optional access underlay overrides to consider.",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "access_type": {
+                        "type": "string",
+                        "enum": [
+                          "mpls",
+                          "internet_broadband",
+                          "lte",
+                          "fiber",
+                          "satellite"
+                        ]
+                      },
+                      "min_down_mbps": {
+                        "type": "number"
+                      },
+                      "min_up_mbps": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "access_type"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "site_id"
+              ]
+            }
+          },
+          "check_device_inventory": {
+            "type": "boolean",
+            "description": "If true, also verify CPE/edge device inventory for each site.",
+            "default": true
+          }
+        },
+        "required": [
+          "service_order_id"
+        ]
+      },
+      "returns": "Per-site eligibility report with feasible underlay options, lead times, and inventory status."
+    },
+    {
+      "name": "provision_sd_wan_service",
+      "description": "Trigger provisioning of an SD-WAN service from a service order, including CPE assignment and controller configuration.",
+      "stage": "provision",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "service_order_id": {
+            "type": "string",
+            "description": "Service order to be provisioned."
+          },
+          "provisioning_mode": {
+            "type": "string",
+            "description": "Provisioning execution mode.",
+            "enum": [
+              "full_auto",
+              "manual_approval_per_site",
+              "pilot_then_auto"
+            ]
+          },
+          "pilot_sites": {
+            "type": "array",
+            "description": "If using pilot mode, list of site_ids to provision first.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "device_allocation_policy": {
+            "type": "object",
+            "description": "Policy guiding how CPE devices are allocated.",
+            "properties": {
+              "preferred_models": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "allow_refurbished": {
+                "type": "boolean",
+                "default": false
+              },
+              "ship_from_region": {
+                "type": "string",
+                "description": "Preferred logistics/warehouse region."
+              }
+            }
+          },
+          "config_templates": {
+            "type": "object",
+            "description": "Optional configuration template references.",
+            "properties": {
+              "global_template_id": {
+                "type": "string"
+              },
+              "site_overrides": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "site_id": {
+                      "type": "string"
+                    },
+                    "template_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "site_id",
+                    "template_id"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "service_order_id",
+          "provisioning_mode"
+        ]
+      },
+      "returns": "Provisioning job details including service_id, per-site provisioning tasks, and overall provisioning status."
+    },
+    {
+      "name": "get_service_and_order_status",
+      "description": "Retrieve current status for a service order and its associated SD-WAN service, including per-site milestones.",
+      "stage": "status",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "service_order_id": {
+            "type": "string",
+            "description": "Service order identifier. Either this or service_id must be provided."
+          },
+          "service_id": {
+            "type": "string",
+            "description": "SD-WAN service identifier. Either this or service_order_id must be provided."
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional details to include in the response.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "per_site_status",
+                "tasks",
+                "audit_log",
+                "billing_status"
+              ]
+            }
+          }
+        },
+        "anyOf": [
+          {
+            "required": [
+              "service_order_id"
+            ]
+          },
+          {
+            "required": [
+              "service_id"
+            ]
+          }
+        ]
+      },
+      "returns": "Aggregated order and service status, milestones, and optional detailed sections as requested."
+    },
+    {
+      "name": "activate_sd_wan_service",
+      "description": "Perform activation of the SD-WAN service or selected sites after provisioning is completed and site readiness is confirmed.",
+      "stage": "activation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "service_id": {
+            "type": "string",
+            "description": "Identifier of the SD-WAN service to activate."
+          },
+          "activation_scope": {
+            "type": "string",
+            "description": "Whether to activate the entire service or specific sites.",
+            "enum": [
+              "full_service",
+              "selected_sites"
+            ]
+          },
+          "site_ids": {
+            "type": "array",
+            "description": "If scope is selected_sites, list of site_ids to activate.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "pre_activation_checks": {
+            "type": "object",
+            "description": "Checks to perform prior to activation.",
+            "properties": {
+              "wan_link_health": {
+                "type": "boolean",
+                "default": true
+              },
+              "overlay_reachability": {
+                "type": "boolean",
+                "default": true
+              },
+              "config_drift": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "activation_window": {
+            "type": "object",
+            "description": "Optional activation time window.",
+            "properties": {
+              "start_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "end_time": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "timezone": {
+                "type": "string"
+              }
+            }
+          },
+          "rollback_on_failure": {
+            "type": "boolean",
+            "description": "Automatically rollback configuration if activation fails.",
+            "default": true
+          }
+        },
+        "required": [
+          "service_id",
+          "activation_scope"
+        ]
+      },
+      "returns": "Activation result including per-site activation status, timestamps, and any rollback operations executed."
+    },
+    {
+      "name": "submit_service_change_request",
+      "description": "Submit a change request for an existing SD-WAN service (e.g., add site, change bandwidth, modify policy).",
+      "stage": "change",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "service_id": {
+            "type": "string",
+            "description": "Existing SD-WAN service identifier."
+          },
+          "change_type": {
+            "type": "string",
+            "description": "Type of change being requested.",
+            "enum": [
+              "add_site",
+              "remove_site",
+              "change_bandwidth",
+              "change_policy",
+              "hardware_upgrade",
+              "other"
+            ]
+          },
+          "requested_effective_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Requested effective date/time for the change."
+          },
+          "change_details": {
+            "type": "object",
+            "description": "Polymorphic details object depending on change_type.",
+            "properties": {
+              "add_site": {
+                "type": "object",
+                "properties": {
+                  "site": {
+                    "type": "object",
+                    "description": "New site definition to add.",
+                    "properties": {
+                      "external_site_ref": {
+                        "type": "string"
+                      },
+                      "role": {
+                        "type": "string",
+                        "enum": [
+                          "hub",
+                          "spoke",
+                          "branch",
+                          "internet_breakout"
+                        ]
+                      },
+                      "bandwidth_profile": {
+                        "type": "object",
+                        "properties": {
+                          "access_type": {
+                            "type": "string",
+                            "enum": [
+                              "mpls",
+                              "internet_broadband",
+                              "lte",
+                              "fiber"
+                            ]
+                          },
+                          "primary_down_mbps": {
+                            "type": "number"
+                          },
+                          "primary_up_mbps": {
+                            "type": "number"
+                          }
+                        },
+                        "required": [
+                          "access_type",
+                          "primary_down_mbps",
+                          "primary_up_mbps"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "role",
+                      "bandwidth_profile"
+                    ]
+                  }
+                },
+                "required": [
+                  "site"
+                ]
+              },
+              "change_bandwidth": {
+                "type": "object",
+                "properties": {
+                  "site_id": {
+                    "type": "string"
+                  },
+                  "new_bandwidth_profile": {
+                    "type": "object",
+                    "properties": {
+                      "primary_down_mbps": {
+                        "type": "number"
+                      },
+                      "primary_up_mbps": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "primary_down_mbps",
+                      "primary_up_mbps"
+                    ]
+                  }
+                },
+                "required": [
+                  "site_id",
+                  "new_bandwidth_profile"
+                ]
+              },
+              "change_policy": {
+                "type": "object",
+                "properties": {
+                  "policy_id": {
+                    "type": "string"
+                  },
+                  "new_policy_payload": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "policy_id",
+                  "new_policy_payload"
+                ]
+              },
+              "other": {
+                "type": "object",
+                "properties": {
+                  "description": {
+                    "type": "string"
+                  },
+                  "payload": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "description"
+                ]
+              }
+            }
+          },
+          "approval_info": {
+            "type": "object",
+            "description": "Optional internal approval context for the change.",
+            "properties": {
+              "requested_by": {
+                "type": "string"
+              },
+              "approved_by": {
+                "type": "string"
+              },
+              "approval_reference": {
+                "type": "string"
+              }
+            }
+          },
+          "customer_impact_level": {
+            "type": "string",
+            "enum": [
+              "none",
+              "low",
+              "medium",
+              "high"
+            ]
+          }
+        },
+        "required": [
+          "service_id",
+          "change_type",
+          "change_details"
+        ]
+      },
+      "returns": "Change request record including change_request_id, preliminary impact assessment, and required approvals."
+    },
+    {
+      "name": "retry_or_rollback_provisioning_step",
+      "description": "Retry a failed provisioning or activation step or rollback to a previous configuration state.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "service_id": {
+            "type": "string",
+            "description": "Service whose provisioning step is being retried or rolled back."
+          },
+          "site_id": {
+            "type": "string",
+            "description": "Optional site scope for the recovery action."
+          },
+          "action": {
+            "type": "string",
+            "description": "Recovery action to perform.",
+            "enum": [
+              "retry_step",
+              "rollback_to_previous_config",
+              "force_complete_with_warnings"
+            ]
+          },
+          "target_step_id": {
+            "type": "string",
+            "description": "Identifier of the specific workflow step to retry or rollback from."
+          },
+          "rollback_options": {
+            "type": "object",
+            "description": "Options for rollback actions.",
+            "properties": {
+              "preserve_device_registration": {
+                "type": "boolean",
+                "default": true
+              },
+              "rollback_underlay_changes": {
+                "type": "boolean",
+                "default": false
+              },
+              "config_version_id": {
+                "type": "string",
+                "description": "Specific configuration version to rollback to, if applicable."
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Explanation of why the recovery action is being triggered."
+          },
+          "initiated_by": {
+            "type": "string",
+            "description": "User or system that initiated the recovery operation."
+          }
+        },
+        "required": [
+          "service_id",
+          "action"
+        ]
+      },
+      "returns": "Recovery operation status, updated per-site state, and references to new or restored configuration versions."
+    },
+    {
+      "name": "monitor_sd_wan_service_health",
+      "description": "Retrieve operational health and performance metrics for an SD-WAN service and its sites.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "service_id": {
+            "type": "string",
+            "description": "SD-WAN service identifier to monitor."
+          },
+          "time_range": {
+            "type": "object",
+            "description": "Time range for metrics retrieval.",
+            "properties": {
+              "from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "preset": {
+                "type": "string",
+                "description": "Alternative to from/to, common presets.",
+                "enum": [
+                  "last_1h",
+                  "last_24h",
+                  "last_7d",
+                  "last_30d"
+                ]
+              }
+            }
+          },
+          "sites": {
+            "type": "array",
+            "description": "Optional list of site_ids to filter metrics, otherwise all sites.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "metric_groups": {
+            "type": "array",
+            "description": "Metric groups to include.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "availability",
+                "latency_jitter_loss",
+                "bandwidth_utilization",
+                "application_performance",
+                "security_events"
+              ]
+            }
+          },
+          "aggregation": {
+            "type": "object",
+            "description": "Aggregation options for the metrics.",
+            "properties": {
+              "interval": {
+                "type": "string",
+                "enum": [
+                  "1m",
+                  "5m",
+                  "15m",
+                  "1h"
+                ]
+              },
+              "functions": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "avg",
+                    "p95",
+                    "max",
+                    "min"
+                  ]
+                }
+              }
+            }
+          },
+          "include_alerts": {
+            "type": "boolean",
+            "description": "If true, include active and recent alerts in the response.",
+            "default": true
+          }
+        },
+        "required": [
+          "service_id"
+        ]
+      },
+      "returns": "Service health summary, per-site metrics timeseries, and any relevant alerts for the selected time range."
+    },
+    {
+      "name": "open_sd_wan_support_ticket",
+      "description": "Open a support or incident ticket related to an SD-WAN service, optionally linking to specific sites or devices.",
+      "stage": "support",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "customer_id": {
+            "type": "string",
+            "description": "Customer opening the ticket."
+          },
+          "service_id": {
+            "type": "string",
+            "description": "Related SD-WAN service, if applicable."
+          },
+          "site_id": {
+            "type": "string",
+            "description": "Specific site impacted, if applicable."
+          },
+          "device_id": {
+            "type": "string",
+            "description": "Specific device impacted, if applicable."
+          },
+          "severity": {
+            "type": "string",
+            "enum": [
+              "sev1",
+              "sev2",
+              "sev3",
+              "sev4"
+            ]
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "connectivity",
+              "performance",
+              "security",
+              "configuration",
+              "billing",
+              "other"
+            ]
+          },
+          "summary": {
+            "type": "string",
+            "description": "Short summary of the issue."
+          },
+          "description": {
+            "type": "string",
+            "description": "Detailed problem description."
+          },
+          "attachments": {
+            "type": "array",
+            "description": "Optional list of attachments or references (e.g., log bundle IDs).",
+            "items": {
+              "type": "object",
+              "properties": {
+                "type": {
+                  "type": "string",
+                  "enum": [
+                    "log_bundle",
+                    "screenshot",
+                    "pcap",
+                    "other"
+                  ]
+                },
+                "reference": {
+                  "type": "string",
+                  "description": "Identifier or URL for the attachment."
+                }
+              },
+              "required": [
+                "type",
+                "reference"
+              ]
+            }
+          },
+          "callback_contact": {
+            "type": "object",
+            "description": "Contact details for ticket communications.",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "phone": {
+                "type": "string"
+              },
+              "timezone": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "name",
+              "email"
+            ]
+          }
+        },
+        "required": [
+          "customer_id",
+          "severity",
+          "category",
+          "summary",
+          "description",
+          "callback_contact"
+        ]
+      },
+      "returns": "Ticket record with ticket_id, initial status, and SLA response/restore targets."
+    },
+    {
+      "name": "decommission_sd_wan_service",
+      "description": "Schedule and execute decommissioning of an SD-WAN service or specific sites, including cleanup of configuration and devices.",
+      "stage": "retire",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "service_id": {
+            "type": "string",
+            "description": "Service to be decommissioned."
+          },
+          "scope": {
+            "type": "string",
+            "description": "Decommission scope.",
+            "enum": [
+              "full_service",
+              "selected_sites"
+            ]
+          },
+          "site_ids": {
+            "type": "array",
+            "description": "If scope is selected_sites, the sites to decommission.",
+            "items": {
+              "type": "string"
+            }
+          },
+          "effective_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Planned decommission date and time."
+          },
+          "billing_stop_date": {
+            "type": "string",
+            "format": "date-time",
+            "description": "Date when billing should stop; defaults to effective_date."
+          },
+          "device_handling": {
+            "type": "object",
+            "description": "Instructions for handling CPE devices.",
+            "properties": {
+              "return_required": {
+                "type": "boolean",
+                "default": true
+              },
+              "return_method": {
+                "type": "string",
+                "enum": [
+                  "courier_pickup",
+                  "customer_ship",
+                  "recycle_on_site",
+                  "retain"
+                ]
+              },
+              "shipping_address": {
+                "type": "object",
+                "description": "Address for device return if applicable.",
+                "properties": {
+                  "company": {
+                    "type": "string"
+                  },
+                  "street": {
+                    "type": "string"
+                  },
+                  "city": {
+                    "type": "string"
+                  },
+                  "state": {
+                    "type": "string"
+                  },
+                  "postal_code": {
+                    "type": "string"
+                  },
+                  "country": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "data_retention": {
+            "type": "object",
+            "description": "Preferences regarding retention of logs, configs, and historical data.",
+            "properties": {
+              "retain_config_days": {
+                "type": "integer"
+              },
+              "retain_metrics_days": {
+                "type": "integer"
+              },
+              "anonymize_after_retention": {
+                "type": "boolean",
+                "default": true
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for decommission (e.g., contract end, migration, cost saving)."
+          },
+          "require_approval": {
+            "type": "boolean",
+            "description": "If true, decommission will be staged pending explicit approval.",
+            "default": true
+          }
+        },
+        "required": [
+          "service_id",
+          "scope"
+        ]
+      },
+      "returns": "Decommission plan and job status, including impacted sites, device handling instructions, and key dates."
+    }
+  ]
+}

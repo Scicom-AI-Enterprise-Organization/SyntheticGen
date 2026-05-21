@@ -1,0 +1,1154 @@
+{
+  "workflow_name": "alarm_lifecycle_management",
+  "description": "End-to-end lifecycle management of telco network alarms, from ingestion and correlation through enrichment, assignment, remediation, and closure, including retries and rollbacks.",
+  "domain": "telco_assurance/alarm_management",
+  "shared_entities": {
+    "alarm_id": {
+      "type": "string",
+      "description": "Globally unique identifier for an alarm instance"
+    },
+    "correlation_group_id": {
+      "type": "string",
+      "description": "Identifier for a correlated group of related alarms (incident/case)"
+    },
+    "device_ref": {
+      "type": "object",
+      "description": "Reference to a network element or service instance affected by the alarm",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "physical_device",
+            "virtual_function",
+            "service_instance",
+            "cell_site",
+            "transport_link",
+            "customer_endpoint"
+          ]
+        },
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the referenced entity (e.g., NE ID, VNF ID, service ID)"
+        },
+        "vendor": {
+          "type": "string",
+          "description": "Vendor name if applicable (e.g., Nokia, Ericsson, Cisco)"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model or type of the network entity"
+        },
+        "location": {
+          "type": "object",
+          "description": "Physical or logical location information",
+          "properties": {
+            "site_id": {
+              "type": "string"
+            },
+            "region": {
+              "type": "string"
+            },
+            "rack": {
+              "type": "string"
+            },
+            "shelf": {
+              "type": "string"
+            },
+            "slot": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ]
+    },
+    "user_ref": {
+      "type": "object",
+      "description": "Reference to an operator or system user",
+      "properties": {
+        "user_id": {
+          "type": "string"
+        },
+        "display_name": {
+          "type": "string"
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "noc_engineer",
+            "field_engineer",
+            "automation_bot",
+            "shift_lead",
+            "system_admin"
+          ]
+        }
+      },
+      "required": [
+        "user_id"
+      ]
+    },
+    "remediation_action_id": {
+      "type": "string",
+      "description": "Identifier for a remediation workflow execution"
+    }
+  },
+  "functions": [
+    {
+      "name": "ingest_alarm",
+      "description": "Ingest a new raw alarm or update from network exposure or element manager and normalize it into the assurance system.",
+      "stage": "ingest",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "source": {
+            "type": "object",
+            "description": "Origin of the alarm event",
+            "properties": {
+              "system": {
+                "type": "string",
+                "description": "Name of the upstream system (e.g., 5g_nef, ems, oss)"
+              },
+              "adapter_id": {
+                "type": "string",
+                "description": "Identifier of the integration adapter or connector"
+              },
+              "received_at": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Timestamp when the event was received by the exposure layer"
+              },
+              "protocol": {
+                "type": "string",
+                "enum": [
+                  "rest",
+                  "snmp_trap",
+                  "syslog",
+                  "kafka",
+                  "file"
+                ]
+              }
+            },
+            "required": [
+              "system",
+              "received_at"
+            ]
+          },
+          "raw_event": {
+            "type": "object",
+            "description": "Provider-specific alarm payload as received",
+            "properties": {
+              "payload_type": {
+                "type": "string",
+                "enum": [
+                  "snmp",
+                  "json",
+                  "xml",
+                  "cef",
+                  "other"
+                ]
+              },
+              "payload": {
+                "type": "string",
+                "description": "Raw string representation of the event"
+              },
+              "headers": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                }
+              }
+            },
+            "required": [
+              "payload_type",
+              "payload"
+            ]
+          },
+          "normalized": {
+            "type": "object",
+            "description": "Optional pre-normalized information if adapter performed mapping",
+            "properties": {
+              "external_alarm_id": {
+                "type": "string",
+                "description": "Alarm identifier in the source system"
+              },
+              "perceived_severity": {
+                "type": "string",
+                "enum": [
+                  "critical",
+                  "major",
+                  "minor",
+                  "warning",
+                  "indeterminate",
+                  "cleared"
+                ]
+              },
+              "probable_cause": {
+                "type": "string"
+              },
+              "specific_problem": {
+                "type": "string"
+              },
+              "event_type": {
+                "type": "string",
+                "enum": [
+                  "communication",
+                  "quality_of_service",
+                  "processing_error",
+                  "environmental",
+                  "security",
+                  "equipment",
+                  "service"
+                ]
+              },
+              "device": {
+                "$ref": "#/shared_entities/device_ref"
+              },
+              "first_reported_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "additional_info": {
+                "type": "object",
+                "description": "Key-value map of additional normalized fields",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "deduplication_key": {
+            "type": "string",
+            "description": "Optional key used for deduplication/correlation if provided by source"
+          }
+        },
+        "required": [
+          "source",
+          "raw_event"
+        ]
+      },
+      "returns": "Created or updated alarm with alarm_id, current status, and whether it was deduplicated or new."
+    },
+    {
+      "name": "get_alarm",
+      "description": "Retrieve detailed information for a specific alarm, including enrichment, history, and relationships.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_id": {
+            "type": "string",
+            "description": "Identifier of the alarm to fetch"
+          },
+          "include": {
+            "type": "array",
+            "description": "Optional sections to include in the response",
+            "items": {
+              "type": "string",
+              "enum": [
+                "history",
+                "correlation",
+                "enrichment",
+                "related_alarms",
+                "remediations",
+                "raw_event"
+              ]
+            }
+          }
+        },
+        "required": [
+          "alarm_id"
+        ]
+      },
+      "returns": "Alarm details, including state, enrichment data, correlation context, and requested related sections."
+    },
+    {
+      "name": "search_alarms",
+      "description": "Search and list alarms with advanced filtering, pagination, and sorting.",
+      "stage": "read",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "description": "Filter criteria for alarm search",
+            "properties": {
+              "time_range": {
+                "type": "object",
+                "description": "Time window for first occurrence or last change",
+                "properties": {
+                  "field": {
+                    "type": "string",
+                    "enum": [
+                      "first_reported_at",
+                      "last_changed_at",
+                      "last_received_at"
+                    ]
+                  },
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              },
+              "severities": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "critical",
+                    "major",
+                    "minor",
+                    "warning",
+                    "indeterminate",
+                    "cleared"
+                  ]
+                }
+              },
+              "lifecycle_states": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "active",
+                    "acknowledged",
+                    "shelved",
+                    "suppressed",
+                    "cleared",
+                    "closed"
+                  ]
+                }
+              },
+              "correlation_group_id": {
+                "type": "string"
+              },
+              "device": {
+                "type": "object",
+                "description": "Device-related filters",
+                "properties": {
+                  "type": {
+                    "type": "string"
+                  },
+                  "ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "region": {
+                    "type": "string"
+                  },
+                  "site_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "is_correlated_root_cause": {
+                "type": "boolean",
+                "description": "If true, only root cause alarms are returned"
+              },
+              "assigned_to": {
+                "type": "object",
+                "description": "Assignment filters",
+                "properties": {
+                  "user_id": {
+                    "type": "string"
+                  },
+                  "group": {
+                    "type": "string"
+                  }
+                }
+              },
+              "probable_causes": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "tags": {
+                "type": "array",
+                "description": "Match alarms that contain all of these tags",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "first_reported_at",
+              "last_changed_at",
+              "severity",
+              "device_id",
+              "correlation_group_id"
+            ]
+          },
+          "sort_order": {
+            "type": "string",
+            "enum": [
+              "asc",
+              "desc"
+            ],
+            "default": "desc"
+          },
+          "page": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 50
+          }
+        }
+      },
+      "returns": "Paginated list of alarms matching the filters, including summary fields and total count."
+    },
+    {
+      "name": "correlate_alarms",
+      "description": "Run correlation on a set of alarms to create or update correlation groups (incidents).",
+      "stage": "correlate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "input_scope": {
+            "type": "object",
+            "description": "Scope of alarms to consider for correlation",
+            "properties": {
+              "alarm_ids": {
+                "type": "array",
+                "description": "Explicit list of alarm_ids to correlate; if provided, other filters are ignored.",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "search_filters": {
+                "type": "object",
+                "description": "Search filters similar to search_alarms when no explicit list is provided.",
+                "properties": {
+                  "severities": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "time_range": {
+                    "type": "object",
+                    "properties": {
+                      "from": {
+                        "type": "string",
+                        "format": "date-time"
+                      },
+                      "to": {
+                        "type": "string",
+                        "format": "date-time"
+                      }
+                    }
+                  },
+                  "device_type": {
+                    "type": "string"
+                  },
+                  "region": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "strategy": {
+            "type": "object",
+            "description": "Correlation strategy configuration",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "topology_based",
+                  "time_proximity",
+                  "service_impact",
+                  "hybrid"
+                ]
+              },
+              "max_time_gap_seconds": {
+                "type": "integer",
+                "description": "Maximum allowed time gap between alarms for time-based correlation"
+              },
+              "topology_scope": {
+                "type": "string",
+                "enum": [
+                  "same_device",
+                  "same_site",
+                  "same_service",
+                  "same_route",
+                  "global"
+                ]
+              },
+              "create_new_group_if_none": {
+                "type": "boolean",
+                "default": true
+              },
+              "existing_group_id": {
+                "type": "string",
+                "description": "If provided, candidate alarms will attempt to join this group"
+              }
+            },
+            "required": [
+              "mode"
+            ]
+          },
+          "invoked_by": {
+            "$ref": "#/shared_entities/user_ref"
+          }
+        },
+        "required": [
+          "strategy"
+        ]
+      },
+      "returns": "Correlation result including correlation_group_id(s), root cause candidate, and updated alarms."
+    },
+    {
+      "name": "enrich_alarm",
+      "description": "Enrich an alarm with contextual data such as topology, KPIs, customer impact, and runbooks.",
+      "stage": "enrich",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_id": {
+            "type": "string"
+          },
+          "enrichment_profile": {
+            "type": "string",
+            "description": "Predefined enrichment profile to apply",
+            "enum": [
+              "standard",
+              "deep_topology",
+              "customer_impact",
+              "kpi_snapshot",
+              "full"
+            ]
+          },
+          "options": {
+            "type": "object",
+            "description": "Fine-grained enrichment options",
+            "properties": {
+              "include_topology_path": {
+                "type": "boolean",
+                "default": true
+              },
+              "include_kpis": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean",
+                    "default": true
+                  },
+                  "window_minutes": {
+                    "type": "integer",
+                    "default": 15
+                  },
+                  "metrics": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "packet_loss",
+                        "latency",
+                        "throughput",
+                        "cpu_utilization",
+                        "memory_utilization",
+                        "radio_sinr",
+                        "radio_rsrp"
+                      ]
+                    }
+                  }
+                }
+              },
+              "include_customer_impact": {
+                "type": "boolean",
+                "default": false
+              },
+              "include_runbooks": {
+                "type": "boolean",
+                "default": true
+              },
+              "overwrite_existing": {
+                "type": "boolean",
+                "default": false
+              }
+            }
+          },
+          "invoked_by": {
+            "$ref": "#/shared_entities/user_ref"
+          }
+        },
+        "required": [
+          "alarm_id"
+        ]
+      },
+      "returns": "Updated alarm enrichment section including topology context, KPIs, impact analysis, and runbook suggestions."
+    },
+    {
+      "name": "acknowledge_alarm",
+      "description": "Acknowledge an alarm, optionally assign it to a user or group and add an operator note.",
+      "stage": "triage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_id": {
+            "type": "string"
+          },
+          "acknowledged_by": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "assignment": {
+            "type": "object",
+            "description": "Optional assignment details",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "user",
+                  "group",
+                  "auto"
+                ],
+                "default": "user"
+              },
+              "user_id": {
+                "type": "string"
+              },
+              "group": {
+                "type": "string"
+              }
+            }
+          },
+          "note": {
+            "type": "string",
+            "description": "Operator note explaining acknowledgement or next steps"
+          },
+          "snooze": {
+            "type": "object",
+            "description": "Optional snooze (temporary suppression) configuration",
+            "properties": {
+              "duration_minutes": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "alarm_id",
+          "acknowledged_by"
+        ]
+      },
+      "returns": "Updated alarm with acknowledgement status, assignment, and audit information."
+    },
+    {
+      "name": "run_remediation_action",
+      "description": "Trigger an automated or semi-automated remediation workflow for an alarm.",
+      "stage": "remediate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_id": {
+            "type": "string"
+          },
+          "playbook": {
+            "type": "object",
+            "description": "Remediation playbook selection and parameters",
+            "properties": {
+              "id": {
+                "type": "string",
+                "description": "Identifier of the remediation playbook"
+              },
+              "version": {
+                "type": "string"
+              },
+              "execution_mode": {
+                "type": "string",
+                "enum": [
+                  "fully_automatic",
+                  "semi_automatic",
+                  "manual_steps"
+                ]
+              },
+              "parameters": {
+                "type": "object",
+                "description": "Playbook-specific parameters (polymorphic)",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "array",
+                    "object",
+                    "null"
+                  ]
+                }
+              }
+            },
+            "required": [
+              "id",
+              "execution_mode"
+            ]
+          },
+          "target_device_override": {
+            "$ref": "#/shared_entities/device_ref"
+          },
+          "approval": {
+            "type": "object",
+            "description": "Optional approval context for controlled actions",
+            "properties": {
+              "required": {
+                "type": "boolean",
+                "default": false
+              },
+              "approved_by": {
+                "$ref": "#/shared_entities/user_ref"
+              },
+              "ticket_reference": {
+                "type": "string",
+                "description": "External change ticket or work order reference"
+              }
+            }
+          },
+          "invoked_by": {
+            "$ref": "#/shared_entities/user_ref"
+          }
+        },
+        "required": [
+          "alarm_id",
+          "playbook",
+          "invoked_by"
+        ]
+      },
+      "returns": "Remediation action execution record including remediation_action_id, initial status, and tracking information."
+    },
+    {
+      "name": "get_remediation_status",
+      "description": "Get the latest status and logs of a remediation action associated with an alarm.",
+      "stage": "remediate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "remediation_action_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "steps",
+                "logs",
+                "outputs",
+                "related_changes"
+              ]
+            }
+          }
+        },
+        "required": [
+          "remediation_action_id"
+        ]
+      },
+      "returns": "Remediation execution details including current status, step outcomes, logs, and produced artifacts."
+    },
+    {
+      "name": "retry_or_rollback_remediation",
+      "description": "Retry a failed remediation action or execute a rollback procedure if supported by the playbook.",
+      "stage": "recover",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "remediation_action_id": {
+            "type": "string",
+            "description": "Original remediation action identifier"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "retry",
+              "rollback"
+            ]
+          },
+          "retry_options": {
+            "type": "object",
+            "description": "Options when mode is retry",
+            "properties": {
+              "max_retries": {
+                "type": "integer",
+                "default": 1
+              },
+              "backoff_strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "linear",
+                  "exponential"
+                ],
+                "default": "none"
+              },
+              "initial_delay_seconds": {
+                "type": "integer",
+                "default": 0
+              },
+              "override_parameters": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "array",
+                    "object",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "rollback_options": {
+            "type": "object",
+            "description": "Options when mode is rollback",
+            "properties": {
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "playbook_defined",
+                  "inverse_actions",
+                  "custom"
+                ],
+                "default": "playbook_defined"
+              },
+              "custom_playbook_id": {
+                "type": "string",
+                "description": "Required if strategy is custom"
+              },
+              "approval": {
+                "type": "object",
+                "properties": {
+                  "approved_by": {
+                    "$ref": "#/shared_entities/user_ref"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          },
+          "invoked_by": {
+            "$ref": "#/shared_entities/user_ref"
+          }
+        },
+        "required": [
+          "remediation_action_id",
+          "mode",
+          "invoked_by"
+        ]
+      },
+      "returns": "New remediation_action_id for the retry/rollback execution and its initial status."
+    },
+    {
+      "name": "update_alarm_state",
+      "description": "Update lifecycle state, severity, or metadata of an alarm, including clearing and closing operations.",
+      "stage": "manage",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_id": {
+            "type": "string"
+          },
+          "updates": {
+            "type": "object",
+            "description": "State and metadata updates",
+            "properties": {
+              "lifecycle_state": {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "acknowledged",
+                  "shelved",
+                  "suppressed",
+                  "cleared",
+                  "closed"
+                ]
+              },
+              "perceived_severity": {
+                "type": "string",
+                "enum": [
+                  "critical",
+                  "major",
+                  "minor",
+                  "warning",
+                  "indeterminate",
+                  "cleared"
+                ]
+              },
+              "tags": {
+                "type": "object",
+                "description": "Tag management operations",
+                "properties": {
+                  "add": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "remove": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              },
+              "correlation_group_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "Set or clear correlation group"
+              },
+              "custom_fields": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": [
+                    "string",
+                    "number",
+                    "boolean",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for the change, for audit trail"
+          },
+          "updated_by": {
+            "$ref": "#/shared_entities/user_ref"
+          }
+        },
+        "required": [
+          "alarm_id",
+          "updates",
+          "updated_by"
+        ]
+      },
+      "returns": "Updated alarm record with new state, severity, and metadata."
+    },
+    {
+      "name": "suppress_or_unsuppress_alarm",
+      "description": "Apply or remove suppression policies to mute alarms from notification and escalation pipelines.",
+      "stage": "policy",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "suppress",
+              "unsuppress"
+            ]
+          },
+          "suppression_policy": {
+            "type": "object",
+            "description": "Required when action is suppress",
+            "properties": {
+              "policy_id": {
+                "type": "string"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "this_alarm_only",
+                  "same_device",
+                  "same_site",
+                  "same_correlation_group"
+                ],
+                "default": "this_alarm_only"
+              },
+              "duration_minutes": {
+                "type": "integer",
+                "description": "Suppression duration; if omitted, policy default is used."
+              },
+              "reason": {
+                "type": "string"
+              },
+              "created_by": {
+                "$ref": "#/shared_entities/user_ref"
+              }
+            }
+          }
+        },
+        "required": [
+          "alarm_id",
+          "action"
+        ]
+      },
+      "returns": "Suppression status for the alarm and any derived alarms affected by the policy."
+    },
+    {
+      "name": "get_alarm_status",
+      "description": "Retrieve a concise status view for an alarm, suitable for dashboards and health checks.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_id": {
+            "type": "string"
+          },
+          "include_health_indicators": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "alarm_id"
+        ]
+      },
+      "returns": "Compact alarm status including lifecycle state, severity, last change time, and optional health indicators."
+    },
+    {
+      "name": "close_alarm_with_verification",
+      "description": "Close an alarm after verifying that the underlying condition is resolved, optionally using network exposure checks.",
+      "stage": "resolve",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "alarm_id": {
+            "type": "string"
+          },
+          "verification": {
+            "type": "object",
+            "description": "Verification strategy before closure",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "kpi_check",
+                  "active_probe",
+                  "device_state_query",
+                  "composite"
+                ],
+                "default": "device_state_query"
+              },
+              "criteria": {
+                "type": "object",
+                "description": "Verification criteria configurable per mode",
+                "properties": {
+                  "stable_duration_minutes": {
+                    "type": "integer",
+                    "description": "No new occurrences within this window"
+                  },
+                  "kpi_thresholds": {
+                    "type": "array",
+                    "description": "KPI thresholds to consider the alarm condition resolved",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "metric": {
+                          "type": "string"
+                        },
+                        "operator": {
+                          "type": "string",
+                          "enum": [
+                            "<",
+                            "<=",
+                            ">",
+                            ">=",
+                            "==",
+                            "!="
+                          ]
+                        },
+                        "value": {
+                          "type": "number"
+                        }
+                      },
+                      "required": [
+                        "metric",
+                        "operator",
+                        "value"
+                      ]
+                    }
+                  },
+                  "probe_template_id": {
+                    "type": "string",
+                    "description": "Template ID for active probe tests"
+                  }
+                }
+              },
+              "timeout_seconds": {
+                "type": "integer",
+                "default": 60
+              }
+            }
+          },
+          "closure": {
+            "type": "object",
+            "description": "Closure metadata",
+            "properties": {
+              "root_cause_category": {
+                "type": "string",
+                "enum": [
+                  "hardware_failure",
+                  "software_bug",
+                  "configuration_error",
+                  "capacity_issue",
+                  "planned_work",
+                  "power_issue",
+                  "environmental",
+                  "other"
+                ]
+              },
+              "resolution_summary": {
+                "type": "string"
+              },
+              "linked_remediation_action_id": {
+                "type": "string"
+              }
+            }
+          },
+          "closed_by": {
+            "$ref": "#/shared_entities/user_ref"
+          },
+          "force_close": {
+            "type": "boolean",
+            "description": "If true, close even if verification fails or times out.",
+            "default": false
+          }
+        },
+        "required": [
+          "alarm_id",
+          "closed_by"
+        ]
+      },
+      "returns": "Final alarm record with closed state, verification outcome, and closure metadata."
+    }
+  ]
+}

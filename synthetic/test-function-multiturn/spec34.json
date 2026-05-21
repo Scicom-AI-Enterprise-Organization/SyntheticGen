@@ -1,0 +1,1223 @@
+{
+  "workflow_name": "sim_swap_fraud_approval_flow",
+  "description": "Multi-step detection, investigation, and approval workflow for suspected SIM swap fraud in a telco environment.",
+  "domain": "telco_fraud/sim_swap_fraud",
+  "shared_entities": {
+    "case_id": {
+      "type": "string",
+      "description": "Unique identifier for a SIM swap fraud investigation case."
+    },
+    "customer_id": {
+      "type": "string",
+      "description": "Telco customer identifier."
+    },
+    "msisdn": {
+      "type": "string",
+      "description": "Mobile subscriber number in E.164 format."
+    },
+    "sim_swap_request_id": {
+      "type": "string",
+      "description": "Identifier of an underlying SIM swap request in the provisioning system."
+    },
+    "analyst_id": {
+      "type": "string",
+      "description": "Identifier of a fraud analyst or operator."
+    },
+    "approver_id": {
+      "type": "string",
+      "description": "Identifier of an approval authority (e.g., supervisor, risk manager)."
+    },
+    "risk_score": {
+      "type": "object",
+      "description": "Standardized risk scoring object used across functions.",
+      "properties": {
+        "score": {
+          "type": "number",
+          "description": "Numerical risk score on a 0-100 scale."
+        },
+        "band": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ],
+          "description": "Risk band derived from score thresholds."
+        },
+        "factors": {
+          "type": "array",
+          "description": "Key contributing factors to the risk assessment.",
+          "items": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Machine-readable factor code, e.g., GEO_MISMATCH."
+              },
+              "description": {
+                "type": "string"
+              },
+              "weight": {
+                "type": "number",
+                "description": "Relative contribution weight."
+              },
+              "evidence_ref": {
+                "type": "string",
+                "description": "Optional reference to associated evidence item ID."
+              }
+            },
+            "required": [
+              "code",
+              "description"
+            ]
+          }
+        }
+      },
+      "required": [
+        "score",
+        "band"
+      ]
+    },
+    "device_fingerprint": {
+      "type": "object",
+      "description": "Standard device fingerprint structure.",
+      "properties": {
+        "device_id": {
+          "type": "string",
+          "description": "Internal device identifier or hash."
+        },
+        "os": {
+          "type": "string"
+        },
+        "os_version": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "ip_address": {
+          "type": "string"
+        },
+        "geo_location": {
+          "type": "object",
+          "properties": {
+            "country": {
+              "type": "string"
+            },
+            "region": {
+              "type": "string"
+            },
+            "city": {
+              "type": "string"
+            },
+            "lat": {
+              "type": "number"
+            },
+            "lon": {
+              "type": "number"
+            }
+          }
+        },
+        "risk_indicators": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "description": "E.g., VPN, EMULATOR, TOR, ROOTED."
+          }
+        }
+      }
+    },
+    "approval_decision": {
+      "type": "object",
+      "description": "Standard approval decision envelope.",
+      "properties": {
+        "decision": {
+          "type": "string",
+          "enum": [
+            "approve",
+            "reject",
+            "escalate"
+          ]
+        },
+        "reason_code": {
+          "type": "string",
+          "description": "Machine-readable reason code."
+        },
+        "reason_detail": {
+          "type": "string",
+          "description": "Human-readable reasoning."
+        },
+        "conditions": {
+          "type": "array",
+          "description": "Optional conditions attached to the decision (e.g., additional KYC).",
+          "items": {
+            "type": "object",
+            "properties": {
+              "condition_type": {
+                "type": "string",
+                "enum": [
+                  "additional_kyc",
+                  "callback_verification",
+                  "otp_rechallenge",
+                  "temporary_block",
+                  "monitoring"
+                ]
+              },
+              "details": {
+                "type": "object"
+              }
+            },
+            "required": [
+              "condition_type"
+            ]
+          }
+        }
+      },
+      "required": [
+        "decision"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "create_sim_swap_case",
+      "description": "Create a new SIM swap fraud investigation case when a SIM swap request or anomaly is detected.",
+      "stage": "initiate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "sim_swap_request_id": {
+            "type": "string",
+            "description": "Underlying SIM swap provisioning request ID that triggered this case, if any."
+          },
+          "trigger_source": {
+            "type": "string",
+            "enum": [
+              "system_rule",
+              "customer_complaint",
+              "call_center_report",
+              "batch_monitoring",
+              "external_partner_alert",
+              "manual_analyst_creation"
+            ],
+            "description": "Origin of the fraud suspicion."
+          },
+          "customer": {
+            "type": "object",
+            "properties": {
+              "customer_id": {
+                "type": "string"
+              },
+              "msisdn": {
+                "type": "string"
+              },
+              "segment": {
+                "type": "string",
+                "enum": [
+                  "consumer",
+                  "sme",
+                  "corporate",
+                  "vip",
+                  "prepaid",
+                  "postpaid"
+                ]
+              }
+            },
+            "required": [
+              "msisdn"
+            ]
+          },
+          "initial_risk_indicators": {
+            "type": "array",
+            "description": "List of rule or model indicators that triggered the case.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "indicator_code": {
+                  "type": "string"
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                },
+                "details": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "indicator_code"
+              ]
+            }
+          },
+          "reported_by": {
+            "type": "object",
+            "description": "Information about the reporter, if not system.",
+            "properties": {
+              "channel": {
+                "type": "string",
+                "enum": [
+                  "ivr",
+                  "retail_store",
+                  "web_portal",
+                  "mobile_app",
+                  "call_center",
+                  "api_partner"
+                ]
+              },
+              "contact_reference": {
+                "type": "string",
+                "description": "ID of related ticket, call, or interaction."
+              }
+            }
+          },
+          "metadata": {
+            "type": "object",
+            "description": "Arbitrary metadata for integration context.",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "trigger_source",
+          "customer"
+        ]
+      },
+      "returns": "Newly created case with case_id, initial status, and preliminary risk summary."
+    },
+    {
+      "name": "ingest_sim_swap_signals",
+      "description": "Ingest and normalize signals related to a suspected SIM swap, such as device, network, and behavioral data.",
+      "stage": "gather_signals",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "signals": {
+            "type": "object",
+            "description": "Grouped raw signal payloads.",
+            "properties": {
+              "device": {
+                "$ref": "#/shared_entities/device_fingerprint"
+              },
+              "network": {
+                "type": "object",
+                "properties": {
+                  "current_cell_id": {
+                    "type": "string"
+                  },
+                  "previous_cell_ids": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "roaming_status": {
+                    "type": "string",
+                    "enum": [
+                      "home",
+                      "roaming_inbound",
+                      "roaming_outbound"
+                    ]
+                  },
+                  "ip_history": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "ip": {
+                          "type": "string"
+                        },
+                        "first_seen": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "last_seen": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "geo_country": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "usage_behavior": {
+                "type": "object",
+                "properties": {
+                  "call_volume_24h": {
+                    "type": "integer"
+                  },
+                  "sms_volume_24h": {
+                    "type": "integer"
+                  },
+                  "data_usage_mb_24h": {
+                    "type": "number"
+                  },
+                  "anomaly_flags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "description": "E.g., SUDDEN_OUTBOUND_SPIKE, HIGH_RISK_DESTINATIONS."
+                    }
+                  }
+                }
+              },
+              "account_activity": {
+                "type": "object",
+                "properties": {
+                  "recent_logins": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "channel": {
+                          "type": "string",
+                          "enum": [
+                            "web",
+                            "app",
+                            "ivr",
+                            "store_terminal",
+                            "api"
+                          ]
+                        },
+                        "timestamp": {
+                          "type": "string",
+                          "format": "date-time"
+                        },
+                        "device_id": {
+                          "type": "string"
+                        },
+                        "ip": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "recent_profile_changes": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "field": {
+                          "type": "string"
+                        },
+                        "old_value_masked": {
+                          "type": "string"
+                        },
+                        "new_value_masked": {
+                          "type": "string"
+                        },
+                        "timestamp": {
+                          "type": "string",
+                          "format": "date-time"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "ingestion_context": {
+            "type": "object",
+            "properties": {
+              "source_system": {
+                "type": "string"
+              },
+              "batch_id": {
+                "type": "string"
+              },
+              "received_at": {
+                "type": "string",
+                "format": "date-time"
+              }
+            }
+          }
+        },
+        "required": [
+          "case_id",
+          "signals"
+        ]
+      },
+      "returns": "Normalized and persisted signals linked to the case, including derived features summary."
+    },
+    {
+      "name": "evaluate_sim_swap_risk",
+      "description": "Calculate and update the SIM swap fraud risk score for a case based on ingested signals and customer history.",
+      "stage": "risk_assessment",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "evaluation_mode": {
+            "type": "string",
+            "enum": [
+              "realtime",
+              "batch",
+              "manual_reassessment"
+            ],
+            "description": "Mode can influence which models/rules apply."
+          },
+          "override_parameters": {
+            "type": "object",
+            "description": "Optional overrides for experimentation or analyst what-if analysis.",
+            "properties": {
+              "model_version": {
+                "type": "string"
+              },
+              "rule_set": {
+                "type": "string"
+              },
+              "disable_features": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "include_explanations": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "case_id",
+          "evaluation_mode"
+        ]
+      },
+      "returns": "Updated risk_score object for the case, with contributing factors and recommended action band."
+    },
+    {
+      "name": "get_sim_swap_case",
+      "description": "Retrieve full details, status, and risk assessment for a specific SIM swap fraud case.",
+      "stage": "investigate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "include": {
+            "type": "array",
+            "description": "Controls which embedded resources are returned.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "signals",
+                "risk_history",
+                "decision_history",
+                "customer_profile",
+                "sim_swap_request",
+                "audit_log"
+              ]
+            }
+          },
+          "mask_sensitive_fields": {
+            "type": "boolean",
+            "default": true,
+            "description": "Whether to mask PII depending on viewer role."
+          }
+        },
+        "required": [
+          "case_id"
+        ]
+      },
+      "returns": "Complete case object including status, risk scores, signals (optional), and decision timeline."
+    },
+    {
+      "name": "update_sim_swap_case_notes",
+      "description": "Append or edit investigation notes and tags on a SIM swap fraud case by an analyst.",
+      "stage": "investigate",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "analyst_id": {
+            "type": "string"
+          },
+          "note": {
+            "type": "object",
+            "properties": {
+              "action": {
+                "type": "string",
+                "enum": [
+                  "append",
+                  "edit",
+                  "delete"
+                ]
+              },
+              "note_id": {
+                "type": "string",
+                "description": "Existing note id when editing or deleting."
+              },
+              "content": {
+                "type": "string",
+                "description": "Text content for append or edit."
+              },
+              "visibility": {
+                "type": "string",
+                "enum": [
+                  "internal_only",
+                  "customer_facing",
+                  "regulator_view"
+                ],
+                "default": "internal_only"
+              }
+            },
+            "required": [
+              "action"
+            ]
+          },
+          "tags": {
+            "type": "object",
+            "description": "Optional tag operations.",
+            "properties": {
+              "add": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "description": "Tags to add, e.g., HIGH_VALUE, VIP."
+                }
+              },
+              "remove": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "case_id",
+          "analyst_id",
+          "note"
+        ]
+      },
+      "returns": "Updated case notes and tags snapshot including note_id for any newly created note."
+    },
+    {
+      "name": "request_additional_customer_verification",
+      "description": "Initiate additional customer verification steps (e.g., callback, KYC document upload, OTP re-challenge) as part of the approval flow.",
+      "stage": "verification",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "verification_package": {
+            "type": "object",
+            "properties": {
+              "msisdn": {
+                "type": "string"
+              },
+              "methods": {
+                "type": "array",
+                "description": "One or more verification mechanisms to trigger.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "callback",
+                        "knowledge_based",
+                        "document_upload",
+                        "in_store_visit",
+                        "otp_challenge"
+                      ]
+                    },
+                    "channel": {
+                      "type": "string",
+                      "enum": [
+                        "sms",
+                        "voice",
+                        "app_push",
+                        "email",
+                        "none"
+                      ],
+                      "description": "Communication channel if applicable."
+                    },
+                    "parameters": {
+                      "type": "object",
+                      "description": "Method-specific parameters.",
+                      "properties": {
+                        "callback_time_window": {
+                          "type": "object",
+                          "properties": {
+                            "start": {
+                              "type": "string",
+                              "format": "date-time"
+                            },
+                            "end": {
+                              "type": "string",
+                              "format": "date-time"
+                            }
+                          }
+                        },
+                        "kbv_question_set_id": {
+                          "type": "string"
+                        },
+                        "required_documents": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "enum": [
+                              "id_card_front",
+                              "id_card_back",
+                              "passport",
+                              "selfie",
+                              "proof_of_address"
+                            ]
+                          }
+                        },
+                        "otp_delivery_msisdn": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                }
+              },
+              "expiry": {
+                "type": "string",
+                "format": "date-time",
+                "description": "After this time, pending verification tasks expire."
+              }
+            },
+            "required": [
+              "msisdn",
+              "methods"
+            ]
+          },
+          "requested_by": {
+            "type": "object",
+            "properties": {
+              "analyst_id": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "case_id",
+          "verification_package"
+        ]
+      },
+      "returns": "Created verification tasks with identifiers and current status for each method."
+    },
+    {
+      "name": "submit_sim_swap_case_decision",
+      "description": "Submit an analyst's decision on a SIM swap fraud case (approve, reject, escalate) including rationale and flags for higher-level approval.",
+      "stage": "decision",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "analyst_id": {
+            "type": "string"
+          },
+          "decision": {
+            "$ref": "#/shared_entities/approval_decision"
+          },
+          "applied_risk_score": {
+            "$ref": "#/shared_entities/risk_score"
+          },
+          "sim_swap_action": {
+            "type": "object",
+            "description": "Desired operational outcome if decision is approved.",
+            "properties": {
+              "action_type": {
+                "type": "string",
+                "enum": [
+                  "allow_swap",
+                  "block_swap",
+                  "rollback_swap",
+                  "freeze_account",
+                  "monitor_only"
+                ]
+              },
+              "effective_msisdn": {
+                "type": "string"
+              },
+              "sim_swap_request_id": {
+                "type": "string"
+              },
+              "notes": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "action_type"
+            ]
+          },
+          "requires_supervisor_approval": {
+            "type": "boolean",
+            "default": false
+          }
+        },
+        "required": [
+          "case_id",
+          "analyst_id",
+          "decision"
+        ]
+      },
+      "returns": "Recorded decision with decision_id and updated case status, including whether supervisor approval is pending."
+    },
+    {
+      "name": "approve_or_reject_sim_swap_action",
+      "description": "Supervisor-level approval for the operational SIM swap action derived from a fraud case decision.",
+      "stage": "approval",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "approver_id": {
+            "type": "string"
+          },
+          "approval_decision": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "approved",
+                  "rejected",
+                  "needs_more_info"
+                ]
+              },
+              "comments": {
+                "type": "string"
+              },
+              "override_action": {
+                "type": "object",
+                "description": "Optional override to change the operational action decided by the analyst.",
+                "properties": {
+                  "action_type": {
+                    "type": "string",
+                    "enum": [
+                      "allow_swap",
+                      "block_swap",
+                      "rollback_swap",
+                      "freeze_account",
+                      "monitor_only"
+                    ]
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "risk_acceptance": {
+            "type": "object",
+            "description": "Formal risk acceptance or rejection meta for audit.",
+            "properties": {
+              "accepted_by": {
+                "type": "string"
+              },
+              "accepted_on_behalf_of": {
+                "type": "string"
+              },
+              "justification": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "case_id",
+          "approver_id",
+          "approval_decision"
+        ]
+      },
+      "returns": "Updated case approval state and final operational action to be executed or held."
+    },
+    {
+      "name": "execute_sim_swap_fraud_action",
+      "description": "Execute the final operational action on network and account systems (allow, block, rollback SIM swap, freeze account) and track technical outcome.",
+      "stage": "execute",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "action_execution": {
+            "type": "object",
+            "properties": {
+              "target_msisdn": {
+                "type": "string"
+              },
+              "sim_swap_request_id": {
+                "type": "string"
+              },
+              "final_action": {
+                "type": "string",
+                "enum": [
+                  "allow_swap",
+                  "block_swap",
+                  "rollback_swap",
+                  "freeze_account",
+                  "monitor_only"
+                ]
+              },
+              "execution_mode": {
+                "type": "string",
+                "enum": [
+                  "synchronous",
+                  "asynchronous"
+                ],
+                "default": "asynchronous"
+              },
+              "dry_run": {
+                "type": "boolean",
+                "default": false,
+                "description": "If true, only simulate and log the action."
+              }
+            },
+            "required": [
+              "final_action"
+            ]
+          },
+          "initiated_by": {
+            "type": "object",
+            "properties": {
+              "system_user": {
+                "type": "string"
+              },
+              "initiator_type": {
+                "type": "string",
+                "enum": [
+                  "system",
+                  "analyst",
+                  "approver"
+                ]
+              }
+            }
+          }
+        },
+        "required": [
+          "case_id",
+          "action_execution"
+        ]
+      },
+      "returns": "Execution job status, operation identifiers in downstream systems, and initial success/failure result."
+    },
+    {
+      "name": "retry_or_rollback_sim_swap_action",
+      "description": "Handle failed action executions with the ability to retry or rollback changes in case of error or mis-decision.",
+      "stage": "recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string",
+            "description": "Identifier of the prior execution attempt to reference."
+          },
+          "recovery_type": {
+            "type": "string",
+            "enum": [
+              "retry",
+              "rollback"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "description": "Explanation for retry or rollback, for audit trail."
+          },
+          "requested_by": {
+            "type": "object",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "analyst",
+                  "approver",
+                  "system"
+                ]
+              }
+            }
+          },
+          "rollback_strategy": {
+            "type": "object",
+            "description": "Only needed when recovery_type is rollback.",
+            "properties": {
+              "strategy_type": {
+                "type": "string",
+                "enum": [
+                  "full_restore_previous_state",
+                  "partial_restore_network_only",
+                  "partial_restore_account_only"
+                ]
+              },
+              "notes": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "case_id",
+          "operation_id",
+          "recovery_type"
+        ]
+      },
+      "returns": "New recovery job status with identifiers and updated case recovery history."
+    },
+    {
+      "name": "get_sim_swap_case_status",
+      "description": "Get the high-level lifecycle and execution status for a SIM swap fraud case across investigation, approval, and execution stages.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "include_execution_details": {
+            "type": "boolean",
+            "default": false
+          },
+          "include_verification_status": {
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "case_id"
+        ]
+      },
+      "returns": "Compact status view including investigation_state, approval_state, verification_state, and latest execution status."
+    },
+    {
+      "name": "list_sim_swap_cases",
+      "description": "Search and list SIM swap fraud cases with filtering and pagination for operational monitoring.",
+      "stage": "monitor",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filters": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "in_investigation",
+                    "pending_approval",
+                    "pending_verification",
+                    "action_scheduled",
+                    "resolved",
+                    "closed",
+                    "cancelled"
+                  ]
+                }
+              },
+              "risk_band": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high",
+                    "critical"
+                  ]
+                }
+              },
+              "msisdn": {
+                "type": "string"
+              },
+              "customer_id": {
+                "type": "string"
+              },
+              "created_from": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "created_to": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "assigned_analyst_id": {
+                "type": "string"
+              },
+              "trigger_source": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "system_rule",
+                    "customer_complaint",
+                    "call_center_report",
+                    "batch_monitoring",
+                    "external_partner_alert",
+                    "manual_analyst_creation"
+                  ]
+                }
+              }
+            }
+          },
+          "sort_by": {
+            "type": "string",
+            "enum": [
+              "created_at_desc",
+              "created_at_asc",
+              "risk_desc",
+              "risk_asc",
+              "status",
+              "msisdn"
+            ],
+            "default": "created_at_desc"
+          },
+          "page": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 20,
+            "minimum": 1,
+            "maximum": 200
+          }
+        },
+        "required": []
+      },
+      "returns": "Paginated list of case summaries with key fields (case_id, msisdn, risk band, status, created_at, assigned analyst)."
+    },
+    {
+      "name": "close_or_cancel_sim_swap_case",
+      "description": "Formally close or cancel a SIM swap fraud case, specifying resolution outcome and reason for audit and reporting.",
+      "stage": "closure",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "case_id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "close_resolved_fraud",
+              "close_no_fraud",
+              "close_preventive",
+              "cancel_duplicate",
+              "cancel_error"
+            ]
+          },
+          "resolution_details": {
+            "type": "object",
+            "properties": {
+              "final_risk_score": {
+                "$ref": "#/shared_entities/risk_score"
+              },
+              "loss_amount_estimated": {
+                "type": "number",
+                "description": "Estimated monetary loss prevented or incurred."
+              },
+              "customer_impact": {
+                "type": "string",
+                "enum": [
+                  "no_impact",
+                  "service_disruption",
+                  "account_takeover",
+                  "financial_loss",
+                  "other"
+                ]
+              },
+              "regulatory_reporting_required": {
+                "type": "boolean",
+                "default": false
+              },
+              "regulatory_case_reference": {
+                "type": "string"
+              }
+            }
+          },
+          "closed_by": {
+            "type": "object",
+            "properties": {
+              "user_id": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string",
+                "enum": [
+                  "analyst",
+                  "approver",
+                  "system"
+                ]
+              }
+            }
+          },
+          "customer_notification": {
+            "type": "object",
+            "description": "Details of any customer communication triggered upon closure.",
+            "properties": {
+              "send_notification": {
+                "type": "boolean",
+                "default": false
+              },
+              "channel": {
+                "type": "string",
+                "enum": [
+                  "sms",
+                  "email",
+                  "app_push",
+                  "none"
+                ]
+              },
+              "template_id": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "case_id",
+          "action"
+        ]
+      },
+      "returns": "Final case object with terminal status, resolution metadata, and customer notification status."
+    }
+  ]
+}

@@ -1,0 +1,1081 @@
+{
+  "workflow_name": "udm_subscription_change_approval_flow",
+  "description": "Multi-step approval and execution workflow for 5G UDM subscription and policy changes, including impact analysis, multi-level approval, execution, rollback, and audit.",
+  "domain": "telco_5g_deep/udm_management",
+  "shared_entities": {
+    "subscriber_id": {
+      "type": "string",
+      "description": "Unique subscriber identifier (e.g., SUPI, IMSI, or external customer ID)."
+    },
+    "udm_profile_id": {
+      "type": "string",
+      "description": "Identifier for a UDM subscriber data profile or snapshot."
+    },
+    "change_request_id": {
+      "type": "string",
+      "description": "Identifier for a requested change to UDM subscriber data."
+    },
+    "approval_workflow_id": {
+      "type": "string",
+      "description": "Identifier of the approval workflow instance associated with a change request."
+    },
+    "execution_task_id": {
+      "type": "string",
+      "description": "Identifier for a scheduled or ongoing execution task that applies a change to UDM."
+    },
+    "rollback_plan_id": {
+      "type": "string",
+      "description": "Identifier of a generated rollback plan for a given change request."
+    },
+    "approver_identity": {
+      "type": "object",
+      "description": "Information about an approver (human operator or automated system).",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "user",
+            "role",
+            "system"
+          ],
+          "description": "How the approver is identified: specific user, role/group, or automated system."
+        },
+        "id": {
+          "type": "string",
+          "description": "Unique identifier of the user/role/system within the operator domain."
+        },
+        "display_name": {
+          "type": "string",
+          "description": "Human readable name of the approver."
+        },
+        "contact": {
+          "type": "object",
+          "description": "Optional contact information for notifications.",
+          "properties": {
+            "email": {
+              "type": "string",
+              "format": "email"
+            },
+            "phone": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "required": [
+        "type",
+        "id"
+      ]
+    },
+    "policy_change_item": {
+      "type": "object",
+      "description": "Single change item describing how a policy or subscription attribute should be altered.",
+      "properties": {
+        "target_type": {
+          "type": "string",
+          "enum": [
+            "am_policy",
+            "sm_policy",
+            "session_qos",
+            "slice_profile",
+            "subscription_data",
+            "auxiliary_data"
+          ],
+          "description": "Type of data in UDM being modified."
+        },
+        "path": {
+          "type": "string",
+          "description": "JSONPath or hierarchical path within the target object (e.g., $.sliceProfiles[0].defaultDnn)."
+        },
+        "operation": {
+          "type": "string",
+          "enum": [
+            "add",
+            "replace",
+            "remove"
+          ],
+          "description": "Type of change operation."
+        },
+        "value": {
+          "description": "New value for add/replace operations. May be string, number, boolean, object, or array.",
+          "oneOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "object"
+            },
+            {
+              "type": "array"
+            }
+          ]
+        },
+        "metadata": {
+          "type": "object",
+          "description": "Additional metadata for this change item.",
+          "properties": {
+            "reason_code": {
+              "type": "string",
+              "description": "Short code describing why this item is included (e.g., UPSELL_5G_PREMIUM)."
+            },
+            "risk_level": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+              ],
+              "description": "Estimated risk impact of this individual change."
+            },
+            "requires_downtime": {
+              "type": "boolean",
+              "description": "Whether the change may cause temporary service disruption."
+            }
+          }
+        }
+      },
+      "required": [
+        "target_type",
+        "path",
+        "operation"
+      ]
+    }
+  },
+  "functions": [
+    {
+      "name": "search_udm_profiles",
+      "description": "Search UDM subscriber profiles to identify the target for a change request.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "object",
+            "description": "Search criteria for locating UDM subscriber profiles.",
+            "properties": {
+              "subscriber_id": {
+                "type": "string",
+                "description": "Exact subscriber identifier."
+              },
+              "msisdn": {
+                "type": "string",
+                "description": "Subscriber MSISDN/phone number for lookup."
+              },
+              "external_customer_id": {
+                "type": "string",
+                "description": "ID from CRM or billing system."
+              },
+              "tags": {
+                "type": "array",
+                "description": "Tags associated with the subscriber (e.g., 'enterprise', 'test').",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "slice_id": {
+                "type": "string",
+                "description": "Filter by subscribed 5G slice ID (S-NSSAI)."
+              }
+            }
+          },
+          "filters": {
+            "type": "object",
+            "description": "Optional filters to narrow down search results.",
+            "properties": {
+              "status": {
+                "type": "string",
+                "enum": [
+                  "active",
+                  "suspended",
+                  "terminated"
+                ]
+              },
+              "traffic_profile": {
+                "type": "string",
+                "description": "Name of subscribed traffic profile (e.g., '5G-Enterprise-Bronze')."
+              },
+              "last_updated_from": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Include profiles updated after this timestamp."
+              },
+              "last_updated_to": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Include profiles updated before this timestamp."
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 20,
+            "minimum": 1,
+            "maximum": 100
+          },
+          "include": {
+            "type": "array",
+            "description": "Additional data to include with each profile in the search result.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "basic_subscription",
+                "am_policy",
+                "sm_policy",
+                "slice_profiles"
+              ]
+            }
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "returns": "Paginated list of matching UDM profiles with summary subscription and policy information."
+    },
+    {
+      "name": "get_udm_profile_snapshot",
+      "description": "Retrieve a detailed snapshot of a subscriber's UDM data and optionally persist it as a versioned profile.",
+      "stage": "discovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "$ref": "#/shared_entities/subscriber_id"
+          },
+          "sections": {
+            "type": "array",
+            "description": "Specific UDM sections to retrieve.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "subscription_data",
+                "am_policy",
+                "sm_policy",
+                "slice_profiles",
+                "session_qos",
+                "auxiliary_data",
+                "all"
+              ]
+            }
+          },
+          "persist_snapshot": {
+            "type": "boolean",
+            "description": "If true, persist the snapshot and return a udm_profile_id.",
+            "default": true
+          },
+          "snapshot_metadata": {
+            "type": "object",
+            "description": "Metadata to associate with a persisted snapshot.",
+            "properties": {
+              "label": {
+                "type": "string",
+                "description": "Human-readable label for the snapshot (e.g., 'pre-upgrade-2025-03-01')."
+              },
+              "created_by": {
+                "type": "string",
+                "description": "User or system that requested the snapshot."
+              },
+              "tags": {
+                "type": "array",
+                "description": "Tags for organizing snapshots.",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "subscriber_id"
+        ]
+      },
+      "returns": "Complete or partial UDM subscriber snapshot; if persisted, includes a udm_profile_id."
+    },
+    {
+      "name": "create_udm_change_request",
+      "description": "Create a new change request for modifications to a subscriber's UDM data, including requested items and associated context.",
+      "stage": "initiation",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "subscriber_id": {
+            "$ref": "#/shared_entities/subscriber_id"
+          },
+          "source_profile_id": {
+            "type": "string",
+            "description": "Optional udm_profile_id to base the changes on (e.g., snapshot from get_udm_profile_snapshot)."
+          },
+          "requested_by": {
+            "type": "object",
+            "description": "Identity of the requester (operator, system, or API client).",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "external_system",
+                  "self_service_portal"
+                ]
+              },
+              "id": {
+                "type": "string",
+                "description": "Identifier of the requester (username, system ID, etc.)."
+              },
+              "department": {
+                "type": "string",
+                "description": "Department or domain of the requester."
+              }
+            },
+            "required": [
+              "type",
+              "id"
+            ]
+          },
+          "change_items": {
+            "type": "array",
+            "description": "List of requested individual changes to subscriber data.",
+            "items": {
+              "$ref": "#/shared_entities/policy_change_item"
+            },
+            "minItems": 1
+          },
+          "business_context": {
+            "type": "object",
+            "description": "Business justification and context for the change.",
+            "properties": {
+              "category": {
+                "type": "string",
+                "enum": [
+                  "new_activation",
+                  "plan_change",
+                  "5g_slice_migration",
+                  "enterprise_policy_override",
+                  "incident_mitigation",
+                  "other"
+                ]
+              },
+              "description": {
+                "type": "string",
+                "description": "Detailed free-text description of the reason for change."
+              },
+              "ticket_reference": {
+                "type": "string",
+                "description": "Reference to external ticket or workflow ID (e.g., ITSM ticket)."
+              },
+              "sla_urgency": {
+                "type": "string",
+                "enum": [
+                  "low",
+                  "normal",
+                  "high",
+                  "critical"
+                ],
+                "description": "Operational urgency of the change."
+              }
+            },
+            "required": [
+              "category"
+            ]
+          },
+          "requested_schedule": {
+            "type": "object",
+            "description": "Optional scheduling preferences for executing the change.",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": [
+                  "immediate",
+                  "window",
+                  "specific_time"
+                ],
+                "default": "immediate"
+              },
+              "start_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Earliest allowed execution time (for window/specific_time)."
+              },
+              "end_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Latest allowed execution time (for window)."
+              },
+              "time_zone": {
+                "type": "string",
+                "description": "Time zone identifier (e.g., 'UTC', 'Europe/Berlin')."
+              }
+            }
+          }
+        },
+        "required": [
+          "subscriber_id",
+          "requested_by",
+          "change_items",
+          "business_context"
+        ]
+      },
+      "returns": "Newly created change_request with change_request_id and initial status."
+    },
+    {
+      "name": "analyze_udm_change_impact",
+      "description": "Perform technical and business impact analysis for a UDM change request before approvals.",
+      "stage": "analysis",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_request_id": {
+            "$ref": "#/shared_entities/change_request_id"
+          },
+          "analysis_depth": {
+            "type": "string",
+            "enum": [
+              "basic",
+              "full"
+            ],
+            "default": "full",
+            "description": "Depth of impact analysis; full may take longer."
+          },
+          "include_dependencies": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, analyze dependencies (e.g., PCF, CHF, NWDAF, SMF references)."
+          },
+          "what_if_scenarios": {
+            "type": "array",
+            "description": "Optional what-if scenarios to simulate, varying certain parameters.",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "Scenario name, e.g., 'peak_hour_load'."
+                },
+                "parameters": {
+                  "type": "object",
+                  "description": "Simulation parameters such as traffic load or roaming conditions.",
+                  "properties": {
+                    "expected_traffic_load": {
+                      "type": "string",
+                      "enum": [
+                        "low",
+                        "medium",
+                        "high"
+                      ]
+                    },
+                    "roaming_state": {
+                      "type": "string",
+                      "enum": [
+                        "domestic",
+                        "eu_roaming",
+                        "international_roaming"
+                      ]
+                    },
+                    "device_capability": {
+                      "type": "string",
+                      "enum": [
+                        "4g_only",
+                        "5g_nsa",
+                        "5g_sa"
+                      ]
+                    }
+                  }
+                }
+              },
+              "required": [
+                "name"
+              ]
+            }
+          }
+        },
+        "required": [
+          "change_request_id"
+        ]
+      },
+      "returns": "Impact analysis report including risk scores, affected network functions, and recommended approval levels."
+    },
+    {
+      "name": "initiate_approval_workflow",
+      "description": "Create and start a multi-step approval workflow for a UDM change request based on policies and impact analysis.",
+      "stage": "approval_setup",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_request_id": {
+            "$ref": "#/shared_entities/change_request_id"
+          },
+          "approval_policy": {
+            "type": "object",
+            "description": "Optional override of default approval policy.",
+            "properties": {
+              "strategy": {
+                "type": "string",
+                "enum": [
+                  "sequential",
+                  "parallel",
+                  "mixed"
+                ],
+                "description": "Order in which approval steps are processed."
+              },
+              "levels": {
+                "type": "array",
+                "description": "Detailed configuration of approval levels.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "level_index": {
+                      "type": "integer",
+                      "description": "Order of this approval level (starting from 1)."
+                    },
+                    "required_approvals": {
+                      "type": "integer",
+                      "description": "Minimum number of approvals required at this level."
+                    },
+                    "approvers": {
+                      "type": "array",
+                      "description": "List of potential approvers for this level.",
+                      "items": {
+                        "$ref": "#/shared_entities/approver_identity"
+                      }
+                    },
+                    "auto_approve_conditions": {
+                      "type": "object",
+                      "description": "Conditions under which this level can be auto-approved.",
+                      "properties": {
+                        "max_risk_level": {
+                          "type": "string",
+                          "enum": [
+                            "low",
+                            "medium"
+                          ]
+                        },
+                        "max_delta_mbps": {
+                          "type": "integer",
+                          "description": "Maximum increase in committed QoS bandwidth allowed for auto-approval."
+                        }
+                      }
+                    }
+                  },
+                  "required": [
+                    "level_index",
+                    "required_approvals",
+                    "approvers"
+                  ]
+                }
+              }
+            }
+          },
+          "notification_channels": {
+            "type": "array",
+            "description": "How approvers are notified.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "email",
+                "sms",
+                "internal_ui",
+                "webhook"
+              ]
+            }
+          },
+          "callback": {
+            "type": "object",
+            "description": "Optional callback configuration when the approval workflow completes.",
+            "properties": {
+              "url": {
+                "type": "string",
+                "format": "uri"
+              },
+              "auth_token": {
+                "type": "string"
+              },
+              "events": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "approved",
+                    "rejected",
+                    "cancelled"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "change_request_id"
+        ]
+      },
+      "returns": "Approval workflow instance with approval_workflow_id, levels, and initial pending status."
+    },
+    {
+      "name": "record_approval_decision",
+      "description": "Record an approver's decision (approve/reject) at a given level of the approval workflow.",
+      "stage": "approval_execution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "approval_workflow_id": {
+            "$ref": "#/shared_entities/approval_workflow_id"
+          },
+          "approver": {
+            "$ref": "#/shared_entities/approver_identity"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "reject"
+            ]
+          },
+          "decision_context": {
+            "type": "object",
+            "description": "Optional context and justification for the decision.",
+            "properties": {
+              "comments": {
+                "type": "string"
+              },
+              "risk_acceptance": {
+                "type": "boolean",
+                "description": "If true, the approver explicitly accepts identified risks."
+              },
+              "conditions": {
+                "type": "array",
+                "description": "Any conditions the approver imposes on the change.",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "enum": [
+                        "time_bound",
+                        "scope_reduction",
+                        "monitoring_required"
+                      ]
+                    },
+                    "details": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ]
+                }
+              }
+            }
+          },
+          "override_level": {
+            "type": "integer",
+            "description": "If specified, force the decision to apply to a specific approval level (for admin overrides)."
+          }
+        },
+        "required": [
+          "approval_workflow_id",
+          "approver",
+          "decision"
+        ]
+      },
+      "returns": "Updated approval workflow state, including per-level status and whether the change request is now approved or rejected."
+    },
+    {
+      "name": "get_approval_and_change_status",
+      "description": "Retrieve consolidated status of a change request and its associated approval workflow.",
+      "stage": "monitoring",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_request_id": {
+            "$ref": "#/shared_entities/change_request_id"
+          },
+          "include_history": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, include full decision and status history."
+          }
+        },
+        "required": [
+          "change_request_id"
+        ]
+      },
+      "returns": "Current status of change request, approval workflow, and key timestamps; optionally full approval history."
+    },
+    {
+      "name": "schedule_udm_change_execution",
+      "description": "Create or update an execution task to apply an approved UDM change request to the live UDM data.",
+      "stage": "execution_planning",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_request_id": {
+            "$ref": "#/shared_entities/change_request_id"
+          },
+          "execution_task_id": {
+            "$ref": "#/shared_entities/execution_task_id",
+            "description": "If provided, update an existing execution task instead of creating a new one."
+          },
+          "schedule": {
+            "type": "object",
+            "description": "Execution scheduling details, which may refine or override the original request.",
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "asap",
+                  "time_window",
+                  "fixed_time"
+                ],
+                "default": "asap"
+              },
+              "start_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "Start of allowed execution window, or exact time for fixed_time."
+              },
+              "end_time": {
+                "type": "string",
+                "format": "date-time",
+                "description": "End of allowed execution window (for time_window mode)."
+              },
+              "time_zone": {
+                "type": "string",
+                "description": "Time zone for interpreting schedule timestamps."
+              }
+            }
+          },
+          "execution_constraints": {
+            "type": "object",
+            "description": "Operational constraints to be enforced during execution.",
+            "properties": {
+              "max_downtime_seconds": {
+                "type": "integer",
+                "description": "Upper bound on acceptable service disruption for the subscriber."
+              },
+              "auto_pause_on_alarm": {
+                "type": "boolean",
+                "default": true,
+                "description": "Pause execution if certain network alarms are detected."
+              },
+              "allowed_network_states": {
+                "type": "array",
+                "description": "Network states in which execution is allowed.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "normal",
+                    "degraded",
+                    "maintenance"
+                  ]
+                }
+              }
+            }
+          },
+          "post_execution_actions": {
+            "type": "array",
+            "description": "Actions to perform after successful execution.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "trigger_verification_probe",
+                "notify_requester",
+                "update_cmdb",
+                "none"
+              ]
+            }
+          }
+        },
+        "required": [
+          "change_request_id"
+        ]
+      },
+      "returns": "Execution task with execution_task_id, scheduled window, and initial task status."
+    },
+    {
+      "name": "execute_udm_change_task",
+      "description": "Trigger immediate execution of a prepared UDM change task or run it in dry-run mode for validation.",
+      "stage": "execution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "execution_task_id": {
+            "$ref": "#/shared_entities/execution_task_id"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "dry_run",
+              "commit"
+            ],
+            "default": "commit",
+            "description": "Whether to actually apply the changes or just validate."
+          },
+          "validation_only_checks": {
+            "type": "array",
+            "description": "Subset of checks to run in dry_run mode.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "schema_validation",
+                "conflict_detection",
+                "policy_consistency",
+                "roaming_compatibility",
+                "qos_budget"
+              ]
+            }
+          },
+          "force_execution": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, bypass certain non-critical warnings (subject to policy)."
+          }
+        },
+        "required": [
+          "execution_task_id"
+        ]
+      },
+      "returns": "Execution result summary including per-item status, any validation errors, and updated execution task state."
+    },
+    {
+      "name": "generate_udm_rollback_plan",
+      "description": "Generate a rollback plan for a given change request by comparing snapshots and planned changes.",
+      "stage": "rollback_planning",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_request_id": {
+            "$ref": "#/shared_entities/change_request_id"
+          },
+          "base_profile_id": {
+            "type": "string",
+            "description": "udm_profile_id representing the state to roll back to (e.g., pre-change snapshot)."
+          },
+          "strategy": {
+            "type": "string",
+            "enum": [
+              "full_revert",
+              "partial_revert",
+              "custom"
+            ],
+            "default": "full_revert",
+            "description": "How aggressively to revert the changes."
+          },
+          "include_sections": {
+            "type": "array",
+            "description": "If specified, only generate rollback for these sections.",
+            "items": {
+              "type": "string",
+              "enum": [
+                "subscription_data",
+                "am_policy",
+                "sm_policy",
+                "slice_profiles",
+                "session_qos",
+                "auxiliary_data"
+              ]
+            }
+          }
+        },
+        "required": [
+          "change_request_id"
+        ]
+      },
+      "returns": "Rollback plan with rollback_plan_id, list of rollback change items, and risk assessment."
+    },
+    {
+      "name": "execute_udm_rollback",
+      "description": "Execute a previously generated rollback plan to restore subscriber UDM data to a safe state.",
+      "stage": "rollback_execution",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "rollback_plan_id": {
+            "$ref": "#/shared_entities/rollback_plan_id"
+          },
+          "dry_run": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, validate rollback without applying changes."
+          },
+          "reason": {
+            "type": "string",
+            "description": "Reason for invoking rollback (e.g., 'post-change KPIs degraded')."
+          },
+          "requested_by": {
+            "type": "object",
+            "description": "Identity of the operator or system requesting rollback.",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "operator",
+                  "system"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "type"
+            ]
+          }
+        },
+        "required": [
+          "rollback_plan_id",
+          "requested_by"
+        ]
+      },
+      "returns": "Rollback execution status, including per-item outcomes and updated subscriber snapshot reference."
+    },
+    {
+      "name": "retry_or_cancel_change_request",
+      "description": "Handle error recovery by retrying failed executions or cancelling pending change requests and associated workflows.",
+      "stage": "error_recovery",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "change_request_id": {
+            "$ref": "#/shared_entities/change_request_id"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "retry_execution",
+              "cancel_request"
+            ]
+          },
+          "retry_options": {
+            "type": "object",
+            "description": "Options to control retry behavior when action is retry_execution.",
+            "properties": {
+              "execution_task_id": {
+                "$ref": "#/shared_entities/execution_task_id"
+              },
+              "max_attempts": {
+                "type": "integer",
+                "default": 1,
+                "minimum": 1,
+                "maximum": 5
+              },
+              "backoff_strategy": {
+                "type": "string",
+                "enum": [
+                  "none",
+                  "fixed",
+                  "exponential"
+                ],
+                "default": "fixed"
+              },
+              "backoff_seconds": {
+                "type": "integer",
+                "default": 60
+              }
+            }
+          },
+          "cancellation_reason": {
+            "type": "string",
+            "description": "Reason for cancelling the change request (for audit)."
+          },
+          "propagate_to_approval_workflow": {
+            "type": "boolean",
+            "default": true,
+            "description": "If true, also cancel any in-progress approval workflow."
+          }
+        },
+        "required": [
+          "change_request_id",
+          "action"
+        ]
+      },
+      "returns": "Updated change request, execution, and approval workflow statuses after retry or cancellation."
+    },
+    {
+      "name": "list_udm_change_audit_log",
+      "description": "List audit log entries related to UDM change requests, approvals, executions, and rollbacks for compliance and troubleshooting.",
+      "stage": "audit",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "filter": {
+            "type": "object",
+            "description": "Filter criteria for audit log entries.",
+            "properties": {
+              "subscriber_id": {
+                "$ref": "#/shared_entities/subscriber_id"
+              },
+              "change_request_id": {
+                "$ref": "#/shared_entities/change_request_id"
+              },
+              "approval_workflow_id": {
+                "$ref": "#/shared_entities/approval_workflow_id"
+              },
+              "execution_task_id": {
+                "$ref": "#/shared_entities/execution_task_id"
+              },
+              "event_types": {
+                "type": "array",
+                "description": "Types of events to include.",
+                "items": {
+                  "type": "string",
+                  "enum": [
+                    "change_created",
+                    "impact_analyzed",
+                    "approval_decision",
+                    "execution_started",
+                    "execution_completed",
+                    "rollback_started",
+                    "rollback_completed",
+                    "request_cancelled"
+                  ]
+                }
+              },
+              "time_range": {
+                "type": "object",
+                "description": "Time window for audit events.",
+                "properties": {
+                  "from": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "to": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                }
+              }
+            }
+          },
+          "page": {
+            "type": "integer",
+            "default": 1,
+            "minimum": 1
+          },
+          "page_size": {
+            "type": "integer",
+            "default": 50,
+            "minimum": 1,
+            "maximum": 500
+          },
+          "include_details": {
+            "type": "boolean",
+            "default": false,
+            "description": "If true, include full before/after diffs or payloads where available."
+          }
+        }
+      },
+      "returns": "Paginated list of audit log entries with timestamps, actors, event types, and optional detailed change information."
+    }
+  ]
+}
