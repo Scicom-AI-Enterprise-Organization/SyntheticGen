@@ -124,14 +124,17 @@ export default async function BootstrapPage({
               }>) ?? [],
             inserted:
               (job.inserted as unknown as Record<string, number>) ?? {},
-            // Replay the in-flight AI-call buffer so a refreshed page sees
-            // the tokens that already arrived instead of an empty agent
-            // panel. Null between phases / on terminal status.
+            // Persisted at phase-end only (one DB write per AI call instead
+            // of one every 300ms during streaming). Means refresh mid-stream
+            // doesn't replay in-flight tokens — but it does show whatever
+            // the last completed phase produced, with its terminal state.
             currentPhaseBuffer:
               (job.currentPhaseBuffer as unknown as {
                 step: string;
                 phaseIndex: number;
                 text: string;
+                state?: "done" | "error";
+                error?: string;
               } | null) ?? null,
             error: job.error,
             startedAt: job.startedAt?.toISOString() ?? null,

@@ -1,0 +1,389 @@
+{
+  "conversation_id": "myl-fnlib-native-chinese-13",
+  "workflow_name": "sim_swap_fraud_performance_management",
+  "domain": "telco_fraud/sim_swap_fraud",
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hi Encik, selamat petang. Saya Ng Boon Keat, fraud analyst dari telco fraud ops team. We got a fresh SIM swap alert dari upstream detection — MSISDN `60128776543`, alert source `risk_engine_v4`, timestamp 2026-05-21 16:45 MYT. 客户 Astro premium, **看起来很 suspicious**, the swap requested from a different state than home registration. 帮我 ingest dulu, then we work the case lah."
+    },
+    {
+      "role": "assistant",
+      "content": "您好 Encik Ng, 下午好。明白, 我现在 ingest 这个 SIM swap alert。",
+      "tool_calls": [
+        {
+          "id": "call-cn-13-001",
+          "type": "function",
+          "function": {
+            "name": "ingest_sim_swap_alert",
+            "arguments": "{\"msisdn\": \"60128776543\", \"alert_source\": \"risk_engine_v4\", \"alert_timestamp\": \"2026-05-21T16:45:00+08:00\", \"raw_signals\": {\"swap_requested_state\": \"johor\", \"home_registered_state\": \"perak\", \"swap_channel\": \"retail_store\", \"customer_tier\": \"astro_premium\"}, \"priority_hint\": \"high\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-cn-13-001",
+      "name": "ingest_sim_swap_alert",
+      "content": "{\"error\": {\"http_status\": 429, \"code\": \"rate_limit_exceeded\", \"message\": \"Per-minute ingest rate exceeded for source 'risk_engine_v4' (limit: 100/min, current burst: 142). Retry after backoff.\", \"retry_after_seconds\": 35, \"current_window_remaining\": 0, \"trace_id\": \"trc-429-2026-05-21-16-45-30-aa\"}}"
+    },
+    {
+      "role": "assistant",
+      "content": "非常抱歉 Encik, API 返回 **HTTP 429 Rate Limit Exceeded** — risk_engine_v4 这一分钟 ingest 太多 (142 vs limit 100/min)。\n\n- **Retry after:** 35 秒\n- **Trace ID:** `trc-429-2026-05-21-16-45-30-aa`\n\n我等 35 秒再 retry, OK Encik?"
+    },
+    {
+      "role": "user",
+      "content": "OK lah, tunggu. ... [pause] ... ok pass 35 saat, retry."
+    },
+    {
+      "role": "assistant",
+      "content": "好的 Encik, retry ingest。",
+      "tool_calls": [
+        {
+          "id": "call-cn-13-002",
+          "type": "function",
+          "function": {
+            "name": "ingest_sim_swap_alert",
+            "arguments": "{\"msisdn\": \"60128776543\", \"alert_source\": \"risk_engine_v4\", \"alert_timestamp\": \"2026-05-21T16:45:00+08:00\", \"raw_signals\": {\"swap_requested_state\": \"johor\", \"home_registered_state\": \"perak\", \"swap_channel\": \"retail_store\", \"customer_tier\": \"astro_premium\"}, \"priority_hint\": \"high\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-cn-13-002",
+      "name": "ingest_sim_swap_alert",
+      "content": "{\"alert_id\": \"alrt-ss-2026-05-21-aa01\", \"status\": \"ingested\", \"deduplicated\": false, \"ingested_at\": \"2026-05-21T16:46:12+08:00\", \"recommended_next\": \"enrich_sim_swap_context\"}"
+    },
+    {
+      "role": "assistant",
+      "content": "Alert ingested Encik — **Alert ID:** `alrt-ss-2026-05-21-aa01`。现在 enrich context (KYC + recent transactions + device fingerprint)。",
+      "tool_calls": [
+        {
+          "id": "call-cn-13-003",
+          "type": "function",
+          "function": {
+            "name": "enrich_sim_swap_context",
+            "arguments": "{\"alert_id\": \"alrt-ss-2026-05-21-aa01\", \"msisdn\": \"60128776543\", \"include\": [\"kyc_summary\", \"recent_transactions_24h\", \"device_history\", \"sim_history\", \"customer_value\"]}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-cn-13-003",
+      "name": "enrich_sim_swap_context",
+      "content": "{\"alert_id\": \"alrt-ss-2026-05-21-aa01\", \"kyc_summary\": {\"nric_verified\": true, \"customer_name\": \"***REDACTED-PII***\", \"home_state\": \"perak\", \"registered_since\": \"2019-03-12\"}, \"recent_transactions_24h\": [{\"type\": \"banking_otp\", \"amount_myr\": 25000, \"at\": \"2026-05-21T15:50:11+08:00\"}, {\"type\": \"ecommerce_otp\", \"amount_myr\": 4800, \"at\": \"2026-05-21T16:10:33+08:00\"}], \"device_history\": {\"last_imei\": \"353xxxxxxxxxx91\", \"new_imei_request\": \"359xxxxxxxxxx72\", \"imei_change_count_30d\": 0}, \"customer_value\": {\"arpu_myr\": 180, \"tier\": \"astro_premium\", \"loyalty_years\": 7}, \"_warning\": \"Eventually consistent: device_history sync delayed up to 90s after last_seen event.\"}"
+    },
+    {
+      "role": "assistant",
+      "content": "Context enriched Encik — 这是高风险情况:\n\n- **KYC:** NRIC verified, registered since 2019, home state **Perak** (不是 Johor!)\n- **最近 24h transactions:** RM 25,000 banking OTP (15:50), RM 4,800 e-commerce OTP (16:10) — **大量 OTP 活动!**\n- **Device:** new IMEI request (从 ...91 改为 ...72), 30 天内 0 次 IMEI change\n- **Customer value:** ARPU RM 180, Astro premium, 7 年忠诚客户\n- **PII:** name 显示 ***REDACTED-PII*** (query mode normal)\n- ⚠️ Eventually-consistent warning: device_history sync 可能 lag 90s\n\n建议 evaluate risk score。"
+    },
+    {
+      "role": "user",
+      "content": "Setuju, evaluate risk lah. Standard policy ID `pol-sim-swap-v7`, sensitivity high."
+    },
+    {
+      "role": "assistant",
+      "content": "好的 Encik, evaluate risk。",
+      "tool_calls": [
+        {
+          "id": "call-cn-13-004",
+          "type": "function",
+          "function": {
+            "name": "evaluate_sim_swap_risk",
+            "arguments": "{\"alert_id\": \"alrt-ss-2026-05-21-aa01\", \"policy_id\": \"pol-sim-swap-v7\", \"sensitivity\": \"high\", \"include_explanation\": true}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-cn-13-004",
+      "name": "evaluate_sim_swap_risk",
+      "content": "{\"alert_id\": \"alrt-ss-2026-05-21-aa01\", \"risk_score\": 0.91, \"risk_band\": \"critical\", \"recommended_action\": \"create_case_with_protective_freeze\", \"top_factors\": [{\"factor\": \"out_of_home_state_swap\", \"weight\": 0.35}, {\"factor\": \"banking_otp_within_30min\", \"weight\": 0.28}, {\"factor\": \"high_value_customer_premium\", \"weight\": 0.15}, {\"factor\": \"new_imei_paired\", \"weight\": 0.13}], \"explanation_id\": \"expl-aa01-bb02\"}"
+    },
+    {
+      "role": "assistant",
+      "content": "**Risk score: 0.91 (critical)** Encik — 强烈建议 create case + apply protective freeze。\n\nTop factors:\n1. Out-of-home-state swap (35%)\n2. Banking OTP within 30min (28%)\n3. Premium customer (15%)\n4. New IMEI paired (13%)\n\n要 create case 吗?"
+    },
+    {
+      "role": "user",
+      "content": "Ya, create case dengan urgency critical, assign saya `usr-ngbk-fraud-019` sebagai owner."
+    },
+    {
+      "role": "assistant",
+      "content": "好的 Encik, 现在 create case。",
+      "tool_calls": [
+        {
+          "id": "call-cn-13-005",
+          "type": "function",
+          "function": {
+            "name": "create_sim_swap_case",
+            "arguments": "{\"alert_id\": \"alrt-ss-2026-05-21-aa01\", \"msisdn\": \"60128776543\", \"urgency\": \"critical\", \"assigned_owner\": \"usr-ngbk-fraud-019\", \"initial_actions\": [\"protective_freeze_otp\", \"protective_freeze_sim_swap\"], \"reason\": \"Risk score 0.91 critical: out_of_home_state + banking OTP burst + new IMEI + premium customer\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-cn-13-005",
+      "name": "create_sim_swap_case",
+      "content": "{\"case_id\": \"case-ss-2026-05-21-cc03\", \"status\": \"open\", \"urgency\": \"critical\", \"assigned_to\": \"usr-ngbk-fraud-019\", \"protective_actions_queued\": [\"protective_freeze_otp\", \"protective_freeze_sim_swap\"], \"sla_first_response_minutes\": 15, \"created_at\": \"2026-05-21T16:48:55+08:00\"}"
+    },
+    {
+      "role": "assistant",
+      "content": "Case created Encik:\n\n- **Case ID:** `case-ss-2026-05-21-cc03`\n- **Urgency:** critical, **SLA first response:** 15 分钟\n- **Owner:** 您 (`usr-ngbk-fraud-019`)\n- Protective actions queued。现在 apply 吗?"
+    },
+    {
+      "role": "user",
+      "content": "Ya apply protective actions cepat — customer money kat risk."
+    },
+    {
+      "role": "assistant",
+      "content": "好的 Encik, apply protective actions 立即。",
+      "tool_calls": [
+        {
+          "id": "call-cn-13-006",
+          "type": "function",
+          "function": {
+            "name": "apply_sim_protective_actions",
+            "arguments": "{\"case_id\": \"case-ss-2026-05-21-cc03\", \"actions\": [{\"action_type\": \"protective_freeze_otp\", \"scope\": \"all_otp\", \"duration_hours\": 24}, {\"action_type\": \"protective_freeze_sim_swap\", \"duration_hours\": 24}], \"actor_id\": \"usr-ngbk-fraud-019\", \"reason\": \"Critical risk score 0.91 — protective hold during investigation\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-cn-13-006",
+      "name": "apply_sim_protective_actions",
+      "content": "{\"case_id\": \"case-ss-2026-05-21-cc03\", \"applied\": [{\"action\": \"protective_freeze_otp\", \"status\": \"success\", \"effective_at\": \"2026-05-21T16:49:30+08:00\", \"expires_at\": \"2026-05-22T16:49:30+08:00\"}], \"failed\": [{\"action\": \"protective_freeze_sim_swap\", \"status\": \"failed\", \"error\": {\"http_status\": 500, \"code\": \"internal_error\", \"message\": \"Downstream SIM lifecycle service unavailable\", \"incident_id\": \"inc-2026-05-21-1649-sim-life\"}}], \"partial_success\": true}"
+    },
+    {
+      "role": "assistant",
+      "content": "**Partial success** Encik:\n\n- ✅ **OTP freeze:** applied 16:49:30, expires 2026-05-22 16:49\n- ❌ **SIM swap freeze:** failed — **HTTP 500 Internal Error**, downstream SIM lifecycle service unavailable, incident `inc-2026-05-21-1649-sim-life`\n\nOTP freeze 已经 block 立即的 banking risk。但 SIM swap freeze 失败 — 我建议立刻 retry, 因为 IMEI swap 也是攻击向量。要 retry 这一个吗?"
+    },
+    {
+      "role": "user",
+      "content": "Ya retry. Kalau gagal lagi, escalate ke SOC manager."
+    },
+    {
+      "role": "assistant",
+      "content": "好的 Encik, retry SIM swap freeze。",
+      "tool_calls": [
+        {
+          "id": "call-cn-13-007",
+          "type": "function",
+          "function": {
+            "name": "retry_protective_action",
+            "arguments": "{\"case_id\": \"case-ss-2026-05-21-cc03\", \"action_type\": \"protective_freeze_sim_swap\", \"retry_mode\": \"restart\", \"reason\": \"Initial attempt failed with HTTP 500 incident inc-2026-05-21-1649-sim-life\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-cn-13-007",
+      "name": "retry_protective_action",
+      "content": "{\"case_id\": \"case-ss-2026-05-21-cc03\", \"action_type\": \"protective_freeze_sim_swap\", \"retry_attempt\": 2, \"status\": \"success\", \"effective_at\": \"2026-05-21T16:51:08+08:00\", \"expires_at\": \"2026-05-22T16:51:08+08:00\", \"note\": \"Downstream SIM lifecycle service recovered at 16:50:45.\"}"
+    },
+    {
+      "role": "assistant",
+      "content": "Retry success Encik — SIM swap freeze applied 16:51:08, expires 2026-05-22 16:51。Downstream service 在 16:50:45 恢复了。两个 protective actions 都 active 了。要现在 subscribe events 接收 case progression updates 吗?"
+    },
+    {
+      "role": "user",
+      "content": "Ya subscribe — email saya `ng.bk@telco-myx.com.my`, dan SOC team email `soc-alerts@telco-myx.com.my`. Event types semua case lifecycle."
+    },
+    {
+      "role": "assistant",
+      "content": "好的 Encik, subscribe events。",
+      "tool_calls": [
+        {
+          "id": "call-cn-13-008",
+          "type": "function",
+          "function": {
+            "name": "subscribe_to_sim_swap_case_events",
+            "arguments": "{\"case_id\": \"case-ss-2026-05-21-cc03\", \"subscribers\": [{\"channel\": \"email\", \"address\": \"ng.bk@telco-myx.com.my\"}, {\"channel\": \"email\", \"address\": \"soc-alerts@telco-myx.com.my\"}], \"event_types\": [\"status_change\", \"action_applied\", \"action_failed\", \"customer_contact\", \"escalation\"]}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-cn-13-008",
+      "name": "subscribe_to_sim_swap_case_events",
+      "content": "{\"subscription_id\": \"sub-case-cc03-dd04\", \"status\": \"active\", \"subscribers_confirmed\": 2, \"deprecation_warning\": {\"header\": \"X-API-Deprecated\", \"message\": \"subscribe_to_sim_swap_case_events v1 sunset on 2026-09-01. v2 supports per-event-type routing and signed payloads.\", \"sunset_date\": \"2026-09-01\"}}"
+    },
+    {
+      "role": "assistant",
+      "content": "Subscription active Encik — 2 subscribers (您 + SOC alerts) confirmed。\n\n⚠️ **主动 deprecation warning:** API v1 将于 **2026-09-01** sunset — 建议通知 platform team plan migration to v2 (支持 per-event-type routing 跟 signed payloads)。"
+    },
+    {
+      "role": "user",
+      "content": "Catat dah. Sat sat — off-topic: saya nak tanya, our team award ceremony tahun ni bila? HR tak send email lagi."
+    },
+    {
+      "role": "assistant",
+      "content": "非常抱歉 Encik, 公司 internal event scheduling 不属于我 fraud ops service 的 scope — **di luar skop**。建议 Encik 联系 HR 或者 check 公司 intranet。\n\n回到 case: 现在要 search 一下这个 MSISDN 的 historical cases (看看 repeat offender 还是 first-time)?"
+    },
+    {
+      "role": "user",
+      "content": "Ya good idea — search historical cases untuk MSISDN ni, last 12 bulan."
+    },
+    {
+      "role": "assistant",
+      "content": "好的 Encik, search historical cases。",
+      "tool_calls": [
+        {
+          "id": "call-cn-13-009",
+          "type": "function",
+          "function": {
+            "name": "search_sim_swap_cases",
+            "arguments": "{\"filters\": {\"msisdn\": \"60128776543\", \"created_after\": \"2025-05-21T00:00:00+08:00\", \"created_before\": \"2026-05-21T23:59:59+08:00\"}, \"pagination\": {\"page_size\": 20, \"include_total\": true}, \"sort\": [{\"field\": \"created_at\", \"direction\": \"desc\"}], \"request_context\": {\"actor_type\": \"user\", \"actor_id\": \"usr-ngbk-fraud-019\", \"role\": \"operator\"}}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-cn-13-009",
+      "name": "search_sim_swap_cases",
+      "content": "{\"data\": [{\"case_id\": \"case-ss-2025-11-08-jj07\", \"status\": \"closed_false_positive\", \"closed_at\": \"2025-11-09T11:00:00+08:00\", \"closed_reason\": \"customer_confirmed_legitimate_swap_in_johor\"}, {\"case_id\": \"case-ss-2025-08-22-ee08\", \"status\": \"closed_false_positive\", \"closed_at\": \"2025-08-23T15:14:00+08:00\", \"closed_reason\": \"travel_pattern_validated\"}], \"pagination\": {\"page_size\": 20, \"total\": 2, \"has_next_page\": false}}"
+    },
+    {
+      "role": "assistant",
+      "content": "Historical cases (last 12 months) Encik — **2 个 false positives**:\n\n| Case ID | Closed | Reason |\n|---|---|---|\n| case-ss-2025-11-08-jj07 | 2025-11-09 | customer confirmed legitimate Johor swap |\n| case-ss-2025-08-22-ee08 | 2025-08-23 | travel pattern validated |\n\n**重要发现:** 客户 historical pattern 显示 他经常 Johor travel — 之前两次 Perak→Johor swap 都是 legitimate。这次的 high risk score 可能也是 false positive, 但 banking OTP burst 仍然 suspicious。我建议 customer outreach 来 confirm — 这是 query mode 提供的 context, 不是 conclusion。"
+    },
+    {
+      "role": "user",
+      "content": "Bagus, betul tu — admit uncertainty ada baik. Saya akan call customer dulu confirm dia memang di Johor. Tapi tunggu, dapat case status update dulu ya, see if SLA timer still running."
+    },
+    {
+      "role": "assistant",
+      "content": "好的 Encik, get case status。",
+      "tool_calls": [
+        {
+          "id": "call-cn-13-010",
+          "type": "function",
+          "function": {
+            "name": "get_sim_swap_case_status",
+            "arguments": "{\"case_id\": \"case-ss-2026-05-21-cc03\", \"include\": [\"sla_timers\", \"applied_actions\", \"recent_events\"]}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-cn-13-010",
+      "name": "get_sim_swap_case_status",
+      "content": "{\"case_id\": \"case-ss-2026-05-21-cc03\", \"status\": \"open\", \"sla_timers\": {\"first_response_minutes_remaining\": 9, \"resolution_hours_remaining\": 23.7}, \"applied_actions\": [{\"action\": \"protective_freeze_otp\", \"effective_at\": \"2026-05-21T16:49:30+08:00\"}, {\"action\": \"protective_freeze_sim_swap\", \"effective_at\": \"2026-05-21T16:51:08+08:00\"}], \"recent_events\": [{\"event\": \"case_created\", \"at\": \"2026-05-21T16:48:55+08:00\"}, {\"event\": \"actions_applied\", \"at\": \"2026-05-21T16:51:08+08:00\"}]}"
+    },
+    {
+      "role": "assistant",
+      "content": "Case status Encik:\n\n- **Status:** open\n- **SLA first response:** 9 分钟 remaining ⚠️\n- **SLA resolution:** 23.7 hours\n- **Actions applied:** OTP freeze ✅ + SIM swap freeze ✅\n\n建议 Encik 9 分钟内 capture first-response feedback (即使 still pending customer call) 以避免 SLA breach。"
+    },
+    {
+      "role": "user",
+      "content": "Betul, saya akan call customer immediately. Tapi tunggu — capture feedback dulu ya, supaya SLA pass. Note: 'customer outreach in progress, historical pattern suggests legitimate Johor travel, awaiting verbal confirmation'."
+    },
+    {
+      "role": "assistant",
+      "content": "好的 Encik, capture feedback 现在。",
+      "tool_calls": [
+        {
+          "id": "call-cn-13-011",
+          "type": "function",
+          "function": {
+            "name": "capture_sim_swap_feedback",
+            "arguments": "{\"case_id\": \"case-ss-2026-05-21-cc03\", \"feedback_type\": \"interim_response\", \"feedback_text\": \"Customer outreach in progress; historical pattern suggests legitimate Johor travel (2 prior false positives); awaiting verbal confirmation from customer. Protective freezes maintained.\", \"submitted_by\": \"usr-ngbk-fraud-019\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-cn-13-011",
+      "name": "capture_sim_swap_feedback",
+      "content": "{\"feedback_id\": \"fb-cc03-ee05\", \"recorded_at\": \"2026-05-21T16:54:22+08:00\", \"sla_first_response_satisfied\": true, \"case_status\": \"open_with_interim_response\"}"
+    },
+    {
+      "role": "assistant",
+      "content": "Feedback recorded Encik:\n\n- **Feedback ID:** `fb-cc03-ee05`\n- **SLA first response:** ✅ satisfied (16:54:22, well within 15 min)\n- **Case status:** open_with_interim_response\n\n您可以 call 客户了。"
+    },
+    {
+      "role": "user",
+      "content": "Bagus. Sebelum tu, saya nak link case ini ke historical 2 cases — supaya investigation context lengkap untuk audit."
+    },
+    {
+      "role": "assistant",
+      "content": "好的 Encik, link cases。",
+      "tool_calls": [
+        {
+          "id": "call-cn-13-012",
+          "type": "function",
+          "function": {
+            "name": "link_sim_swap_case_to_related",
+            "arguments": "{\"case_id\": \"case-ss-2026-05-21-cc03\", \"related\": [{\"target_id\": \"case-ss-2025-11-08-jj07\", \"link_type\": \"historical_same_msisdn\", \"note\": \"Prior Perak->Johor swap, closed false positive\"}, {\"target_id\": \"case-ss-2025-08-22-ee08\", \"link_type\": \"historical_same_msisdn\", \"note\": \"Prior travel-related swap, closed false positive\"}]}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call-cn-13-012",
+      "name": "link_sim_swap_case_to_related",
+      "content": "{\"case_id\": \"case-ss-2026-05-21-cc03\", \"linked_count\": 2, \"links\": [{\"target_id\": \"case-ss-2025-11-08-jj07\", \"link_type\": \"historical_same_msisdn\"}, {\"target_id\": \"case-ss-2025-08-22-ee08\", \"link_type\": \"historical_same_msisdn\"}]}"
+    },
+    {
+      "role": "assistant",
+      "content": "2 cases linked Encik — investigation context lengkap 了。要 call customer 还是 还需要 prep apa-apa?"
+    },
+    {
+      "role": "user",
+      "content": "Tunggu, satu lagi off-topic — boleh recommend Mandarin learning app yang murah? Saya nak belajar untuk kerja, banyak customer Mandarin-speaking."
+    },
+    {
+      "role": "assistant",
+      "content": "非常抱歉 Encik, 个人 learning recommendation 不属于我 fraud ops service 的 scope — **di luar skop**。建议 Encik 看 Duolingo / HelloChinese, 或者公司 L&D portal 可能有 sponsored courses。\n\n回到 case: 还需要 prep 别的吗 customer call 之前?"
+    },
+    {
+      "role": "user",
+      "content": "Cukup, semua ready. Kalau customer confirm legitimate, saya akan rollback protective actions. Terima kasih Encik, banyak help. 谢谢, end call lah."
+    },
+    {
+      "role": "assistant",
+      "content": "不客气 Encik Ng Boon Keat。感谢您的耐心 — 今天处理了 429 rate limit, 500 partial action failure, deprecation v1 sunset, PII redaction, eventually-consistent device sync, 还有 historical pattern uncertainty。Case `case-ss-2026-05-21-cc03` 现在 protective freezes 都 active, SLA first response satisfied, 2 historical cases linked。祝 customer outreach 顺利。如果 confirm legitimate, 记得用 `rollback_protective_actions` function。再见, 下午好。"
+    }
+  ],
+  "metadata": {
+    "num_turns": 17,
+    "native_script": "chinese",
+    "pattern": "A_mixed",
+    "language_profile": "mandarin",
+    "api_errors_simulated": [
+      {"http_status": 429, "kind": "rate_limit_exceeded", "recovered": true, "via": "wait-retry-after"},
+      {"http_status": 500, "kind": "partial_action_failure", "recovered": true, "via": "retry-after-incident-recovers"},
+      {"http_status": 200, "kind": "eventually_consistent", "recovered": true, "via": "agent-explains"},
+      {"http_status": 200, "kind": "pii_redaction", "recovered": true, "via": "agent-explains-redaction"},
+      {"http_status": 200, "kind": "deprecation_warning", "recovered": true, "via": "agent-flags-sunset"},
+      {"http_status": 200, "kind": "historical_context_uncertainty", "recovered": true, "via": "admits_uncertainty"}
+    ],
+    "out_of_context_turns": [
+      {"turn": 9, "topic": "team award ceremony HR"},
+      {"turn": 16, "topic": "Mandarin learning app recommendation"}
+    ],
+    "agent_edges_demonstrated": [
+      "self_correction_after_429_backoff",
+      "retry_after_partial_failure_500",
+      "admits_uncertainty_after_historical_pattern_review",
+      "proactive_sla_timer_warning",
+      "proactive_deprecation_warning",
+      "explains_pii_redaction_as_normal_behaviour",
+      "suggests_interim_feedback_to_avoid_sla_breach"
+    ],
+    "functions_used": ["ingest_sim_swap_alert", "enrich_sim_swap_context", "evaluate_sim_swap_risk", "create_sim_swap_case", "apply_sim_protective_actions", "retry_protective_action", "subscribe_to_sim_swap_case_events", "search_sim_swap_cases", "get_sim_swap_case_status", "capture_sim_swap_feedback", "link_sim_swap_case_to_related"],
+    "language_style": "Pattern A — Encik Ng Boon Keat (Chinese-Malaysian fraud analyst); user code-switches Bahasa/English/Mandarin with ~40% Chinese drops; AGENT mirrors with Simplified Chinese + English (call-centre Mandarin register) using 您好 Encik, 非常抱歉, 好的 Encik, 谢谢; tech terms (MSISDN, IMEI, OTP, HTTP 429, KYC, SLA) inline English",
+    "generated_at": "2026-05-21T17:00:00+08:00"
+  }
+}

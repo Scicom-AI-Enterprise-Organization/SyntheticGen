@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { Play, RefreshCw, Square, User, Bot, Wrench, FlaskConical, ArrowRight, Copy, Check } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ThroughputBadge } from "@/components/throughput-badge";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -75,6 +76,10 @@ export function LiveJobPreview({
   );
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [info, setInfo] = useState<string | null>(null);
+  // Stamp the start of a job stream so we can show a live tokens-per-second
+  // chip in the header. Cleared whenever we switch jobs or the stream ends.
+  const [streamStartedAt, setStreamStartedAt] = useState<number | null>(null);
+  const [streamRunning, setStreamRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [streamBroken, setStreamBroken] = useState(false);
   const doneSeenRef = useRef(false);
@@ -224,6 +229,8 @@ export function LiveJobPreview({
       setInfo(null);
       setError(null);
       setStreamBroken(false);
+      setStreamStartedAt(null);
+      setStreamRunning(false);
       doneSeenRef.current = false;
       return;
     }
@@ -231,6 +238,8 @@ export function LiveJobPreview({
     setInfo("Connecting…");
     setError(null);
     setStreamBroken(false);
+    setStreamStartedAt(Date.now());
+    setStreamRunning(true);
     doneSeenRef.current = false;
     // Fresh job → reset the manual-scroll flag so the new replay sticks to
     // the bottom by default. The scroll listener attached below will flip
@@ -284,6 +293,7 @@ export function LiveJobPreview({
         setBlocks((prev) => [...prev, { kind: "tool_result", name, preview }]);
       } else if (event === "done") {
         doneSeenRef.current = true;
+        setStreamRunning(false);
         const ti = parsed.tokens_in as number | undefined;
         const to = parsed.tokens_out as number | undefined;
         const ms = parsed.latency_ms as number | undefined;
@@ -354,11 +364,31 @@ export function LiveJobPreview({
 
   const runningCount = runningJobs.filter((j) => !j.status || j.status === "running").length;
 
+  // Sum every text-bearing block so the throughput badge sees the same chars
+  // the user is watching scroll past. Cheap because there aren't many blocks
+  // per job.
+  const streamedText = blocks
+    .map((b) => {
+      if (b.kind === "text") return b.text;
+      if (b.kind === "user_turn") return b.text;
+      if (b.kind === "tool_call") return b.args;
+      if (b.kind === "tool_result") return b.preview;
+      return "";
+    })
+    .join("");
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center justify-between">
-          <span>Live job preview</span>
+        <CardTitle className="flex items-center justify-between gap-2">
+          <span className="flex items-center gap-2">
+            <span>Live job preview</span>
+            <ThroughputBadge
+              text={streamedText}
+              startedAt={streamStartedAt}
+              running={streamRunning}
+            />
+          </span>
           <span className="text-xs font-normal text-muted-foreground">
             {info ?? `${runningCount} running · ${runningJobs.length - runningCount} past`}
           </span>

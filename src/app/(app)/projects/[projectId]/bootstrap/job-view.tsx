@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { ThroughputBadge } from "@/components/throughput-badge";
 import {
   Card,
   CardContent,
@@ -46,13 +47,16 @@ interface JobInitial {
   scope: Record<string, boolean>;
   events: BootstrapEvent[];
   inserted: Record<string, number>;
-  // Snapshot of the in-flight AI call's accumulated text (or null between
-  // phases / once terminal). Used to seed the live agent panel so reload
-  // mid-stream doesn't drop the existing tokens.
+  // Snapshot of the most recently committed phase output (or null if no
+  // phase has finished yet). Now persisted only at phase-end — refreshing
+  // mid-stream won't show in-flight tokens, but it WILL show whatever the
+  // previous AI call produced, with its terminal state attached.
   currentPhaseBuffer: {
     step: string;
     phaseIndex: number;
     text: string;
+    state?: "done" | "error";
+    error?: string;
   } | null;
   error: string | null;
   startedAt: string | null;
@@ -137,13 +141,22 @@ export function JobView({ initial }: { initial: JobInitial }) {
     text: string;
     state: "streaming" | "done" | "error";
     error?: string;
+    // ms epoch when phase-start arrived. Drives the live tok/s meter so the
+    // user can tell how fast the model is currently generating. Cleared on
+    // phase-end; persisted-buffer seeds use null since the elapsed time is
+    // unknown after a reload.
+    startedAt: number | null;
   } | null>(
     initial.currentPhaseBuffer
       ? {
           step: initial.currentPhaseBuffer.step,
           phaseIndex: initial.currentPhaseBuffer.phaseIndex,
           text: initial.currentPhaseBuffer.text,
-          state: isTerminal(initial.status) ? "done" : "streaming",
+          // Buffer is committed only at phase-end, so it always has a final
+          // state. Default to "done" if older rows didn't store it.
+          state: initial.currentPhaseBuffer.state ?? "done",
+          error: initial.currentPhaseBuffer.error,
+          startedAt: null,
         }
       : null,
   );
@@ -225,11 +238,14 @@ export function JobView({ initial }: { initial: JobInitial }) {
               phaseIndex: t.phaseIndex,
               text: "",
               state: "streaming",
+              startedAt: Date.now(),
             };
           }
           if (t.kind === "delta") {
             // If we missed phase-start (race on reconnect), open a fresh
-            // panel on the first delta we see.
+            // panel on the first delta we see — and stamp startedAt now so
+            // the rate reflects only the in-session generation, not stale
+            // pre-reconnect time.
             if (
               !cur ||
               cur.step !== t.step ||
@@ -240,6 +256,7 @@ export function JobView({ initial }: { initial: JobInitial }) {
                 phaseIndex: t.phaseIndex,
                 text: t.content ?? "",
                 state: "streaming",
+                startedAt: Date.now(),
               };
             }
             return { ...cur, text: cur.text + (t.content ?? "") };
@@ -293,6 +310,14 @@ export function JobView({ initial }: { initial: JobInitial }) {
   function onCancel() {
     startCancel(async () => {
       await cancelBootstrap(initial.projectId, initial.id);
+      // The bootstrap page's "no ?jobId" branch only finds non-terminal
+      // jobs, so a router.refresh() after cancel would fall through to the
+      // start form. Anchor the URL to ?jobId=<this job> so the page query
+      // resolves through the explicit-jobId branch and stays on the
+      // JobView (now showing status="cancelled").
+      router.replace(
+        `/projects/${initial.projectId}/bootstrap?jobId=${initial.id}`,
+      );
       router.refresh();
     });
   }
@@ -750,6 +775,7 @@ function LiveAgentPanel({
     text: string;
     state: "streaming" | "done" | "error";
     error?: string;
+    startedAt: number | null;
   };
 }) {
   const ref = useRef<HTMLPreElement | null>(null);
@@ -760,10 +786,11 @@ function LiveAgentPanel({
       ref.current.scrollTop = ref.current.scrollHeight;
     }
   }, [stream.text]);
+
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-base">
+        <CardTitle className="flex flex-wrap items-center gap-2 text-base">
           {stream.state === "streaming" ? (
             <Loader2 className="h-4 w-4 animate-spin text-primary" />
           ) : stream.state === "error" ? (
@@ -775,6 +802,11 @@ function LiveAgentPanel({
           <Badge variant="outline" className="text-[10px]">
             call #{stream.phaseIndex + 1}
           </Badge>
+          <ThroughputBadge
+            text={stream.text}
+            startedAt={stream.startedAt}
+            running={stream.state === "streaming"}
+          />
         </CardTitle>
         <CardDescription>
           {stream.state === "streaming"

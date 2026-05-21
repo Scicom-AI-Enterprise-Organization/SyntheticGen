@@ -3,6 +3,7 @@
 import { useRef, useState, useTransition } from "react";
 import { Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ThroughputBadge } from "@/components/throughput-badge";
 import {
   Dialog,
   DialogContent,
@@ -77,6 +78,9 @@ export function AiAssistButton({
   const randomizeAbortRef = useRef<AbortController | null>(null);
   const [reasoningText, setReasoningText] = useState("");
   const [contentText, setContentText] = useState("");
+  // Stamp at start of run/randomize so the throughput meter can compute a
+  // live tokens-per-second figure. Cleared between calls.
+  const [streamStartedAt, setStreamStartedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -114,6 +118,7 @@ export function AiAssistButton({
     }
     setReasoningText("");
     setContentText("");
+    setStreamStartedAt(Date.now());
     const controller = new AbortController();
     abortRef.current = controller;
     start(async () => {
@@ -212,6 +217,7 @@ export function AiAssistButton({
     setPrompt("");
     setReasoningText("");
     setContentText("");
+    setStreamStartedAt(Date.now());
     setInfo(null);
     const controller = new AbortController();
     randomizeAbortRef.current = controller;
@@ -440,8 +446,15 @@ export function AiAssistButton({
 
             {(pending || randomizing || reasoningText || contentText) && (
               <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <Label>{randomizing ? "Randomize output" : "LLM output"}</Label>
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Label>{randomizing ? "Randomize output" : "LLM output"}</Label>
+                    <ThroughputBadge
+                      text={contentText + reasoningText}
+                      startedAt={streamStartedAt}
+                      running={pending || randomizing}
+                    />
+                  </div>
                   {info && <span className="text-xs text-muted-foreground">{info}</span>}
                 </div>
 

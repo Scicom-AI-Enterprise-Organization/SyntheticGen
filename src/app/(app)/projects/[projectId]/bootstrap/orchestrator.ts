@@ -684,50 +684,12 @@ async function callAiStreaming(
     meta: { prompt },
   });
 
-  // Initialise the persisted phase buffer for this call. The page reads
-  // this on refresh and seeds the live agent panel with whatever text
-  // already arrived, so reload mid-generation doesn't start blank.
+  // Accumulate tokens in memory only — the SSE-connected client sees them
+  // live via the in-memory bus. We persist the buffer to the row exactly
+  // once, when the AI call completes (or errors), to keep DB chatter sane.
+  // Tradeoff: refreshing mid-stream doesn't replay in-flight tokens; you'll
+  // see the buffer of the last *completed* phase until the next phase ends.
   let accumulator = "";
-  let bufferDirty = false;
-  await prisma.bootstrapJob
-    .update({
-      where: { id: jobId },
-      data: {
-        currentPhaseBuffer: {
-          step,
-          phaseIndex,
-          text: "",
-        } as Prisma.InputJsonValue,
-      },
-    })
-    .catch(() => {
-      // Non-fatal — the live bus still delivers tokens.
-    });
-
-  // Periodic flush of the accumulator to the DB. We don't write on every
-  // chunk (would be one UPDATE per token, way too chatty). 300ms is fast
-  // enough that a refresh sees recent text and slow enough to keep DB
-  // load reasonable.
-  const flushBuffer = async () => {
-    if (!bufferDirty) return;
-    bufferDirty = false;
-    try {
-      await prisma.bootstrapJob.update({
-        where: { id: jobId },
-        data: {
-          currentPhaseBuffer: {
-            step,
-            phaseIndex,
-            text: accumulator,
-          } as Prisma.InputJsonValue,
-        },
-      });
-    } catch {
-      // Best-effort: the live bus still delivers tokens; a DB hiccup
-      // just means a stale buffer until the next flush.
-    }
-  };
-  const flushTimer = setInterval(flushBuffer, 300);
 
   const abort = new AbortController();
   // Cancellation check while the stream is running. We poll every ~500ms; on
@@ -744,6 +706,32 @@ async function callAiStreaming(
     }
   }, 500);
 
+  // Commits the accumulated text to the row once. Called from both the
+  // success and error paths so a refreshed page sees what was generated for
+  // the most recent phase. `meta` carries the final state so the panel can
+  // render with the right icon.
+  const commitBuffer = async (
+    state: "done" | "error",
+    errorMessage?: string,
+  ) => {
+    try {
+      await prisma.bootstrapJob.update({
+        where: { id: jobId },
+        data: {
+          currentPhaseBuffer: {
+            step,
+            phaseIndex,
+            text: accumulator,
+            state,
+            ...(errorMessage ? { error: errorMessage } : {}),
+          } as Prisma.InputJsonValue,
+        },
+      });
+    } catch {
+      // ignore — best-effort.
+    }
+  };
+
   try {
     const data = await aiAssistStream(
       {
@@ -757,7 +745,6 @@ async function callAiStreaming(
       },
       (chunk) => {
         accumulator += chunk;
-        bufferDirty = true;
         bus.emit("token", {
           step,
           phaseIndex,
@@ -768,14 +755,17 @@ async function callAiStreaming(
       abort.signal,
     );
     bus.emit("token", { step, phaseIndex, kind: "phase-end" });
+    await commitBuffer("done");
     return data;
   } catch (e) {
+    const msg = (e as Error).message;
     bus.emit("token", {
       step,
       phaseIndex,
       kind: "phase-end",
-      meta: { error: (e as Error).message },
+      meta: { error: msg },
     });
+    await commitBuffer("error", msg);
     // Distinguish abort from other errors: if cancelled, surface the
     // sentinel so the outer catch flips into the cancelled path.
     if (abort.signal.aborted) {
@@ -784,17 +774,6 @@ async function callAiStreaming(
     throw e;
   } finally {
     clearInterval(cancelPoll);
-    clearInterval(flushTimer);
-    // Final flush + clear so the next phase doesn't start with stale text,
-    // and a refreshed page between phases doesn't see a dead buffer.
-    await prisma.bootstrapJob
-      .update({
-        where: { id: jobId },
-        data: { currentPhaseBuffer: Prisma.JsonNull },
-      })
-      .catch(() => {
-        // ignore
-      });
   }
 }
 
@@ -895,6 +874,11 @@ export async function runBootstrap(jobId: string): Promise<void> {
     const ctx: PhaseCtx = { job };
 
     // --- Taxonomy -----------------------------------------------------------
+    // Taxonomy doesn't fit the standard runPhase shape: the AI's taxonomy-node
+    // kind returns `{ names: [...] }` (a list of 3–8 nodes per call), not one
+    // entity per call. We run a small number of AI calls and iterate the
+    // returned names, inserting each. Pass already-inserted names back as
+    // extraContext so subsequent calls don't duplicate.
     let taxonomyId: string | null = null;
     if (job.scope.taxonomy) {
       await prisma.bootstrapJob.update({
@@ -902,15 +886,92 @@ export async function runBootstrap(jobId: string): Promise<void> {
         data: { currentStep: "taxonomy" },
       });
       taxonomyId = await ensureTaxonomy(job.projectId);
-      await runPhase(
-        "taxonomy",
-        ctx,
-        async (invoke, hint) => {
-          const data = await invoke(`${job.prompt} — taxonomy node for ${hint}`);
-          return insertTaxonomyNode(job.projectId, taxonomyId!, data);
-        },
-        KIND_FOR_STEP.taxonomy!,
-      );
+
+      const TAX_CALLS = 2;
+      const TAX_HINTS = [
+        "the project's main topic areas",
+        "complementary edge cases and less-obvious sub-topics",
+      ];
+      const insertedNames: string[] = [];
+      let taxInserted = 0;
+
+      await appendEvent(jobId, {
+        step: "taxonomy",
+        kind: "step-start",
+        payload: { target: TAX_CALLS, mode: "names-array" },
+      });
+
+      for (let i = 0; i < TAX_CALLS; i++) {
+        await assertNotCancelled(jobId);
+        const hint = TAX_HINTS[i % TAX_HINTS.length];
+        const extraContext =
+          insertedNames.length > 0
+            ? `Existing nodes (DO NOT duplicate):\n${insertedNames.map((n) => `- ${n}`).join("\n")}`
+            : null;
+
+        try {
+          const data = await callAiStreaming(
+            jobId,
+            "taxonomy",
+            i,
+            KIND_FOR_STEP.taxonomy!,
+            `${job.prompt} — ${hint}`,
+            job.providerId,
+            job.model,
+            extraContext,
+            job.temperature,
+            job.maxTokens,
+          );
+          // Tolerate both shapes: the new `names: [...]` schema and the older
+          // singular `name: "..."` in case the Python service changes.
+          const rawNames: unknown[] = Array.isArray(data.names)
+            ? (data.names as unknown[])
+            : typeof data.name === "string"
+              ? [data.name]
+              : [];
+          for (const raw of rawNames) {
+            await assertNotCancelled(jobId);
+            const name = typeof raw === "string" ? raw.trim() : "";
+            if (!name) continue;
+            const res = await insertTaxonomyNode(job.projectId, taxonomyId!, {
+              name,
+            });
+            if (res.ok) {
+              taxInserted++;
+              insertedNames.push(name);
+              await bumpInserted(jobId, "taxonomy");
+              await appendEvent(jobId, {
+                step: "taxonomy",
+                kind: "inserted",
+                payload: { entityId: res.id, name: res.name, callIndex: i },
+              });
+            } else {
+              await appendEvent(jobId, {
+                step: "taxonomy",
+                kind: "skipped",
+                payload: {
+                  reason: res.reason,
+                  name: res.name ?? name,
+                  callIndex: i,
+                },
+              });
+            }
+          }
+        } catch (e) {
+          if (e instanceof BootstrapCancelledError) throw e;
+          await appendEvent(jobId, {
+            step: "taxonomy",
+            kind: "step-error",
+            payload: { error: (e as Error).message, callIndex: i },
+          });
+        }
+      }
+
+      await appendEvent(jobId, {
+        step: "taxonomy",
+        kind: "step-done",
+        payload: { inserted: taxInserted, attempted: TAX_CALLS },
+      });
     }
 
     // --- Languages ----------------------------------------------------------

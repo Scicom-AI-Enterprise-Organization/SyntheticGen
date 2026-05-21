@@ -29,9 +29,13 @@ Tamil example:
 Chinese example:
 > "你好, 我的预付费余额还有多少? 我的号码 60123456789, 帮我查一下 lah."
 
-Agent **always** replies in **formal Bahasa** (or English if user code-switches to English) — agent does NOT mirror the customer back in native script. Agent acknowledges respectfully:
-- After Tamil opening: `"Vanakkam Encik, selamat petang. Saya akan…"`
-- After Chinese opening: `"Ni hao Encik, selamat petang. Saya akan…"`
+**Agent mirrors the user's primary language.** A Tamil-speaking customer is routed to a Tamil-speaking call-centre agent; a Mandarin-speaking customer to a Mandarin-speaking agent — this is how multilingual call centres (Maxis, Astro, banks) actually staff their lines in Malaysia.
+
+- **Tamil folder agent**: replies in formal **Tamil script + English** mix. Standard call-centre Tamil phrases like `வணக்கம் Encik`, `ஒரு நிமிஷம்` (one moment), `தயவுசெய்து` (please), `மிக்க நன்றி` (thank you very much). Keeps **English/romanised tech terms inline** (run ID, HTTP 401, MFA, retry, account_id, etc.). Honorific `Encik/Puan` preserved (these are Malay-borrow vocatives that are standard in Malaysian Tamil too).
+
+- **Chinese folder agent**: replies in formal **Simplified Chinese + English** mix. Standard call-centre Mandarin phrases like `您好 Encik`, `请稍等` (please wait a moment), `感谢您的耐心` (thank you for your patience), `非常抱歉` (very sorry). Keeps **English/romanised tech terms inline**. Honorific `Encik/Puan/Sir` preserved.
+
+The agent register is still **formal call-centre** — polite, professional, not chummy. No slang in Tamil (`நாஞ்சு`, `dey`, etc.) or Mandarin (`卧槽`, etc.).
 
 ## What's the same as multiturn_extra_spec.md
 
@@ -87,8 +91,10 @@ Agent **always** replies in **formal Bahasa** (or English if user code-switches 
 1. Native script **must appear in user messages**:
    - Tamil folder: at least one Tamil-script character in **≥80% of user turns** (Pattern B) or **≥40% of user turns** (Pattern A).
    - Chinese folder: same.
-2. Native script must **NOT appear in agent messages** (agent stays formal Bahasa/English).
-3. ID values and JSON tool arguments stay ASCII.
+2. Native script **must also appear in agent messages** (agent mirrors user's language):
+   - Tamil folder: at least one Tamil-script character in **≥60% of assistant turns**.
+   - Chinese folder: at least one Chinese-script character in **≥60% of assistant turns**.
+3. ID values and JSON tool arguments stay ASCII (don't put Tamil/Chinese into JSON args or IDs).
 4. All other extra-spec checks (10-20 turns, ≥8 fns, ≥3 API errors, ≥2 OOC, ≥2 edges, no forbidden tokens, vocative present).
 
 ## Output JSON shape
