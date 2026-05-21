@@ -37,6 +37,7 @@ model User {
   rubricsCreated       Rubric[]
   auditLog             AuditLogEntry[]
   bootstrapJobs        BootstrapJob[]       @relation("BootstrapJobCreatedBy")
+  globalProvidersCreated GlobalProviderCredential[] @relation("GlobalProviderCreatedBy")
 }
 
 model Account {
@@ -531,18 +532,51 @@ model ProviderCredential {
   //                         when present so vLLM Qwen3 fully suppresses reasoning).
   reasoningEffort    String?
   chatTemplateKwargs Json?
+  // Set when this row was created by importing a GlobalProviderCredential.
+  // Tracing only — local edits don't propagate back, and the global being
+  // deleted nulls this rather than removing the project copy.
+  sourceGlobalProviderId String?
   createdById        String
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
-  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  createdBy User    @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  project        Project                   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdBy      User                      @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  sourceGlobal   GlobalProviderCredential? @relation(fields: [sourceGlobalProviderId], references: [id], onDelete: SetNull)
 
   runs               GenerationRun[]
   benchmarkRuns      BenchmarkRun[]  @relation("BenchmarkRunCandidate")
   benchmarkJudgeRuns BenchmarkRun[]  @relation("BenchmarkRunJudge")
 
   @@unique([projectId, name])
+  @@index([sourceGlobalProviderId])
+}
+
+// Org-wide provider templates. Admins manage them in /admin/providers and
+// project owners import them into their own ProviderCredential rows via the
+// "Import from global" action on the project providers page. The import
+// copies the encryptedApiKey + every other field, so subsequent local edits
+// are independent of the global; re-importing creates a separate row.
+model GlobalProviderCredential {
+  id                 String   @id @default(cuid())
+  name               String   @unique
+  kind               String   @default("openai")
+  baseUrl            String
+  encryptedApiKey    Bytes
+  keyFingerprint     String
+  defaultModel       String?
+  headers            Json?
+  reasoningEffort    String?
+  chatTemplateKwargs Json?
+  archivedAt         DateTime?
+  createdById        String
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  createdBy User                 @relation("GlobalProviderCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  imports   ProviderCredential[]
+
+  @@index([archivedAt])
 }
 
 model GenerationRun {

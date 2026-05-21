@@ -30,6 +30,8 @@ Metrics:
     type_accuracy         avg fraction of top-level params with correct JSON type
     parallel_count_match  fraction of turns where call count matches reference
     id_propagation_rate   fraction of IDs from tool results re-used correctly
+    refusal_rate          fraction of out-of-context turns where model made no tool calls
+                          (only present when dataset has out_of_context_turns metadata)
 """
 
 import argparse
@@ -220,6 +222,7 @@ class TurnResult:
     req_coverages: list = field(default_factory=list)
     type_accs: list = field(default_factory=list)
     id_prop: Optional[float] = None
+    out_of_context: bool = False  # True when metadata marks this turn as off-topic
 
 
 def compute_turn_result(
@@ -306,6 +309,14 @@ def evaluate_conversation(
     turn_num = 0
     ref_idx = 0
 
+    # out_of_context_turns uses 1-based turn indices; convert to 0-based set
+    meta = conv.get("metadata", {})
+    oot_turns: set = {
+        t["turn"] - 1
+        for t in meta.get("out_of_context_turns", [])
+        if isinstance(t, dict) and "turn" in t
+    }
+
     while ref_idx < len(msgs):
         msg = msgs[ref_idx]
         role = msg["role"]
@@ -326,14 +337,16 @@ def evaluate_conversation(
             model_tcs = model_msg.tool_calls or []
 
             # Evaluate this turn
-            results.append(compute_turn_result(
+            tr = compute_turn_result(
                 turn=turn_num,
                 ref_tcs=ref_tcs,
                 model_tcs=model_tcs,
                 fn_names=fn_names,
                 fn_schema_map=fn_schema_map,
                 available_ids=available_ids,
-            ))
+            )
+            tr.out_of_context = turn_num in oot_turns
+            results.append(tr)
             turn_num += 1
 
             # Append the model's own response to history (like a real conversation)
@@ -393,6 +406,7 @@ def aggregate(all_results: list[list[TurnResult]]) -> dict:
     parallel_match = parallel_total = 0
     name_match_sum = name_match_n = 0
     name_set_tp = name_set_fp = name_set_fn = 0
+    refusal_correct = refusal_total = 0
 
     for conv_turns in all_results:
         for tr in conv_turns:
@@ -426,6 +440,11 @@ def aggregate(all_results: list[list[TurnResult]]) -> dict:
                 name_match_sum += tr.name_matches / max(tr.ref_call_count, tr.model_call_count)
                 name_match_n += 1
 
+            if tr.out_of_context:
+                refusal_total += 1
+                if tr.model_call_count == 0:
+                    refusal_correct += 1
+
     def _div(a, b): return round(a / b, 4) if b > 0 else 0.0
     def _avg(lst): return round(sum(lst) / len(lst), 4) if lst else None
 
@@ -452,6 +471,7 @@ def aggregate(all_results: list[list[TurnResult]]) -> dict:
         "type_accuracy": _avg(type_acc_vals),
         "parallel_count_match": _div(parallel_match, parallel_total),
         "id_propagation_rate": _avg(id_prop_vals),
+        "refusal_rate": _div(refusal_correct, refusal_total) if refusal_total > 0 else None,
         "_counts": {
             "tp": tp, "fp": fp, "fn": fn_miss, "tn": tn,
             "total_model_calls": json_total,
@@ -464,8 +484,13 @@ def aggregate(all_results: list[list[TurnResult]]) -> dict:
 # Data loading from HuggingFace
 # ---------------------------------------------------------------------------
 
-def load_hf_data(split: str, max_n: int) -> list[tuple[dict, dict]]:
-    """Load (lib, conv) pairs from the HuggingFace dataset."""
+def load_hf_data(split: str, max_n: int, config: Optional[str] = None) -> list[tuple[dict, dict]]:
+    """Load (lib, conv) pairs from the HuggingFace dataset.
+
+    config: HF dataset configuration/subset name (e.g. 'test-extra').
+            When None the default configuration is used.
+    split:  HF split name within that configuration (default 'train').
+    """
     try:
         from datasets import load_dataset
     except ImportError:
@@ -482,8 +507,12 @@ def load_hf_data(split: str, max_n: int) -> list[tuple[dict, dict]]:
             os.environ["HF_HOME"] = str(fallback)
             print(f"  [info] HF cache set to {fallback} (default was not writable)")
 
-    print(f"Loading {HF_DATASET} (split={split}) ...")
-    ds = load_dataset(HF_DATASET, split=split)
+    label = f"{HF_DATASET}{'/' + config if config else ''} (split={split})"
+    print(f"Loading {label} ...")
+    if config:
+        ds = load_dataset(HF_DATASET, config, split=split)
+    else:
+        ds = load_dataset(HF_DATASET, split=split)
     if max_n:
         ds = ds.select(range(min(max_n, len(ds))))
 
@@ -496,7 +525,7 @@ def load_hf_data(split: str, max_n: int) -> list[tuple[dict, dict]]:
                 "functions": json.loads(row["functions"]),
             }
             conv = {
-                "conversation_id": f"{row['workflow']}-{i}",
+                "conversation_id": row.get("conversation_id") or f"{row['workflow']}-{i}",
                 "workflow_name": row["workflow"],
                 "domain": row["domain"],
                 "messages": json.loads(row["messages"]),
@@ -540,6 +569,7 @@ def eval_single(args_tuple: tuple) -> dict:
                 "req_coverages": tr.req_coverages,
                 "type_accs": tr.type_accs,
                 "id_prop": tr.id_prop,
+                "out_of_context": tr.out_of_context,
             }
             for tr in turn_results
         ],
@@ -559,6 +589,7 @@ def rebuild_turn_results(serialized: list[dict]) -> list[TurnResult]:
         tr.req_coverages = t["req_coverages"]
         tr.type_accs = t["type_accs"]
         tr.id_prop = t["id_prop"]
+        tr.out_of_context = t.get("out_of_context", False)
         out.append(tr)
     return out
 
@@ -593,6 +624,9 @@ def print_summary(metrics: dict, n_convs: int, n_errors: int, model: str) -> Non
     print(f"    Parallel Match:     {m['parallel_count_match']:.3f}")
     ip = m['id_propagation_rate']
     print(f"    ID Propagation:     {ip:.3f}" if ip is not None else "    ID Propagation:     n/a")
+    rr = m.get('refusal_rate')
+    if rr is not None:
+        print(f"    Refusal Rate:       {rr:.3f}  (out-of-context turns correctly ignored)")
     c = m["_counts"]
     print(f"\n  Confusion: TP={c['tp']}  FP={c['fp']}  FN={c['fn']}  TN={c['tn']}")
     print(f"  Total model calls: {c['total_model_calls']}  |  ref calls: {c['total_ref_calls']}")
@@ -705,18 +739,26 @@ def update_readme(
     # Sort by tool_call_f1 descending
     ranked = sorted(all_metrics, key=lambda x: x[1]["tool_call_f1"], reverse=True)
 
+    has_refusal = any(m.get("refusal_rate") is not None for _, m in ranked)
+
+    col_headers = "| Model | Tool F1 | Name F1 | JSON Valid | Hallucination ↓ | Req Cov | Type Acc | Parallel | ID Prop |"
+    col_sep =     "|-------|--------:|--------:|-----------:|----------------:|--------:|---------:|---------:|--------:|"
+    if has_refusal:
+        col_headers += " Refusal ↑ |"
+        col_sep     += "---------:|"
+
     header = (
         "\n## Function Calling Benchmark\n\n"
         f"Dataset: [Scicom-intl/Function-Call-TaaS](https://huggingface.co/datasets/Scicom-intl/Function-Call-TaaS)"
         f" — 100 multi-turn Manglish conversations across 9 telco B2B workflows, "
         f"evaluated via full-replay mode (split: `{split}`).\n\n"
-        "| Model | Tool F1 | Name F1 | JSON Valid | Hallucination | Req Cov | Type Acc | Parallel | ID Prop |\n"
-        "|-------|--------:|--------:|-----------:|--------------:|--------:|---------:|---------:|--------:|\n"
+        f"{col_headers}\n{col_sep}\n"
     )
     rows = []
     for model, m in ranked:
         ip = m["id_propagation_rate"]
-        rows.append(
+        rr = m.get("refusal_rate")
+        row = (
             f"| {model} "
             f"| {m['tool_call_f1']:.3f} "
             f"| {m['name_set_f1']:.3f} "
@@ -725,8 +767,7 @@ def update_readme(
             f"| {m['req_coverage'] or 0.0:.3f} "
             f"| {m['type_accuracy'] or 0.0:.3f} "
             f"| {m['parallel_count_match']:.3f} "
-            f"| {ip:.3f} |"
-            if ip is not None else
+            f"| {ip:.3f} |" if ip is not None else
             f"| {model} "
             f"| {m['tool_call_f1']:.3f} "
             f"| {m['name_set_f1']:.3f} "
@@ -737,6 +778,9 @@ def update_readme(
             f"| {m['parallel_count_match']:.3f} "
             f"| n/a |"
         )
+        if has_refusal:
+            row += f" {rr:.3f} |" if rr is not None else " n/a |"
+        rows.append(row)
     table = header + "\n".join(rows) + "\n"
 
     existing = readme_path.read_text() if readme_path.exists() else ""
@@ -771,7 +815,12 @@ def read_model_file(path: str) -> list[str]:
 def main():
     script_dir = Path(__file__).parent
     default_model_file = str(script_dir / "model_list")
-    default_ckpt_dir = str(script_dir / "checkpoints")
+    # parse config early so we can derive the default checkpoint dir
+    _pre = argparse.ArgumentParser(add_help=False)
+    _pre.add_argument("--config", default=None)
+    _pre_args, _ = _pre.parse_known_args()
+    _ckpt_suffix = f"checkpoints-{_pre_args.config}" if _pre_args.config else "checkpoints"
+    default_ckpt_dir = str(script_dir / _ckpt_suffix)
     default_readme = str(script_dir / "README.md")
 
     parser = argparse.ArgumentParser(
@@ -784,6 +833,7 @@ def main():
     parser.add_argument("--all-models", action="store_true", help="Run all models in --model-file")
     parser.add_argument("--model-workers", type=int, default=3, help="Models running in parallel (default: 3)")
     parser.add_argument("--split", default="train", help="HuggingFace dataset split (default: train)")
+    parser.add_argument("--config", default=None, help="HuggingFace dataset config/subset (e.g. test-extra)")
     parser.add_argument("--max-conversations", type=int, default=0, help="0 = all")
     parser.add_argument("--workers", type=int, default=4, help="Parallel conversations per model (default: 4)")
     parser.add_argument("--checkpoint-dir", default=default_ckpt_dir)
@@ -801,7 +851,7 @@ def main():
         models = read_model_file(args.model_file)
         model = models[0]
         print(f"[dry-run] model={model}  conversations=5")
-        pairs = load_hf_data(args.split, 5)
+        pairs = load_hf_data(args.split, 5, args.config)
         conv_results, metrics = run_model_eval(client, model, pairs, args.workers, ckpt_dir)
         output_path = args.output or f"{model.replace('/', '_')}_results.json"
         Path(output_path).write_text(json.dumps({
@@ -811,7 +861,7 @@ def main():
         print(f"Saved to {output_path}")
         return
 
-    pairs = load_hf_data(args.split, args.max_conversations)
+    pairs = load_hf_data(args.split, args.max_conversations, args.config)
 
     # ---- all models ----
     if args.all_models:

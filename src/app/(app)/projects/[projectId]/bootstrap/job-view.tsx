@@ -94,7 +94,8 @@ function stepStateFrom(
   step: string,
   events: BootstrapEvent[],
   currentStep: string | null,
-): "pending" | "running" | "done" | "error" | "skipped" {
+  jobStatus: string,
+): "pending" | "running" | "done" | "error" | "skipped" | "interrupted" {
   let started = false;
   let done = false;
   let errored = false;
@@ -104,9 +105,13 @@ function stepStateFrom(
     if (e.kind === "step-done") done = true;
     if (e.kind === "step-error") errored = true;
   }
+  // Once the job is terminal, an in-flight step never completes — treat it
+  // as interrupted so the UI stops spinning a Loader2 forever after cancel.
+  const terminal = isTerminal(jobStatus);
   if (done) return errored ? "error" : "done";
-  if (started) return "running";
-  if (currentStep === step) return "running";
+  if (started || currentStep === step) {
+    return terminal ? "interrupted" : "running";
+  }
   return "pending";
 }
 
@@ -453,7 +458,7 @@ export function JobView({ initial }: { initial: JobInitial }) {
         <CardContent className="space-y-4">
           <ol className="space-y-2">
             {activeSteps.map((s) => {
-              const state = stepStateFrom(s.key, events, currentStep);
+              const state = stepStateFrom(s.key, events, currentStep, status);
               const count = inserted[s.key] ?? 0;
               return (
                 <li key={s.key} className="flex items-center gap-3 text-sm">
@@ -475,6 +480,11 @@ export function JobView({ initial }: { initial: JobInitial }) {
                   {state === "running" && (
                     <span className="text-[11px] text-muted-foreground">
                       …generating
+                    </span>
+                  )}
+                  {state === "interrupted" && (
+                    <span className="text-[11px] text-muted-foreground">
+                      interrupted
                     </span>
                   )}
                 </li>
@@ -818,6 +828,9 @@ function StateIcon({ state }: { state: string }) {
   if (state === "error") return <X className="h-4 w-4 text-destructive" />;
   if (state === "running")
     return <Loader2 className="h-4 w-4 animate-spin text-primary" />;
+  if (state === "interrupted")
+    // Static icon (no spinner) so a cancelled job stops animating.
+    return <X className="h-4 w-4 text-muted-foreground" />;
   return <ChevronRight className="h-4 w-4 text-muted-foreground" />;
 }
 

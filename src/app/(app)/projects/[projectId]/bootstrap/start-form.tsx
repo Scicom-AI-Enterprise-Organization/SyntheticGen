@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Slider } from "@/components/ui/slider";
 import {
   Card,
   CardContent,
@@ -78,11 +79,12 @@ export function StartForm({
   const [prompt, setPrompt] = useState("");
   const [providerId, setProviderId] = useState(providers[0]?.id ?? "");
   const [model, setModel] = useState(providers[0]?.defaultModel ?? "");
-  // Sampling knobs as numbers (driven by range sliders). Defaults pick up
-  // the Python kind defaults — change them per-run on the form, change the
-  // constants here if you want different defaults across the board.
-  const [temperature, setTemperature] = useState<number>(0.3);
-  const [maxTokens, setMaxTokens] = useState<number>(4096);
+  // Sampling knobs as numbers (driven by range sliders). 0.7 / 16k is a
+  // good middle ground for bootstrap runs — enough creativity to vary
+  // across personas/templates without going off the rails, and enough
+  // tokens for any of the kinds (tools + flows are the longest).
+  const [temperature, setTemperature] = useState<number>(0.7);
+  const [maxTokens, setMaxTokens] = useState<number>(16384);
   const [scope, setScope] = useState<Scope>(DEFAULT_SCOPE);
   const [err, setErr] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -237,15 +239,13 @@ export function StartForm({
                   {temperature.toFixed(2)}
                 </span>
               </Label>
-              <input
+              <Slider
                 id="temperature"
-                type="range"
                 min={0}
                 max={2}
                 step={0.05}
-                value={temperature}
-                onChange={(e) => setTemperature(Number(e.target.value))}
-                className="h-2 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary"
+                value={[temperature]}
+                onValueChange={(v) => setTemperature(v[0] ?? 0)}
               />
               <div className="flex justify-between text-[10px] text-muted-foreground">
                 <span>0 · deterministic</span>
@@ -263,15 +263,13 @@ export function StartForm({
                   {maxTokens.toLocaleString()}
                 </span>
               </Label>
-              <input
+              <Slider
                 id="max-tokens"
-                type="range"
                 min={256}
                 max={32000}
                 step={256}
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(Number(e.target.value))}
-                className="h-2 w-full cursor-pointer appearance-none rounded-full bg-muted accent-primary"
+                value={[maxTokens]}
+                onValueChange={(v) => setMaxTokens(v[0] ?? 256)}
               />
               <div className="flex justify-between text-[10px] text-muted-foreground">
                 <span>256</span>

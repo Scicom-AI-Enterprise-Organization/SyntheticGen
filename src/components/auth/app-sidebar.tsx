@@ -50,6 +50,7 @@ const ACCOUNT: Item[] = [{ label: "Profile", href: "/profile", icon: User }];
 const ADMIN: Item[] = [
   { label: "Roles", href: "/admin/roles", icon: ShieldCheck },
   { label: "Organization", href: "/admin/organization", icon: Building2 },
+  { label: "Providers", href: "/admin/providers", icon: KeySquare },
 ];
 
 const PROJECT_NAV: { label: string; segment: string; icon: LucideIcon }[] = [

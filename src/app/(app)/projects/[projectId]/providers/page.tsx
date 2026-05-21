@@ -11,6 +11,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { ProvidersTable } from "./providers-table";
+import { ImportGlobalsDialog } from "./import-globals-dialog";
 
 export default async function ProvidersPage({
   params,
@@ -34,8 +35,30 @@ export default async function ProvidersPage({
       reasoningEffort: true,
       chatTemplateKwargs: true,
       createdAt: true,
+      sourceGlobalProviderId: true,
     },
   });
+
+  // Globals available to import. We surface every active global; rows the
+  // project has already imported (matched by sourceGlobalProviderId) show as
+  // disabled with an "already imported" badge so the user can still see them
+  // but doesn't accidentally double-import.
+  const globals = canWrite
+    ? await prisma.globalProviderCredential.findMany({
+        where: { archivedAt: null },
+        orderBy: { name: "asc" },
+        select: {
+          id: true,
+          name: true,
+          kind: true,
+          baseUrl: true,
+          defaultModel: true,
+        },
+      })
+    : [];
+  const importedGlobalIds = new Set(
+    providers.map((p) => p.sourceGlobalProviderId).filter(Boolean),
+  );
 
   return (
     <div className="space-y-6">
@@ -49,12 +72,25 @@ export default async function ProvidersPage({
           </p>
         </div>
         {canWrite && (
-          <Button asChild size="sm">
-            <Link href={`/projects/${projectId}/providers/new`}>
-              <Plus className="mr-1 h-4 w-4" />
-              New provider
-            </Link>
-          </Button>
+          <div className="flex gap-2">
+            <ImportGlobalsDialog
+              projectId={projectId}
+              globals={globals.map((g) => ({
+                id: g.id,
+                name: g.name,
+                kind: g.kind,
+                baseUrl: g.baseUrl,
+                defaultModel: g.defaultModel,
+                alreadyImported: importedGlobalIds.has(g.id),
+              }))}
+            />
+            <Button asChild size="sm">
+              <Link href={`/projects/${projectId}/providers/new`}>
+                <Plus className="mr-1 h-4 w-4" />
+                New provider
+              </Link>
+            </Button>
+          </div>
         )}
       </div>
 

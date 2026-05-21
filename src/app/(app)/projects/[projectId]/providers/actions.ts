@@ -235,6 +235,100 @@ export async function updateProvider(input: z.infer<typeof updateSchema>) {
   return { ok: true };
 }
 
+// Copies one-or-more GlobalProviderCredential rows into this project as
+// fresh ProviderCredential rows. The copy is a deep clone: encryptedApiKey,
+// keyFingerprint, defaultModel, headers, reasoningEffort, chatTemplateKwargs
+// — everything — so the project provider is fully independent and edits
+// don't bleed back to the global. The `sourceGlobalProviderId` link is kept
+// purely for tracing ("imported from <X>" / future "refresh from global").
+const importSchema = z.object({
+  projectId: z.string(),
+  globalProviderIds: z.array(z.string()).min(1).max(50),
+});
+
+export async function importGlobalProviders(
+  input: z.infer<typeof importSchema>,
+) {
+  const parsed = importSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
+  const { user } = await requireProjectPermission(
+    parsed.data.projectId,
+    "providers.manage",
+  );
+
+  const globals = await prisma.globalProviderCredential.findMany({
+    where: { id: { in: parsed.data.globalProviderIds }, archivedAt: null },
+  });
+  if (globals.length === 0) {
+    return { error: "Selected global providers not found" };
+  }
+
+  // Resolve name collisions per-project: if a row with the same name already
+  // exists, append " (imported)" — and if that's also taken, " (imported 2)"
+  // and so on. Keeps the (projectId, name) unique constraint happy.
+  const existingNames = new Set(
+    (
+      await prisma.providerCredential.findMany({
+        where: { projectId: parsed.data.projectId },
+        select: { name: true },
+      })
+    ).map((p) => p.name),
+  );
+  function uniqueName(base: string): string {
+    if (!existingNames.has(base)) {
+      existingNames.add(base);
+      return base;
+    }
+    let i = 1;
+    while (true) {
+      const candidate = i === 1 ? `${base} (imported)` : `${base} (imported ${i})`;
+      if (!existingNames.has(candidate)) {
+        existingNames.add(candidate);
+        return candidate;
+      }
+      i++;
+    }
+  }
+
+  const created: { id: string; name: string }[] = [];
+  for (const g of globals) {
+    const name = uniqueName(g.name);
+    const row = await prisma.providerCredential.create({
+      data: {
+        projectId: parsed.data.projectId,
+        name,
+        kind: g.kind,
+        baseUrl: g.baseUrl,
+        encryptedApiKey: g.encryptedApiKey,
+        keyFingerprint: g.keyFingerprint,
+        defaultModel: g.defaultModel,
+        headers: (g.headers as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+        reasoningEffort: g.reasoningEffort,
+        chatTemplateKwargs:
+          (g.chatTemplateKwargs as Prisma.InputJsonValue) ?? Prisma.JsonNull,
+        sourceGlobalProviderId: g.id,
+        createdById: user.id,
+      },
+    });
+    created.push({ id: row.id, name: row.name });
+  }
+
+  await logAudit({
+    projectId: parsed.data.projectId,
+    actorUserId: user.id,
+    action: "provider.import-global",
+    targetKind: "ProviderCredential",
+    targetId: created.map((c) => c.id).join(","),
+    metadata: {
+      imported: created.map((c) => c.name),
+      sourceGlobalIds: globals.map((g) => g.id),
+    },
+  });
+
+  revalidatePath(`/projects/${parsed.data.projectId}/providers`);
+  return { ok: true as const, created };
+}
+
 export async function deleteProvider(projectId: string, id: string) {
   const { user } = await requireProjectPermission(projectId, "providers.manage");
   const refCount = await prisma.generationRun.count({
