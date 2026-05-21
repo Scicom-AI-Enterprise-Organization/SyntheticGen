@@ -62,12 +62,21 @@ Checkpoints are saved to `checkpoints/<model>.jsonl` after every conversation. I
 
 ---
 
-## Download (SFT Training Data)
+## Function Calling Benchmark
 
-```bash
-wget https://huggingface.co/datasets/Scicom-intl/Function-Call/resolve/main/telco_multifunctions_premium/train-00000-of-00001.parquet
-wget https://huggingface.co/datasets/Scicom-intl/Function-Call/resolve/main/telco_multifunctions_premium/test-00000-of-00001.parquet
-```
+Dataset: [Scicom-intl/Function-Call-TaaS](https://huggingface.co/datasets/Scicom-intl/Function-Call-TaaS) — 100 multi-turn Manglish conversations across 9 telco B2B workflows, evaluated via full-replay mode (split: `train`).
+
+| Model | Total Params | Active Params | Tool F1 | Name F1 | JSON Valid | Hallucination ↓ | Req Cov | Type Acc | Parallel | ID Prop |
+|-------|-------------:|--------------:|--------:|--------:|-----------:|----------------:|--------:|---------:|---------:|--------:|
+| minimax/minimax-m2.7 | 230B | 10B | **0.889** | 0.875 | 0.998 | **0.000** | 0.997 | 0.997 | **0.745** | 0.667 |
+| qwen/qwen3.6-27b | 27.8B | 27.8B | 0.882 | 0.865 | **1.000** | **0.000** | **1.000** | 0.999 | 0.714 | 0.857 |
+| google/gemma-4-31b-it | 31B | 31B | 0.878 | **0.952** | 0.962 | **0.000** | 0.964 | **1.000** | 0.731 | 0.188 |
+| mistralai/mistral-small-2603 | 119B | 6.5B | 0.877 | 0.846 | 0.999 | 0.001 | 0.995 | **1.000** | 0.669 | 0.471 |
+| z-ai/glm-4.7-flash | 31.2B | 3B | 0.871 | 0.866 | 0.989 | **0.000** | 0.985 | 0.988 | 0.716 | 0.292 |
+| nvidia/nemotron-3-nano-30b-a3b | 31.6B | 3.2B | 0.815 | 0.694 | **1.000** | 0.004 | 0.975 | 0.986 | 0.406 | 0.667 |
+| qwen/qwen3.6-35b-a3b | 35B | 3B | 0.791 | 0.773 | 0.992 | 0.001 | 0.987 | 0.998 | 0.529 | 0.667 |
+| nvidia/nemotron-3-super-120b-a12b | 120B | 12B | 0.780 | 0.617 | **1.000** | 0.008 | 0.999 | 0.993 | 0.380 | **0.889** |
+| google/gemma-4-26b-a4b-it | 26B | 4B | 0.668 | 0.904 | 0.920 | 0.004 | 0.915 | **1.000** | 0.454 | 0.312 |
 
 ---
 
@@ -177,26 +186,8 @@ Benchmarks measured on vLLM with H100 SXM cards, output-token throughput at typi
 
 <a id="ref3"></a>[3] MiniMax-M2.7 vLLM deployment guide (official HuggingFace README): https://huggingface.co/MiniMaxAI/MiniMax-M2.7
 
-<a id="ref4"></a>[4] Mistral-Small-3.1-24B-Instruct-2503 vLLM guide (MLA attention backend): https://huggingface.co/mistralai/Mistral-Small-4-119B-2603
+<a id="ref4"></a>[4] Mistral-Small-4-119B-2603 vLLM guide (MLA attention backend): https://huggingface.co/mistralai/Mistral-Small-4-119B-2603
 
 <a id="ref5"></a>[5] vLLM throughput benchmark — Qwen3-32B on H100 (2352 tok/s BF16 baseline): https://github.com/vllm-project/vllm/discussions/13840
 
 <a id="ref6"></a>[6] FP8 inference speedup benchmarks (2.2–2.3× over BF16): https://neuralmagic.com/blog/vllm-fp8/
-
----
-
-## Function Calling Benchmark
-
-Dataset: [Scicom-intl/Function-Call-TaaS](https://huggingface.co/datasets/Scicom-intl/Function-Call-TaaS) — 100 multi-turn Manglish conversations across 9 telco B2B workflows, evaluated via full-replay mode (split: `train`).
-
-| Model | Total Params | Active Params | Tool F1 | Name F1 | JSON Valid | Hallucination ↓ | Req Cov | Type Acc | Parallel | ID Prop |
-|-------|-------------:|--------------:|--------:|--------:|-----------:|----------------:|--------:|---------:|---------:|--------:|
-| minimax/minimax-m2.7 | 230B | 10B | **0.889** | 0.875 | 0.998 | **0.000** | 0.997 | 0.997 | **0.745** | 0.667 |
-| qwen/qwen3.6-27b | 27.8B | 27.8B | 0.882 | 0.865 | **1.000** | **0.000** | **1.000** | 0.999 | 0.714 | 0.857 |
-| google/gemma-4-31b-it | 31B | 31B | 0.878 | **0.952** | 0.962 | **0.000** | 0.964 | **1.000** | 0.731 | 0.188 |
-| mistralai/mistral-small-2603 | 119B | 6.5B | 0.877 | 0.846 | 0.999 | 0.001 | 0.995 | **1.000** | 0.669 | 0.471 |
-| z-ai/glm-4.7-flash | 31.2B | 3B | 0.871 | 0.866 | 0.989 | **0.000** | 0.985 | 0.988 | 0.716 | 0.292 |
-| nvidia/nemotron-3-nano-30b-a3b | 31.6B | 3.2B | 0.815 | 0.694 | **1.000** | 0.004 | 0.975 | 0.986 | 0.406 | 0.667 |
-| qwen/qwen3.6-35b-a3b | 35B | 3B | 0.791 | 0.773 | 0.992 | 0.001 | 0.987 | 0.998 | 0.529 | 0.667 |
-| nvidia/nemotron-3-super-120b-a12b | 120B | 12B | 0.780 | 0.617 | **1.000** | 0.008 | 0.999 | 0.993 | 0.380 | **0.889** |
-| google/gemma-4-26b-a4b-it | 26B | 4B | 0.668 | 0.904 | 0.920 | 0.004 | 0.915 | **1.000** | 0.454 | 0.312 |
