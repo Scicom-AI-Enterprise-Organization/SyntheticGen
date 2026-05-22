@@ -88,10 +88,17 @@ export function AiAssistButton({
   const contentBoxRef = useRef<HTMLPreElement | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
+  // Sticky-to-bottom: only snap if the user is currently within ~64px of
+  // the bottom. If they've scrolled up to read older tokens, leave them
+  // alone instead of yanking back on every delta.
   function autoScroll(ref: React.RefObject<HTMLPreElement | null>) {
     queueMicrotask(() => {
       const el = ref.current;
-      if (el) el.scrollTop = el.scrollHeight;
+      if (!el) return;
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distance <= 64) {
+        el.scrollTop = el.scrollHeight;
+      }
     });
   }
 

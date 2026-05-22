@@ -327,6 +327,67 @@ def _summarize_tools_for_user(tool_defs: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def _looks_like_system_prompt(out: str) -> bool:
+    """Heuristic: does this LLM output read like a system prompt (i.e.
+    assistant-side framing) rather than a customer-side first-person
+    utterance? Used as a hard validator on user-1 generation — we'd
+    rather emit a short canned customer message than render second-person
+    instructions as the first user turn.
+    """
+    if not out:
+        return True
+    head = " ".join(out.split())[:120].lower()
+    return head.startswith(
+        (
+            "you are ",
+            "you must ",
+            "you should ",
+            "you will ",
+            "act as ",
+            "speak in ",
+            "respond in ",
+            "base your communication",
+            "you write ",
+            "your role is",
+            "as a ",
+        )
+    )
+
+
+def _synthesize_customer_opening(
+    persona: dict[str, Any] | None, lp: dict[str, Any], tool_defs: list[dict[str, Any]] | None,
+) -> str:
+    """Last-resort customer opening for when the LLM keeps producing
+    system-prompt-style output. Persona-anchored, first-person, and
+    deliberately short so it's obvious in the dataset that this fallback
+    fired. Returns plain text suitable as a user turn.
+    """
+    region = ""
+    if persona:
+        region = persona.get("region") or ""
+    lang = (lp.get("primary") or "ms").lower() if lp else "ms"
+    # Bahasa Melayu and English variants of the same generic opener; pick
+    # by language code so the message at least fits the target locale.
+    if lang.startswith("ms"):
+        base = "Hi, saya nak minta bantuan untuk akaun saya."
+        if region:
+            base = f"Hi, saya dari {region}. " + base
+    else:
+        base = "Hi, I need some help with my account."
+        if region:
+            base = f"Hi, I'm in {region}. " + base
+    if tool_defs:
+        # Hint at intent so the model is more likely to pick a tool on the
+        # next turn — but stay generic enough to not constrain.
+        base += " Can you check what's going on?"
+    return base
+
+
+# Legacy alias retained for any caller that still imports the old name.
+def _looks_like_echo(out: str, seed: str) -> bool:  # noqa: ARG001
+    return _looks_like_system_prompt(out)
+
+
 async def _generate_tool_aware_user_text(
     *,
     fallback_text: str,
@@ -344,9 +405,16 @@ async def _generate_tool_aware_user_text(
     """Generate the FIRST user message such that it naturally requires the
     assistant to invoke one of the available tools.
 
-    `fallback_text` is the rendered template body — used as scenario context
-    (so the conversation still anchors to the chosen domain), and returned
-    verbatim if the LLM call fails. Returns (text, tokens_in, tokens_out, cost).
+    `fallback_text` is the rendered template body — kept only as the
+    legacy parameter name; we DO NOT pass it to the LLM anymore because
+    weaker models routinely echo the body verbatim regardless of how
+    strongly we instruct them not to. User turn 1 is now generated purely
+    from persona + tools + locale rules. If the LLM still produces
+    system-prompt-style output, we substitute a short synthesized customer
+    opening rather than rendering it. The template body is never used as
+    the visible first user turn.
+
+    Returns (text, tokens_in, tokens_out, cost).
     """
     if not tool_defs:
         return fallback_text, 0, 0, 0.0
@@ -359,17 +427,25 @@ async def _generate_tool_aware_user_text(
         if persona.get("dialectTags"):
             persona_lines.append(f"- dialectTags: {', '.join(persona['dialectTags'])}")
     persona_block = "\n".join(persona_lines) or "(none — generic Malaysian customer)"
+    tools_block = _summarize_tools_for_user(tool_defs)
+    language = lp.get("primary") or "ms"
+    register = policy.register
 
     sys = (
-        "You write realistic OPENING user messages for a synthetic customer-support "
-        "conversation. The assistant has function-calling tools available; your "
-        "message must give it a real reason to invoke at least one of them.\n\n"
+        "You write a realistic OPENING USER MESSAGE for a synthetic "
+        "customer-support conversation. Speak in FIRST PERSON as the CUSTOMER. "
+        "The assistant has function-calling tools available; your message must "
+        "give it a real reason to invoke at least one of them.\n\n"
         f"Persona:\n{persona_block}\n\n"
-        f"Target language: {lp.get('primary') or 'ms'} (register: {policy.register}).\n"
-        f"Scenario hint (the original template body — use as inspiration, not "
-        f"copy verbatim):\n{fallback_text}\n\n"
-        f"Available tools the assistant can call:\n{_summarize_tools_for_user(tool_defs)}\n\n"
+        f"Target language: {language} (register: {register}).\n\n"
+        f"Available tools the assistant can call:\n{tools_block}\n\n"
         "Hard rules:\n"
+        "- 1-3 sentences. FIRST PERSON. From the CUSTOMER's perspective.\n"
+        "- NEVER start with 'You are…', 'You must…', 'Act as…', 'Speak in…', "
+        "  'Base your communication…', 'As a…' — that's assistant-side framing.\n"
+        "- DO NOT write instructions, role descriptions, register/banned-token "
+        "  policies, taxonomy paths, or any meta content. Only what a real "
+        "  customer would type.\n"
         "- Pick ONE tool (or two related tools) to target. The user shouldn't say "
         "  the tool's name — just describe what they need such that the assistant "
         "  will obviously call that tool.\n"
@@ -381,10 +457,10 @@ async def _generate_tool_aware_user_text(
         "- Locale (Malaysia): MyKad = 12-digit `^\\d{6}-\\d{2}-\\d{4}$`, mobile = "
         "  `^\\+?60\\d{9,10}$`, MYR amounts are decimals, ISO dates are `YYYY-MM-DD`, "
         "  state codes from {KUL,SGR,PNG,JHR,KTN,TRG,KDH,PRK,MLK,NSN,PHG,PLS,SBH,SWK,PJY,LBN}.\n"
-        "- 1-3 sentences. In-character for the persona. Target language + register.\n"
         "- Reply with ONLY the user's utterance — no role tag, no quotes, no preamble, "
         "  no markdown, no labelled fields like `IC: ...`."
     )
+
     try:
         r = await chat_completion(
             base_url=base_url,
@@ -401,10 +477,107 @@ async def _generate_tool_aware_user_text(
             chat_template_kwargs=chat_template_kwargs,
         )
         text = (r.content or "").strip().strip('"').strip("'")
-        return (text or fallback_text), r.tokens_in, r.tokens_out, r.cost_usd
+        if _looks_like_system_prompt(text):
+            log.warning(
+                "tool-aware user-text returned system-prompt-style output "
+                "(model=%s) — substituting synthesized customer opening",
+                model,
+            )
+            text = _synthesize_customer_opening(persona, lp, tool_defs)
+        return (text or _synthesize_customer_opening(persona, lp, tool_defs)), r.tokens_in, r.tokens_out, r.cost_usd
     except Exception as e:  # noqa: BLE001
         log.warning("tool-aware user-text generation failed: %s", e)
-        return fallback_text, 0, 0, 0.0
+        return _synthesize_customer_opening(persona, lp, tool_defs), 0, 0, 0.0
+
+
+async def _generate_seed_user_text(
+    *,
+    seed_text: str,
+    persona: dict[str, Any] | None,
+    lp: dict[str, Any],
+    policy: FormalityPolicy,
+    base_url: str,
+    api_key: str,
+    model: str,
+    extra_headers: dict[str, Any] | None,
+    reasoning_effort: str | None,
+    chat_template_kwargs: dict[str, Any] | None,
+) -> tuple[str, int, int, float]:
+    """Generate the FIRST user message from a user-seed template body.
+
+    The seed_text is treated as INSTRUCTIONS describing what the customer
+    wants (or an example utterance to riff on) — NOT as the literal first
+    user turn. The LLM rewrites it into an in-character customer message.
+
+    This is intentional: user-seed template bodies authored by the bootstrap
+    flow are scenario hints / instructions, not chat lines. Rendering them
+    verbatim as turn 1 leaks template-style or second-person assistant
+    framing into the conversation. Routing through the LLM produces a
+    realistic customer utterance regardless of how the seed was authored.
+
+    Returns (text, tokens_in, tokens_out, cost). On error, falls back to
+    `seed_text` so the conversation still proceeds with degraded quality
+    rather than crashing the job.
+    """
+    persona_lines: list[str] = []
+    if persona:
+        for k in ("name", "description", "ethnicity", "region", "urbanity", "ageRange", "formality"):
+            v = persona.get(k)
+            if v:
+                persona_lines.append(f"- {k}: {v}")
+        if persona.get("dialectTags"):
+            persona_lines.append(f"- dialectTags: {', '.join(persona['dialectTags'])}")
+    persona_block = "\n".join(persona_lines) or "(none — generic Malaysian customer)"
+    language = lp.get("primary") or "ms"
+    register = policy.register
+
+    sys = (
+        "You write a realistic OPENING USER MESSAGE for a synthetic "
+        "customer-support conversation. Speak in FIRST PERSON as the CUSTOMER. "
+        "Produce a single utterance the customer would type into chat to "
+        "initiate the conversation.\n\n"
+        f"Persona:\n{persona_block}\n\n"
+        f"Target language: {language} (register: {register}).\n\n"
+        "Hard rules:\n"
+        "- 1-3 sentences. FIRST PERSON. From the CUSTOMER's perspective.\n"
+        "- NEVER start with 'You are…', 'You must…', 'Act as…', 'Speak in…', "
+        "  'Base your communication…', 'As a…' — that's assistant-side framing.\n"
+        "- DO NOT write instructions, role descriptions, register/banned-token "
+        "  policies, taxonomy paths, or any meta content. Only what a real "
+        "  customer would type.\n"
+        "- Include any concrete identifiers (account numbers, IC, phone, dates) "
+        "  that the scenario suggests would be present, in realistic Malaysian formats.\n"
+        "- Reply with ONLY the user's utterance — no role tag, no quotes, no preamble, "
+        "  no markdown, no labelled fields."
+    )
+
+    try:
+        r = await chat_completion(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            messages=[
+                {"role": "system", "content": sys},
+                {"role": "user", "content": "Write the opening user message now."},
+            ],
+            temperature=0.8,
+            max_tokens=300,
+            extra_headers=extra_headers,
+            reasoning_effort=reasoning_effort,
+            chat_template_kwargs=chat_template_kwargs,
+        )
+        text = (r.content or "").strip().strip('"').strip("'")
+        if _looks_like_system_prompt(text):
+            log.warning(
+                "seed user-text returned system-prompt-style output "
+                "(model=%s) — substituting synthesized customer opening",
+                model,
+            )
+            text = _synthesize_customer_opening(persona, lp, None)
+        return (text or _synthesize_customer_opening(persona, lp, None)), r.tokens_in, r.tokens_out, r.cost_usd
+    except Exception as e:  # noqa: BLE001
+        log.warning("seed user-text generation failed: %s", e)
+        return _synthesize_customer_opening(persona, lp, None), 0, 0, 0.0
 
 
 async def _simulate_user_turn(
@@ -838,13 +1011,16 @@ async def _execute_job_inner(job_id: str) -> str:
     tools_payload = _tools_payload(tool_defs) if tool_defs else None
     tools_by_name = {t["name"]: t for t in tool_defs}
 
-    # When tools are configured, replace the rendered template body with an
-    # LLM-generated opening that is engineered to trigger a tool call. The
-    # template body becomes the *scenario hint* so the conversation still
-    # anchors to the chosen domain.
+    # Replace the rendered template body with an LLM-generated opening user
+    # message. The template body is treated as a SCENARIO HINT / instructions,
+    # NOT as the literal first user turn — that way template bodies authored
+    # in second-person "You are…" framing don't leak through as user content,
+    # and each conversation gets a varied opening rooted in the same scenario.
+    # When tools are configured we use the tool-aware variant so the opening
+    # is engineered to trigger a tool call.
+    sim_in0, sim_out0 = 0, 0
+    sim_cost0 = 0.0
     if tool_defs:
-        sim_in0, sim_out0 = 0, 0
-        sim_cost0 = 0.0
         new_user_text, sim_in0, sim_out0, sim_cost0 = await _generate_tool_aware_user_text(
             fallback_text=user_text,
             persona=persona,
@@ -867,6 +1043,30 @@ async def _execute_job_inner(job_id: str) -> str:
                 "tokensIn": sim_in0,
                 "tokensOut": sim_out0,
                 "toolCount": len(tool_defs),
+            },
+        )
+        user_text = new_user_text
+    else:
+        new_user_text, sim_in0, sim_out0, sim_cost0 = await _generate_seed_user_text(
+            seed_text=user_text,
+            persona=persona,
+            lp=lp,
+            policy=policy,
+            base_url=base_url,
+            api_key=api_key,
+            model=run["model"],
+            extra_headers=extra_headers,
+            reasoning_effort=provider.get("reasoningEffort"),
+            chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")) or None,
+        )
+        await _log_event(
+            job_id,
+            "user.seed",
+            {
+                "seed": user_text[:500],
+                "generated": new_user_text[:500],
+                "tokensIn": sim_in0,
+                "tokensOut": sim_out0,
             },
         )
         user_text = new_user_text

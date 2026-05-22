@@ -1,8 +1,12 @@
 import { NextRequest } from "next/server";
-import { Client } from "pg";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/rbac";
 import { checkProjectPermission } from "@/lib/project-rbac";
+import {
+  ensureJobEventCacheStarted,
+  peekJobEvents,
+  subscribeJobEvents,
+} from "@/lib/job-event-cache";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,8 +44,7 @@ export async function GET(
   }
 
   const encoder = new TextEncoder();
-  const databaseUrl = process.env.DATABASE_URL;
-  if (!databaseUrl) {
+  if (!process.env.DATABASE_URL) {
     return new Response(
       JSON.stringify({ error: "DATABASE_URL not set" }),
       { status: 500, headers: { "content-type": "application/json" } },
@@ -58,23 +61,26 @@ export async function GET(
         }
       };
 
-      const client = new Client({ connectionString: databaseUrl });
       let closed = false;
       let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
       let watchdogTimer: ReturnType<typeof setInterval> | null = null;
       let statusPollTimer: ReturnType<typeof setInterval> | null = null;
+      let unsubscribe: (() => void) | null = null;
       const startedAt = Date.now();
 
-      const shutdown = async () => {
+      const shutdown = () => {
         if (closed) return;
         closed = true;
         if (heartbeatTimer) clearInterval(heartbeatTimer);
         if (watchdogTimer) clearInterval(watchdogTimer);
         if (statusPollTimer) clearInterval(statusPollTimer);
-        try {
-          await client.end();
-        } catch {
-          // ignore
+        if (unsubscribe) {
+          try {
+            unsubscribe();
+          } catch {
+            // ignore
+          }
+          unsubscribe = null;
         }
         try {
           controller.close();
@@ -84,29 +90,13 @@ export async function GET(
       };
 
       try {
-        await client.connect();
-        client.on("notification", (msg) => {
-          if (msg.channel !== "synthgen_job" || !msg.payload) return;
-          let parsed: { jobId?: string; event?: string };
-          try {
-            parsed = JSON.parse(msg.payload);
-          } catch {
-            return;
-          }
-          if (parsed.jobId !== jobId) return;
-          send(parsed);
-          if (parsed.event === "done") {
-            // Give the client one tick to receive it, then close.
-            setTimeout(shutdown, 50);
-          }
-        });
-        client.on("error", (e) => {
-          send({ event: "error", error: e.message });
-          shutdown();
-        });
-        await client.query("LISTEN synthgen_job");
-
         send({ event: "open", jobId });
+
+        // Start the cache eagerly so terminal-job replay below can peek at
+        // any events buffered while this job was still running (cancelled
+        // jobs in particular often produced events but didn't persist
+        // Messages — the cache is the only place those events survive).
+        await ensureJobEventCacheStarted();
 
         // If the job already finished, replay the saved content / reasoning
         // from its Message rows as synthetic delta events, then close. That
@@ -124,6 +114,31 @@ export async function GET(
           },
         });
         if (latest && ["succeeded", "failed", "skipped", "cancelled"].includes(latest.status)) {
+          // PREFER cache replay over Messages replay for terminal jobs that
+          // streamed through this process. The cache captured the raw
+          // pg_notify events (deltas, turn markers, tool fragments) which
+          // give a richer playback than what got persisted as Messages.
+          // Cancelled jobs in particular often have no saved Messages at
+          // all — without the cache, the UI just shows "Waiting for the
+          // first event…" forever.
+          const cached = peekJobEvents(jobId);
+          if (cached.length > 0) {
+            for (const ev of cached) {
+              if (ev.event === "done") continue; // we emit our own done below
+              send(ev);
+            }
+            send({
+              event: "done",
+              status: latest.status,
+              reason: "cache-replay",
+              tokens_in: Number(latest.tokensIn ?? 0),
+              tokens_out: Number(latest.tokensOut ?? 0),
+              latency_ms: latest.latencyMs ?? 0,
+              lastError: latest.lastError ?? null,
+            });
+            shutdown();
+            return;
+          }
           // Pull all assistant messages from the conversation (single-turn jobs
           // produce one; multi-turn jobs produce N). We replay reasoning first
           // then content for each, with [turn N] headers so the UI shows the
@@ -239,6 +254,18 @@ export async function GET(
           return;
         }
 
+        // Subscribe via the process-wide cache (already started above).
+        // `subscribeJobEvents` replays past events to the handler
+        // SYNCHRONOUSLY before registering for future ones, so live and
+        // historical events arrive in strict order with no interleaving.
+        unsubscribe = subscribeJobEvents(jobId, (parsed) => {
+          send(parsed);
+          if (parsed.event === "done") {
+            // Give the client one tick to receive it, then close.
+            setTimeout(shutdown, 50);
+          }
+        });
+
         // SSE-level heartbeats so intermediaries don't drop the conn.
         heartbeatTimer = setInterval(() => {
           try {
@@ -291,7 +318,7 @@ export async function GET(
         });
       } catch (e) {
         send({ event: "error", error: (e as Error).message });
-        await shutdown();
+        shutdown();
       }
     },
   });

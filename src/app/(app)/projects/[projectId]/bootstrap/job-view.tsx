@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ThroughputBadge } from "@/components/throughput-badge";
+import { useStickyBottom } from "@/lib/use-sticky-bottom";
 import {
   Card,
   CardContent,
@@ -183,7 +184,6 @@ export function JobView({ initial }: { initial: JobInitial }) {
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleting, startDelete] = useTransition();
 
-  const scrollRef = useRef<HTMLDivElement | null>(null);
   const lastRefresh = useRef(0);
 
   // Subscribe to the SSE stream. Replays from current event count so a
@@ -297,12 +297,10 @@ export function JobView({ initial }: { initial: JobInitial }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initial.id, initial.projectId]);
 
-  // Auto-scroll the event log to the bottom on new events.
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [events.length]);
+  // Auto-scroll the event log only if the user is already near the bottom.
+  // The useStickyBottom hook takes care of the "leave them alone if they
+  // scrolled up" logic so we don't fight a user mid-scroll.
+  const eventsLogRef = useStickyBottom<HTMLDivElement>([events.length]);
 
   const activeSteps = STEPS.filter((s) => initial.scope[s.key]);
   const running = !isTerminal(status);
@@ -554,7 +552,7 @@ export function JobView({ initial }: { initial: JobInitial }) {
         </CardHeader>
         <CardContent>
           <div
-            ref={scrollRef}
+            ref={eventsLogRef}
             className="max-h-[480px] space-y-1 overflow-y-auto rounded-md border border-border/60 bg-muted/20 p-3 font-mono text-[11px] leading-snug"
           >
             {events.length === 0 ? (
@@ -778,14 +776,10 @@ function LiveAgentPanel({
     startedAt: number | null;
   };
 }) {
-  const ref = useRef<HTMLPreElement | null>(null);
-  // Auto-scroll the streaming panel to the bottom so the latest token is
-  // always in view as text arrives.
-  useEffect(() => {
-    if (ref.current) {
-      ref.current.scrollTop = ref.current.scrollHeight;
-    }
-  }, [stream.text]);
+  // Stick to the bottom only when the user is already there — if they've
+  // scrolled up to read prior tokens, leave them alone instead of yanking
+  // them back on every delta.
+  const ref = useStickyBottom<HTMLPreElement>([stream.text]);
 
   return (
     <Card>

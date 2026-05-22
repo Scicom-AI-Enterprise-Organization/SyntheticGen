@@ -2,7 +2,8 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/rbac";
 import { checkProjectPermission } from "@/lib/project-rbac";
-import { executeJob } from "@/lib/synthgen-api";
+import { cancelJobTask, executeJob } from "@/lib/synthgen-api";
+import { clearJobEvents } from "@/lib/job-event-cache";
 
 export const runtime = "nodejs";
 
@@ -97,6 +98,18 @@ export async function POST(
 
     return { deleted };
   });
+
+  // Cancel any leftover asyncio tasks AND clear their event cache buffers
+  // BEFORE re-dispatching. Without this, (a) a stale task from the prior
+  // attempt could still write back to the row mid-restart, and (b) the
+  // cache replays the previous run's user-turn / assistant events on top
+  // of the new run's stream when the user opens the preview.
+  await Promise.all(
+    jobs.map((j) => cancelJobTask(j.id).catch(() => undefined)),
+  );
+  for (const job of jobs) {
+    clearJobEvents(job.id);
+  }
 
   // Fire-and-forget each job's worker dispatch. Sequential rather than
   // Promise.all so a transient worker failure on one call doesn't abort the rest.

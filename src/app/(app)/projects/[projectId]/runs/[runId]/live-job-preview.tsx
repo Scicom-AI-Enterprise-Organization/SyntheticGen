@@ -87,10 +87,6 @@ export function LiveJobPreview({
   const [restarting, start] = useTransition();
   const [stopping, startStop] = useTransition();
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  // True once the user has manually scrolled away from the bottom. The SSE
-  // event handler reads this to decide whether to auto-scroll back to the
-  // bottom on new tokens. Reset to false whenever they return to the bottom.
-  const userScrolledUpRef = useRef(false);
   const [copied, setCopied] = useState(false);
   const copyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -241,10 +237,6 @@ export function LiveJobPreview({
     setStreamStartedAt(Date.now());
     setStreamRunning(true);
     doneSeenRef.current = false;
-    // Fresh job → reset the manual-scroll flag so the new replay sticks to
-    // the bottom by default. The scroll listener attached below will flip
-    // it back on if the user scrolls up mid-stream/replay.
-    userScrolledUpRef.current = false;
 
     const url = `/api/projects/${projectId}/runs/${runId}/jobs/${selectedId}/stream`;
     const es = new EventSource(url);
@@ -317,14 +309,22 @@ export function LiveJobPreview({
         setError((parsed.error as string) || "stream error");
         setStreamBroken(true);
       }
-      // Sticky-to-bottom: only auto-scroll when the user IS at the bottom.
-      // If they've scrolled up to read something, leave them alone — the
-      // `userScrolledUpRef` flag is set by a scroll listener (below) when
-      // they move away from the bottom.
+      // Sticky-to-bottom: snap to the bottom ONLY if the user is currently
+      // near the bottom. Reading the live scrollTop here (instead of relying
+      // on a debounced "user scrolled up" flag) is the only way to avoid
+      // racing with the scroll listener — the listener is passive + async,
+      // so a token arriving mid-scroll-up otherwise snapped the user back
+      // to the bottom before the flag could update.
       queueMicrotask(() => {
         const el = scrollRef.current;
         if (!el) return;
-        if (!userScrolledUpRef.current) {
+        // The new content WILL grow scrollHeight after this microtask
+        // returns, so we measure distance from the bottom BEFORE that
+        // happens — anything within ~64px of the bottom counts as "still
+        // following" and gets snapped. More than that means the user has
+        // intentionally scrolled away and we leave them alone.
+        const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+        if (distance <= 64) {
           el.scrollTop = el.scrollHeight;
         }
       });
@@ -340,20 +340,9 @@ export function LiveJobPreview({
     return () => es.close();
   }, [projectId, runId, selectedId, subscribeNonce]);
 
-  // Track whether the user has manually scrolled away from the bottom of the
-  // preview pane. When they have, auto-stick is suspended (see the SSE event
-  // handler above). When they scroll back to within 24px of the bottom, we
-  // resume auto-stick so a subsequent burst of tokens follows the cursor.
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    const onScroll = () => {
-      const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
-      userScrolledUpRef.current = distanceFromBottom > 24;
-    };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, [selectedId]);
+  // (Previously had a scroll listener that maintained a `userScrolledUpRef`
+  // flag here. The auto-scroll path now measures distance-from-bottom at
+  // the moment a new token lands, which is race-free without the flag.)
 
   if (runningJobs.length === 0 && !selectedId) {
     return null;
@@ -486,10 +475,17 @@ export function LiveJobPreview({
           </p>
         )}
 
-        {blocks.length === 0 && selectedId && (
+        {blocks.length === 0 && selectedId && streamRunning && (
           <p className="text-xs text-muted-foreground">
             Connected. Waiting for the first event from job{" "}
             <span className="font-mono">{selectedId.slice(-6)}</span>…
+          </p>
+        )}
+        {blocks.length === 0 && selectedId && !streamRunning && !error && (
+          <p className="text-xs text-muted-foreground">
+            No streamed events were captured for job{" "}
+            <span className="font-mono">{selectedId.slice(-6)}</span>. The job
+            ended before producing any content.
           </p>
         )}
 

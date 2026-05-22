@@ -2,7 +2,8 @@ import { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/rbac";
 import { checkProjectPermission } from "@/lib/project-rbac";
-import { executeJob } from "@/lib/synthgen-api";
+import { cancelJobTask, executeJob } from "@/lib/synthgen-api";
+import { clearJobEvents } from "@/lib/job-event-cache";
 
 export const runtime = "nodejs";
 
@@ -42,6 +43,20 @@ export async function POST(
       headers: { "content-type": "application/json" },
     });
   }
+
+  // If the job was running, kill the prior asyncio task FIRST so we don't
+  // have two concurrent runs writing to the same row.
+  if (job.status === "running") {
+    try {
+      await cancelJobTask(jobId);
+    } catch {
+      // ignore — DB reset below makes this best-effort
+    }
+  }
+
+  // Clear the in-memory event cache for this jobId so the upcoming run
+  // doesn't replay the previous attempt's events on top of its own.
+  clearJobEvents(jobId);
 
   // Reset to queued so the worker's UPDATE→running transition behaves cleanly.
   // Clear conversationId for succeeded re-runs so the new attempt writes a

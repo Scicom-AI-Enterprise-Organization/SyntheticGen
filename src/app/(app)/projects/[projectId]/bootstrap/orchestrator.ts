@@ -126,8 +126,14 @@ const PHASE_HINTS: Record<BootstrapStep, string[]> = {
     "an Indian-Malaysian customer in a mid-size city, professional context",
   ],
   templates: [
-    "system-prompt template that locks the assistant to the project's locale + register, mentions persona variables",
-    "user-seed template producing a realistic single-turn customer inquiry referencing taxonomy.path and persona.region",
+    // First call — kind=\"system\". The body must be a SYSTEM PROMPT written
+    // in second person to the assistant, telling it how to behave. Do NOT
+    // write a customer message here.
+    'A SYSTEM PROMPT template (kind="system"). The body MUST be written in second person to the assistant — e.g. starts with "You are a helpful customer-support assistant…". It locks the assistant to the project locale, register rules, and persona variables. It MUST NOT contain any customer-style first-person inquiry text. Example body shape: "You are a helpful agent for {{brand}}. Speak in {{language}} using {{register}}. The customer is {{persona.role}} from {{persona.region}}. Never use banned tokens: {{banned_tokens}}. Stay strictly within /{{taxonomy.path}}."',
+    // Second call — kind=\"user-seed\". The body must be a CUSTOMER MESSAGE
+    // in first person, the kind of thing a real user would type. Do NOT
+    // write assistant instructions or second-person guidance.
+    'A USER-SEED template (kind="user-seed"). The body MUST be a realistic FIRST-PERSON customer message — the kind of thing a real customer would type into chat. It MUST NOT be written in second person to the assistant; no "You are…", no register/banned-token instructions. Reference {{taxonomy.path}} and {{persona.region}} via interpolation if useful. Example body shape: "Hi, I tried to log in just now but it keeps saying my OTP is invalid. My number is +60 12-345 6789 and I am in {{persona.region}}. Can you help me check what is wrong with my account?"',
   ],
   tools: [
     "a function that looks up an account or record by an identifier",
@@ -432,6 +438,7 @@ async function insertPersona(
 async function insertTemplate(
   projectId: string,
   raw: Record<string, unknown>,
+  forcedKind?: string,
 ): Promise<{ ok: boolean; reason?: string; id?: string; name?: string }> {
   const name = typeof raw.name === "string" ? raw.name.trim() : "";
   const body = typeof raw.body === "string" ? raw.body : "";
@@ -444,11 +451,27 @@ async function insertTemplate(
   });
   if (dup) return { ok: false, reason: "name already exists", name };
 
+  // Resolve the template kind in three layers:
+  //   1. If the body clearly reads as second-person assistant instructions
+  //      ("You are…", "You must…", "Act as…"), classify as "system" — the
+  //      LLM frequently produces these bodies even when asked for a
+  //      user-seed, and forcing such a body into the user-seed slot makes
+  //      it render as the first user turn, which is wrong.
+  //   2. Otherwise honour `forcedKind` from the caller (bootstrap pins by
+  //      iteration index).
+  //   3. Otherwise honour whatever the model put in `raw.kind`.
+  //   4. Final fallback: "user-seed".
   const allowedKind = ["system", "user-seed", "judge", "conversation-driver"];
-  const kind =
-    typeof raw.kind === "string" && allowedKind.includes(raw.kind)
-      ? raw.kind
-      : "user-seed";
+  const looksLikeSystemBody = /^\s*(you\s+are\b|you\s+must\b|you\s+should\b|you\s+will\b|act\s+as\b|speak\s+in\b|respond\s+in\b)/i.test(
+    body,
+  );
+  const kind = looksLikeSystemBody
+    ? "system"
+    : forcedKind && allowedKind.includes(forcedKind)
+      ? forcedKind
+      : typeof raw.kind === "string" && allowedKind.includes(raw.kind)
+        ? raw.kind
+        : "user-seed";
 
   const created = await prisma.promptTemplate.create({
     data: {
@@ -1034,17 +1057,24 @@ export async function runBootstrap(jobId: string): Promise<void> {
     }
 
     // --- Templates ----------------------------------------------------------
+    // PHASE_HINTS.templates[0] = system prompt, [1] = user-seed. Force the
+    // kind by index because the model frequently returns `kind: "user-seed"`
+    // for both calls even when prompted for a system template — and a run
+    // needs a real `kind: "system"` template to set the assistant role.
     if (job.scope.templates) {
       await prisma.bootstrapJob.update({
         where: { id: jobId },
         data: { currentStep: "templates" },
       });
+      const TEMPLATE_KINDS_BY_INDEX = ["system", "user-seed"] as const;
       await runPhase(
         "templates",
         ctx,
-        async (invoke, hint) => {
+        async (invoke, hint, index) => {
           const data = await invoke(`${job.prompt} — ${hint}`);
-          return insertTemplate(job.projectId, data);
+          const forcedKind =
+            TEMPLATE_KINDS_BY_INDEX[index] ?? "user-seed";
+          return insertTemplate(job.projectId, data, forcedKind);
         },
         KIND_FOR_STEP.templates!,
       );

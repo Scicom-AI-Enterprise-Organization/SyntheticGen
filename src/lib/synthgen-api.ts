@@ -41,6 +41,16 @@ export async function executeJob(jobId: string): Promise<{ ok: boolean }> {
   return call(`/internal/jobs/${jobId}/execute`, { method: "POST" });
 }
 
+// Cancel the in-flight asyncio task for this job in the Python worker
+// process. Best-effort — if the task already finished or never registered
+// (e.g. job was only pending), Python returns ok with cancelled=0. Use
+// this AFTER updating the DB row so the SSE picks up the new status.
+export async function cancelJobTask(
+  jobId: string,
+): Promise<{ ok: boolean; cancelled?: number }> {
+  return call(`/internal/jobs/${jobId}/cancel-task`, { method: "POST" });
+}
+
 export type AiAssistKind =
   | "persona"
   | "taxonomy-node"

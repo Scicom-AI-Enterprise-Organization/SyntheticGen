@@ -29,7 +29,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <AppSidebar isAdmin={isAdmin} projects={projects} />
           <div className="flex min-w-0 flex-1 flex-col">
             <AppTopbar projects={projects} />
-            <main className="min-w-0 flex-1 overflow-y-auto px-4 py-8 lg:px-8">
+            <main className="min-w-0 flex-1 overflow-y-auto px-4 pt-8 pb-4 lg:px-8">
               {children}
             </main>
           </div>

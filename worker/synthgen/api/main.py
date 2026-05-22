@@ -83,6 +83,38 @@ async def cancel_run(run_id: str, _=Depends(require_internal)):
            WHERE "runId" = $1 AND status = 'pending'""",
         run_id,
     )
+    # In-flight jobs: flip them to `cancelled` and emit a pg_notify `done`
+    # for each so any open Live Job Preview SSE closes immediately. We can't
+    # actually interrupt a running LLM call (no mid-stream cancel hook in the
+    # worker today) — if the chat completion is mid-flight it will still run
+    # to completion and may try to write its result back, but the row is
+    # already `cancelled` so the user-visible state is correct.
+    in_flight = await db.fetch_all(
+        """UPDATE "GenerationJob"
+           SET status = 'cancelled', "finishedAt" = NOW(), "updatedAt" = NOW(),
+               "lastError" = COALESCE("lastError", 'Run cancelled by user')
+           WHERE "runId" = $1 AND status IN ('queued', 'running')
+           RETURNING id""",
+        run_id,
+    )
+    # Cancel the actual asyncio tasks so the in-flight LLM HTTP calls are
+    # aborted at the network layer instead of running to completion and
+    # then discarding the result.
+    _cancel_job_tasks([row["id"] for row in in_flight])
+    for row in in_flight:
+        payload = _json.dumps({
+            "jobId": row["id"],
+            "runId": run_id,
+            "event": "done",
+            "status": "cancelled",
+            "reason": "run_cancelled",
+        })
+        try:
+            await db.execute("SELECT pg_notify('synthgen_job', $1)", payload)
+        except Exception:  # noqa: BLE001
+            # Best-effort — the SSE has a 4s status poll that catches the
+            # cancelled status as a fallback even if pg_notify fails.
+            pass
     return {"ok": True}
 
 
@@ -94,13 +126,50 @@ async def build_export_endpoint(export_id: str, _=Depends(require_internal)):
     return {"ok": True, **result.__dict__}
 
 
+# Registry of in-flight job tasks so cancel endpoints can actually cancel
+# them. Without this, `cancel_run` only flips the DB row and the asyncio
+# task underneath keeps making LLM calls until execute_job naturally
+# returns — wasting tokens and confusing the user. We map jobId -> Task
+# at dispatch and pop on completion. `task.cancel()` propagates
+# `CancelledError` into the awaiting httpx call so the in-flight POST is
+# aborted at the network layer.
+_running_tasks: dict[str, asyncio.Task[None]] = {}
+
+
+def _cancel_job_tasks(job_ids: list[str]) -> int:
+    """Cancel every in-flight task in the given job-id set. Returns the
+    number actually cancelled (some may already be done / popped)."""
+    cancelled = 0
+    for jid in job_ids:
+        task = _running_tasks.get(jid)
+        if task and not task.done():
+            task.cancel()
+            cancelled += 1
+    return cancelled
+
+
+@app.post("/internal/jobs/{job_id}/cancel-task")
+async def cancel_job_task_endpoint(job_id: str, _=Depends(require_internal)):
+    """Cancel the in-flight asyncio task for a job, if any. Called by the
+    Next.js cancel routes after they flip the DB row. Idempotent: if no
+    task is running for this jobId, returns ok with cancelled=0."""
+    cancelled = _cancel_job_tasks([job_id])
+    return {"ok": True, "cancelled": cancelled}
+
+
 @app.post("/internal/jobs/{job_id}/execute")
 async def execute_job_endpoint(job_id: str, _=Depends(require_internal)):
     """Dispatch a single job for execution as a background task and return
     immediately. Errors during execution get logged + persisted to the
     GenerationJob row (status=failed, lastError) so the UI can surface them
     without a 500 from this endpoint."""
-    asyncio.create_task(_run_job_safe(job_id))
+    # If this jobId already has a task running (e.g. user spammed
+    # Regenerate), cancel the previous one first so we don't have two
+    # parallel runs writing to the same row.
+    _cancel_job_tasks([job_id])
+    task = asyncio.create_task(_run_job_safe(job_id))
+    _running_tasks[job_id] = task
+    task.add_done_callback(lambda _t, j=job_id: _running_tasks.pop(j, None))
     return {"ok": True, "jobId": job_id}
 
 

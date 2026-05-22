@@ -3,6 +3,7 @@ import { Client } from "pg";
 import { prisma } from "@/lib/db";
 import { requireUser } from "@/lib/rbac";
 import { checkProjectPermission } from "@/lib/project-rbac";
+import { cancelJobTask } from "@/lib/synthgen-api";
 
 export const runtime = "nodejs";
 
@@ -52,6 +53,16 @@ export async function POST(
       lastError: "Cancelled by user",
     },
   });
+
+  // Cancel the asyncio task in the Python api so the in-flight LLM HTTP
+  // call is aborted at the network layer. Without this, the worker keeps
+  // streaming tokens even after the DB row says cancelled.
+  try {
+    await cancelJobTask(jobId);
+  } catch {
+    // Best-effort — DB row is already cancelled; the worker will discard
+    // its result on completion if it tries to write back.
+  }
 
   // Pump a `done` event on the synthgen_job channel so any open SSE for this
   // job closes immediately. Best-effort — if pg_notify fails we already

@@ -85,7 +85,7 @@ export function RegenRunButton({
   }
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="relative">
       <Button
         type="button"
         size="sm"
@@ -111,12 +111,18 @@ export function RegenRunButton({
         )}
       </Button>
       {info && (
-        <span className="max-w-[320px] truncate text-[10px] text-muted-foreground" title={info}>
+        <span
+          className="absolute right-0 top-full mt-1 max-w-[320px] truncate text-[10px] text-muted-foreground"
+          title={info}
+        >
           {info}
         </span>
       )}
       {error && (
-        <span className="max-w-[320px] truncate text-[10px] text-destructive" title={error}>
+        <span
+          className="absolute right-0 top-full mt-1 max-w-[320px] truncate text-[10px] text-destructive"
+          title={error}
+        >
           {error}
         </span>
       )}
