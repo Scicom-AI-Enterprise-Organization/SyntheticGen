@@ -610,17 +610,16 @@ async function insertBenchmark(
 async function insertFlow(
   projectId: string,
   raw: Record<string, unknown>,
+  fallbackName: string,
 ): Promise<{ ok: boolean; reason?: string; id?: string; name?: string }> {
-  const name = typeof raw.name === "string" ? raw.name.trim() : "";
-  if (!name) return { ok: false, reason: "AI returned no name" };
+  // The Python flow-graph schema returns only `{ nodes, edges }` — no `name`.
+  // Use whatever name the AI happens to include (defensive), else fall back
+  // to a derived name passed in by the orchestrator. Then resolve duplicates
+  // by appending " 2", " 3", etc.
+  const aiName = typeof raw.name === "string" ? raw.name.trim() : "";
+  let name = aiName || fallbackName;
 
-  const dup = await prisma.flow.findFirst({
-    where: { projectId, name },
-    select: { id: true },
-  });
-  if (dup) return { ok: false, reason: "name already exists", name };
-
-  // Minimal validation: nodes + edges arrays, with at least a start node.
+  // Minimal validation: nodes + edges arrays, with at least one node.
   const nodes = Array.isArray(raw.nodes) ? raw.nodes : null;
   const edges = Array.isArray(raw.edges) ? raw.edges : null;
   if (!nodes || nodes.length === 0) {
@@ -628,6 +627,22 @@ async function insertFlow(
   }
   if (!edges) {
     return { ok: false, reason: "AI returned no flow edges" };
+  }
+
+  // Dedup against project name uniqueness so rerunning bootstrap doesn't fail
+  // with a "Unique constraint violation" — append a counter until free.
+  const existingNames = new Set(
+    (
+      await prisma.flow.findMany({
+        where: { projectId, name: { startsWith: name } },
+        select: { name: true },
+      })
+    ).map((f) => f.name),
+  );
+  if (existingNames.has(name)) {
+    let i = 2;
+    while (existingNames.has(`${name} ${i}`)) i++;
+    name = `${name} ${i}`;
   }
 
   const created = await prisma.flow.create({
@@ -1087,9 +1102,14 @@ export async function runBootstrap(jobId: string): Promise<void> {
       await runPhase(
         "flows",
         ctx,
-        async (invoke, hint) => {
+        async (invoke, hint, index) => {
           const data = await invoke(`${job.prompt} — ${hint}`, flowExtraContext);
-          return insertFlow(job.projectId, data);
+          // Python flow-graph schema returns only { nodes, edges } — no
+          // name. Derive one so the project's unique-on-name constraint
+          // is satisfied; insertFlow dedups with a numeric suffix if a
+          // flow already exists with the same base name.
+          const fallback = `Bootstrap flow ${index + 1}`;
+          return insertFlow(job.projectId, data, fallback);
         },
         KIND_FOR_STEP.flows!,
       );
