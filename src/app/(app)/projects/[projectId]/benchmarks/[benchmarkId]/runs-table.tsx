@@ -37,17 +37,42 @@ function pct(n: unknown): string {
   return typeof n === "number" ? `${(n * 100).toFixed(1)}%` : "—";
 }
 
+// Legacy rows persist BenchmarkRun.metrics as a JSON-encoded *string*
+// (worker wrote without `::jsonb` cast). This helper parses defensively
+// so completed runs don't render every column as "—" despite having
+// real data in the DB.
+function asMetricsObject(
+  metrics: unknown,
+): Record<string, unknown> | null {
+  if (typeof metrics === "string") {
+    try {
+      const p = JSON.parse(metrics);
+      return p && typeof p === "object" && !Array.isArray(p)
+        ? (p as Record<string, unknown>)
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  if (metrics && typeof metrics === "object" && !Array.isArray(metrics)) {
+    return metrics as Record<string, unknown>;
+  }
+  return null;
+}
+
 function readOverall(metrics: Record<string, unknown> | null) {
-  if (!metrics || typeof metrics !== "object") return null;
-  const overall = (metrics as { overall?: Record<string, unknown> }).overall;
+  const m = asMetricsObject(metrics);
+  if (!m) return null;
+  const overall = (m as { overall?: Record<string, unknown> }).overall;
   if (!overall || typeof overall !== "object") return null;
   return overall as Record<string, unknown>;
 }
 
 // Detect chat-replay metrics by looking for the marker we write from the worker.
 function isChatReplay(metrics: Record<string, unknown> | null): boolean {
-  if (!metrics) return false;
-  return (metrics as { kind?: string }).kind === "chat-replay";
+  const m = asMetricsObject(metrics);
+  if (!m) return false;
+  return (m as { kind?: string }).kind === "chat-replay";
 }
 
 export function RunsTable({

@@ -13,6 +13,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { RunMetricsPanel } from "./run-metrics-panel";
 import { ResultsTable, type ResultRow } from "./results-table";
+import { RestartBenchmarkRunButton } from "./restart-button";
+import { LiveBenchmarkPreview } from "./live-benchmark-preview";
+import { projectRoleAllows } from "@/lib/project-rbac";
 
 export default async function BenchmarkRunPage({
   params,
@@ -20,7 +23,8 @@ export default async function BenchmarkRunPage({
   params: Promise<{ projectId: string; benchmarkId: string; runId: string }>;
 }) {
   const { projectId, benchmarkId, runId } = await params;
-  await requireProjectPermission(projectId, "benchmarks.read");
+  const { role } = await requireProjectPermission(projectId, "benchmarks.read");
+  const canRestart = role ? projectRoleAllows(role, "benchmarks.execute") : false;
 
   const run = await prisma.benchmarkRun.findFirst({
     where: { id: runId, benchmarkId },
@@ -34,7 +38,11 @@ export default async function BenchmarkRunPage({
   if (!run || run.benchmark.projectId !== projectId) notFound();
 
   const results = await prisma.benchmarkResult.findMany({
-    where: { runId },
+    // Filter out per-turn detail rows (kind='chat-replay-turn') — they
+    // exist for drill-down but the table shows one row per conversation.
+    // Per-turn details are surfaced in the expanded view of the
+    // conversation-level row instead.
+    where: { runId, kind: { not: "chat-replay-turn" } },
     orderBy: [{ judgeVerdict: "asc" }, { rowIdx: "asc" }],
     take: 500,
   });
@@ -79,18 +87,57 @@ export default async function BenchmarkRunPage({
           <ArrowLeft className="h-3 w-3" />
           {run.benchmark.name}
         </Link>
-        <h1 className="mt-1 flex flex-wrap items-center gap-2 text-2xl font-semibold tracking-tight">
-          Run
-          <code className="font-mono text-sm">{run.id.slice(0, 12)}</code>
-          <Badge variant="outline" className="text-[10px]">
-            {run.status}
-          </Badge>
-          {isChatReplay && (
+        {(() => {
+          // BenchmarkRun.samplingParams stores judge_strategy + concurrency
+          // among the user's per-run config. Surface them as header badges
+          // so reviewers can tell at a glance how a run was configured
+          // without having to expand expressions in raw JSON.
+          const sp =
+            (run.samplingParams as
+              | {
+                  judge_strategy?: string;
+                  concurrency?: number;
+                }
+              | null
+              | undefined) ?? null;
+          const judgeStrategy = sp?.judge_strategy ?? "one-shot";
+          const concurrency = typeof sp?.concurrency === "number" ? sp.concurrency : null;
+          return (
+        <div className="mt-1 flex flex-wrap items-center justify-between gap-2">
+          <h1 className="flex flex-wrap items-center gap-2 text-2xl font-semibold tracking-tight">
+            Run
+            <code className="font-mono text-sm">{run.id.slice(0, 12)}</code>
             <Badge variant="outline" className="text-[10px]">
-              {run.mode}
+              {run.status}
             </Badge>
+            {isChatReplay && (
+              <>
+                <Badge variant="outline" className="text-[10px]">
+                  replay: {run.mode}
+                </Badge>
+                <Badge variant="outline" className="text-[10px]">
+                  judge: {judgeStrategy}
+                </Badge>
+                {concurrency != null && concurrency > 1 && (
+                  <Badge variant="outline" className="text-[10px]">
+                    parallel: {concurrency}
+                  </Badge>
+                )}
+              </>
+            )}
+          </h1>
+          {canRestart && (
+            <RestartBenchmarkRunButton
+              projectId={projectId}
+              runId={run.id}
+              status={run.status}
+              completedTurns={run.completedTurns}
+              totalTurns={run.totalTurns}
+            />
           )}
-        </h1>
+        </div>
+          );
+        })()}
         <div className="mt-1 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
           <div>
             <span className="text-muted-foreground/70">Candidate:</span>{" "}
@@ -135,7 +182,84 @@ export default async function BenchmarkRunPage({
             {run.lastError}
           </p>
         )}
+        {(() => {
+          // Calibration drift report — populated by the worker at the
+          // start of the run if any calibration items exist. Show it
+          // prominently so reviewers know whether to trust the rankings.
+          const raw = run.calibrationReport as unknown;
+          type CalibReport = {
+            items?: Array<{
+              conversationId?: string;
+              maxDelta?: number;
+              delta?: Record<string, number>;
+            }>;
+            maxDelta?: number;
+            meanDelta?: number;
+            driftFlagged?: boolean;
+            threshold?: number;
+          };
+          let parsed: CalibReport | null = null;
+          if (typeof raw === "string") {
+            try {
+              const p = JSON.parse(raw);
+              if (p && typeof p === "object" && !Array.isArray(p)) {
+                parsed = p as CalibReport;
+              }
+            } catch {
+              parsed = null;
+            }
+          } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+            parsed = raw as CalibReport;
+          }
+          if (!parsed || !parsed.items || parsed.items.length === 0) return null;
+          const report = parsed;
+          const flagged = report.driftFlagged === true;
+          return (
+            <div
+              className={`mt-2 rounded-md border px-2 py-1.5 text-xs ${
+                flagged
+                  ? "border-destructive/50 bg-destructive/10 text-destructive"
+                  : "border-emerald-500/40 bg-emerald-500/5 text-emerald-700 dark:text-emerald-300"
+              }`}
+            >
+              <div className="font-medium">
+                Calibration drift: {flagged ? "FLAGGED" : "within threshold"}
+              </div>
+              <div className="mt-0.5 text-[11px] opacity-90">
+                {(report.items?.length ?? 0)} calibration item
+                {(report.items?.length ?? 0) === 1 ? "" : "s"} · max axis delta{" "}
+                <span className="font-mono">
+                  {(report.maxDelta ?? 0).toFixed(2)}
+                </span>{" "}
+                · mean{" "}
+                <span className="font-mono">
+                  {(report.meanDelta ?? 0).toFixed(2)}
+                </span>{" "}
+                · threshold{" "}
+                <span className="font-mono">
+                  {(report.threshold ?? 1).toFixed(2)}
+                </span>
+                {flagged && (
+                  <>
+                    {" · "}
+                    <span className="italic">
+                      Judge has drifted from baseline — investigate before
+                      trusting this run's rankings.
+                    </span>
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        })()}
       </div>
+
+      <LiveBenchmarkPreview
+        projectId={projectId}
+        benchmarkId={benchmarkId}
+        runId={run.id}
+        initialStatus={run.status}
+      />
 
       <Card>
         <CardHeader>
@@ -165,6 +289,7 @@ export default async function BenchmarkRunPage({
         </CardHeader>
         <CardContent>
           <ResultsTable
+            projectId={projectId}
             results={resultRows}
             rubricAxes={rubricAxes}
             isChatReplay={isChatReplay}

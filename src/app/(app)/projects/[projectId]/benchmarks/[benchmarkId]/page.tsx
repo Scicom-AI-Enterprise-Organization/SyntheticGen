@@ -14,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { StartRunForm } from "./start-run-form";
 import { RunsTable } from "./runs-table";
 import { DeleteBenchmarkButton } from "./delete-benchmark-button";
+import { EditSourceDropdown } from "./edit-source-dropdown";
 
 export default async function BenchmarkDetailPage({
   params,
@@ -26,7 +27,7 @@ export default async function BenchmarkDetailPage({
   const canWrite = role ? projectRoleAllows(role, "benchmarks.write") : false;
   const canCancel = role ? projectRoleAllows(role, "benchmarks.cancel") : false;
 
-  const [benchmark, providers, rubrics] = await Promise.all([
+  const [benchmark, providers, rubrics, sourceRuns] = await Promise.all([
     prisma.benchmark.findUnique({
       where: { id: benchmarkId },
       include: {
@@ -47,6 +48,21 @@ export default async function BenchmarkDetailPage({
       where: { projectId },
       orderBy: [{ isPreset: "desc" }, { name: "asc" }],
       select: { id: true, name: true, isPreset: true },
+    }),
+    // Generation runs with at least one accepted conversation — the pool of
+    // valid source runs for the Edit-source dialog. Mirrors the new-page
+    // query so the dialog and create form stay in sync.
+    prisma.generationRun.findMany({
+      where: { projectId, acceptedCount: { gt: 0 } },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: {
+        id: true,
+        name: true,
+        model: true,
+        acceptedCount: true,
+        createdAt: true,
+      },
     }),
   ]);
   if (!benchmark || benchmark.projectId !== projectId) notFound();
@@ -93,6 +109,48 @@ export default async function BenchmarkDetailPage({
         </div>
         {canWrite && <DeleteBenchmarkButton projectId={projectId} benchmarkId={benchmark.id} />}
       </div>
+
+      {isChatReplay && canWrite && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Source</CardTitle>
+            <CardDescription>
+              Pick which generation run (and how many conversations) the
+              benchmark replays. Saving re-freezes the conversation list.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <EditSourceDropdown
+              projectId={projectId}
+              benchmarkId={benchmark.id}
+              runs={sourceRuns.map((r) => ({
+                id: r.id,
+                name: r.name ?? "",
+                model: r.model,
+                acceptedCount: r.acceptedCount,
+              }))}
+              currentRunId={
+                Array.isArray(
+                  (benchmarkConfig?.filter as { runIds?: unknown })?.runIds,
+                ) &&
+                (
+                  (benchmarkConfig?.filter as { runIds?: unknown[] }).runIds ?? []
+                ).length === 1
+                  ? (
+                      (benchmarkConfig?.filter as { runIds: string[] }).runIds[0]
+                    ) ?? null
+                  : null
+              }
+              currentLimit={
+                typeof (benchmarkConfig?.filter as { limit?: unknown })?.limit === "number"
+                  ? ((benchmarkConfig?.filter as { limit: number }).limit)
+                  : benchmark.frozenConversationIds.length
+              }
+              existingRunCount={benchmark.runs.length}
+            />
+          </CardContent>
+        </Card>
+      )}
 
       {canExecute && (
         <Card>

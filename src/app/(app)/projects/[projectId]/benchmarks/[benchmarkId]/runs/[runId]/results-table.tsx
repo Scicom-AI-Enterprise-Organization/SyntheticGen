@@ -1,7 +1,8 @@
 "use client";
 
-import { Fragment, useMemo, useState } from "react";
-import { ChevronDown, ChevronRight } from "lucide-react";
+import { Fragment, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
+import { ChevronDown, ChevronRight, ExternalLink } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
@@ -53,10 +54,12 @@ const VERDICT_VARIANT: Record<string, "default" | "secondary" | "outline" | "des
 const ALL = "__all__";
 
 export function ResultsTable({
+  projectId,
   results,
   rubricAxes,
   isChatReplay,
 }: {
+  projectId: string;
   results: ResultRow[];
   rubricAxes: RubricAxisLite[] | null;
   isChatReplay: boolean;
@@ -65,6 +68,8 @@ export function ResultsTable({
   const [split, setSplit] = useState<string>(ALL);
   const [q, setQ] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
 
   const splits = useMemo(
     () => Array.from(new Set(results.map((r) => r.split))).sort(),
@@ -85,6 +90,21 @@ export function ResultsTable({
       return blob.toLowerCase().includes(needle);
     });
   }, [results, verdict, split, q]);
+
+  // Pagination: per-turn benchmarks can produce hundreds of rows per
+  // run, so paginate after filtering. Reset to first page whenever
+  // filter / search / page-size changes so the user doesn't end up on
+  // an empty page.
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(page, pageCount - 1);
+  const pageRows = useMemo(
+    () => filtered.slice(safePage * pageSize, safePage * pageSize + pageSize),
+    [filtered, safePage, pageSize],
+  );
+  // When filters change, jump back to page 0.
+  useEffect(() => {
+    setPage(0);
+  }, [verdict, split, q, pageSize]);
 
   if (results.length === 0) {
     return (
@@ -127,7 +147,7 @@ export function ResultsTable({
           value={q}
           onChange={(e) => setQ(e.target.value)}
           placeholder="Search rationale / content"
-          className="h-7 max-w-sm text-xs"
+          className="h-8! max-w-sm text-xs"
         />
         <span className="ml-auto text-[11px] text-muted-foreground">
           {filtered.length} of {results.length}
@@ -157,7 +177,7 @@ export function ResultsTable({
             </tr>
           </thead>
           <tbody>
-            {filtered.map((r) => {
+            {pageRows.map((r) => {
               const isOpen = expanded === r.id;
               return (
                 <Fragment key={r.id}>
@@ -202,11 +222,38 @@ export function ResultsTable({
                         <span className="text-muted-foreground">—</span>
                       )}
                     </td>
-                    {isChatReplay && rubricAxes && (
+                    {isChatReplay && rubricAxes && (() => {
+                      // Defensive parse — same reason as elsewhere in
+                      // this file: older rows have judgeScores stored as
+                      // a JSON-encoded string. Without this, every axis
+                      // renders "—" even when the judge gave real scores.
+                      let scores: Record<string, number> | null = null;
+                      const raw = r.judgeScores as unknown;
+                      if (typeof raw === "string") {
+                        try {
+                          const parsed = JSON.parse(raw);
+                          if (
+                            parsed &&
+                            typeof parsed === "object" &&
+                            !Array.isArray(parsed)
+                          ) {
+                            scores = parsed as Record<string, number>;
+                          }
+                        } catch {
+                          scores = null;
+                        }
+                      } else if (
+                        raw &&
+                        typeof raw === "object" &&
+                        !Array.isArray(raw)
+                      ) {
+                        scores = raw as Record<string, number>;
+                      }
+                      return (
                       <td className="py-3 pr-4 text-[11px]">
                         <div className="flex flex-wrap gap-1">
                           {rubricAxes.map((a) => {
-                            const s = r.judgeScores?.[a.key];
+                            const s = scores?.[a.key];
                             const scale = a.scale ?? 5;
                             return (
                               <span
@@ -220,7 +267,8 @@ export function ResultsTable({
                           })}
                         </div>
                       </td>
-                    )}
+                      );
+                    })()}
                     {!isChatReplay && (
                       <>
                         <td className="py-3 pr-4 font-mono text-[11px]">
@@ -248,7 +296,12 @@ export function ResultsTable({
                   {isOpen && (
                     <tr className="border-b border-border/50 bg-muted/10">
                       <td colSpan={isChatReplay ? 8 : 9} className="px-2 py-3">
-                        <ResultDrilldown row={r} rubricAxes={rubricAxes} isChatReplay={isChatReplay} />
+                        <ResultDrilldown
+                          projectId={projectId}
+                          row={r}
+                          rubricAxes={rubricAxes}
+                          isChatReplay={isChatReplay}
+                        />
                       </td>
                     </tr>
                   )}
@@ -258,15 +311,65 @@ export function ResultsTable({
           </tbody>
         </table>
       </div>
+
+      {filtered.length > pageSize && (
+        <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+          <span>
+            Showing{" "}
+            <span className="font-mono">
+              {safePage * pageSize + 1}–
+              {Math.min((safePage + 1) * pageSize, filtered.length)}
+            </span>{" "}
+            of <span className="font-mono">{filtered.length}</span>
+          </span>
+          <div className="flex items-center gap-1">
+            <Select
+              value={String(pageSize)}
+              onValueChange={(v) => setPageSize(Number(v))}
+            >
+              <SelectTrigger size="sm" className="h-7 w-[90px] text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="10">10 / page</SelectItem>
+                <SelectItem value="25">25 / page</SelectItem>
+                <SelectItem value="50">50 / page</SelectItem>
+                <SelectItem value="100">100 / page</SelectItem>
+              </SelectContent>
+            </Select>
+            <button
+              type="button"
+              onClick={() => setPage(Math.max(0, safePage - 1))}
+              disabled={safePage === 0}
+              className="rounded border border-border bg-card px-2 py-1 disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <span className="px-1 font-mono">
+              {safePage + 1} / {pageCount}
+            </span>
+            <button
+              type="button"
+              onClick={() => setPage(Math.min(pageCount - 1, safePage + 1))}
+              disabled={safePage >= pageCount - 1}
+              className="rounded border border-border bg-card px-2 py-1 disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
 
 function ResultDrilldown({
+  projectId,
   row,
   rubricAxes,
   isChatReplay,
 }: {
+  projectId: string;
   row: ResultRow;
   rubricAxes: RubricAxisLite[] | null;
   isChatReplay: boolean;
@@ -288,26 +391,203 @@ function ResultDrilldown({
 
   return (
     <div className="grid gap-3 lg:grid-cols-2">
-      <Section title="Reference (project-generated)">
-        <MessagesView value={row.referenceMessages} />
-      </Section>
-      <Section title="Candidate">
-        <MessagesView value={row.candidateMessages} />
-      </Section>
+      {/* Per-turn aligned view: when the rationale has the worker's
+          "— next turn —" delimiter, render a unified table where each
+          row pairs that turn's assistant content with that turn's
+          rationale — both cells share the row height, so the reviewer
+          can scan turn 1 ↔ turn 1, turn 2 ↔ turn 2 left-to-right. */}
+      {(row.candidateMessages || row.judgeRationale) && (() => {
+        const parts = (row.judgeRationale ?? "")
+          .split(/\n*— next turn —\n*/)
+          .map((p) => p.trim())
+          .filter((p) => p.length > 0);
 
-      {row.judgeRationale && (
-        <Section title="Judge rationale" full>
-          <p className="whitespace-pre-wrap rounded border border-border bg-background/60 p-2 text-xs italic">
-            {row.judgeRationale}
-          </p>
-        </Section>
-      )}
+        // Parse candidateMessages defensively (legacy rows may store as
+        // JSON-encoded string). Walk assistant-role messages to pair
+        // each one with its corresponding rationale by index.
+        const rawMsgs = row.candidateMessages ?? row.referenceMessages;
+        let msgs: unknown[] | null = null;
+        if (typeof rawMsgs === "string") {
+          try {
+            const p = JSON.parse(rawMsgs);
+            if (Array.isArray(p)) msgs = p;
+          } catch {
+            msgs = null;
+          }
+        } else if (Array.isArray(rawMsgs)) {
+          msgs = rawMsgs;
+        }
+        // Group assistant messages by their `_turn` tag (added by the
+        // worker when building candidate_outputs). Each turn block can
+        // contain multiple assistant messages (tool call + follow-up
+        // text) — we collapse them into one combined block per turn so
+        // the per-turn row pairs correctly with its rationale.
+        type AssistantBlock = {
+          turn: number;
+          texts: string[];
+          toolCalls: unknown[];
+          toolResults: string[];
+        };
+        const blocksByTurn = new Map<number, AssistantBlock>();
+        let fallbackTurn = 0;
+        for (const m of (msgs ?? []) as Array<Record<string, unknown>>) {
+          if (!m || typeof m !== "object") continue;
+          const role = m.role;
+          if (role !== "assistant" && role !== "tool") continue;
+          const turn =
+            typeof m._turn === "number" && m._turn > 0
+              ? (m._turn as number)
+              : ++fallbackTurn;
+          const slot =
+            blocksByTurn.get(turn) ??
+            ({ turn, texts: [], toolCalls: [], toolResults: [] } as AssistantBlock);
+          if (role === "assistant") {
+            const text = typeof m.content === "string" ? m.content : "";
+            if (text) slot.texts.push(text);
+            const tc = (m.tool_calls ?? m.toolCalls) as unknown[] | undefined;
+            if (Array.isArray(tc) && tc.length > 0) slot.toolCalls.push(...tc);
+          } else if (role === "tool") {
+            const text = typeof m.content === "string" ? m.content : "";
+            if (text) slot.toolResults.push(text);
+          }
+          blocksByTurn.set(turn, slot);
+        }
+        const assistantBlocks = Array.from(blocksByTurn.values()).sort(
+          (a, b) => a.turn - b.turn,
+        );
 
-      {row.judgeScores && rubricAxes && rubricAxes.length > 0 && (
+        const isPerTurn = parts.length > 1 || row.kind === "chat-replay-turn";
+
+        if (!isPerTurn) {
+          // One-shot row — two separate side-by-side panes.
+          return (
+            <>
+              <Section title="Assistant turn(s) scored">
+                <MessagesView value={msgs} />
+              </Section>
+              <Section title="Judge rationale">
+                {row.judgeRationale ? (
+                  <p className="whitespace-pre-wrap rounded border border-border bg-background/60 p-2 text-xs italic">
+                    {row.judgeRationale}
+                  </p>
+                ) : (
+                  <p className="text-[11px] italic text-muted-foreground">—</p>
+                )}
+              </Section>
+            </>
+          );
+        }
+
+        const rowCount = Math.max(assistantBlocks.length, parts.length, 1);
+        return (
+          <section className="space-y-2 lg:col-span-2">
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Assistant turn vs Judge rationale
+            </h4>
+            {/* Each turn is a 3-column grid row. `items-stretch` makes
+                both side cards expand to the tallest card's height so
+                the green assistant card and the rationale card always
+                share the row height — no ragged bottoms even when one
+                side has much more text. */}
+            <div className="space-y-2">
+              {Array.from({ length: rowCount }).map((_, i) => {
+                const blk = assistantBlocks[i];
+                // Trim runs of blank lines and edges so neither side
+                // has a giant blank header/footer eating row height.
+                const tidyBlock = (s: string) =>
+                  s.replace(/\r/g, "").replace(/\n{2,}/g, "\n\n").trim();
+                const aText = blk ? tidyBlock(blk.texts.join("\n\n")) : "";
+                const aTc = blk && blk.toolCalls.length > 0 ? blk.toolCalls : undefined;
+                const aToolResults = blk?.toolResults ?? [];
+                const rat = tidyBlock(parts[i] ?? "");
+                return (
+                  <div
+                    key={i}
+                    className="grid items-stretch gap-2 sm:grid-cols-[3.5rem_1fr_1fr]"
+                  >
+                    <div className="pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Turn {i + 1}
+                    </div>
+                    <div className="flex flex-col rounded-md border border-emerald-500/30 bg-emerald-500/5 p-2 text-[11px]">
+                      <div className="mb-1 text-[10px] font-mono uppercase text-muted-foreground">
+                        assistant
+                      </div>
+                      {aText ? (
+                        <pre className="whitespace-pre-wrap break-words font-sans leading-snug">
+                          {aText}
+                        </pre>
+                      ) : Array.isArray(aTc) && aTc.length > 0 ? (
+                        // Tool-call-only turn (assistant produced no text,
+                        // just function calls). Render the tool calls
+                        // inline so the cell isn't just "—".
+                        <div className="text-[11px] italic text-muted-foreground">
+                          (no text reply — tool call only)
+                        </div>
+                      ) : (
+                        <span className="italic text-muted-foreground">—</span>
+                      )}
+                      {Array.isArray(aTc) && aTc.length > 0 && (
+                        <details open={!aText} className="mt-1">
+                          <summary className="cursor-pointer select-none text-[10px] text-muted-foreground">
+                            {aTc.length} tool_call(s)
+                          </summary>
+                          <Pre value={aTc} compact />
+                        </details>
+                      )}
+                      {aToolResults.length > 0 && (
+                        <details className="mt-1">
+                          <summary className="cursor-pointer select-none text-[10px] text-muted-foreground">
+                            {aToolResults.length} tool_result(s)
+                          </summary>
+                          <pre className="mt-1 whitespace-pre-wrap break-words rounded border border-border bg-background p-2 font-mono text-[10px] text-muted-foreground">
+                            {aToolResults.join("\n---\n")}
+                          </pre>
+                        </details>
+                      )}
+                    </div>
+                    <div className="flex flex-col rounded-md border border-indigo-500/30 bg-indigo-500/5 p-2 text-[11px]">
+                      <div className="mb-1 text-[10px] font-mono uppercase text-muted-foreground">
+                        judge rationale
+                      </div>
+                      {rat ? (
+                        <p className="whitespace-pre-wrap italic">{rat}</p>
+                      ) : (
+                        <span className="italic text-muted-foreground">—</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        );
+      })()}
+
+      {row.judgeScores && rubricAxes && rubricAxes.length > 0 && (() => {
+        // Old rows store judgeScores as a JSON-encoded string; parse once
+        // so the score lookup below sees an actual object.
+        let scores: Record<string, number> | null = null;
+        if (typeof row.judgeScores === "string") {
+          try {
+            const parsed = JSON.parse(row.judgeScores);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              scores = parsed as Record<string, number>;
+            }
+          } catch {
+            scores = null;
+          }
+        } else if (
+          typeof row.judgeScores === "object" &&
+          !Array.isArray(row.judgeScores)
+        ) {
+          scores = row.judgeScores as Record<string, number>;
+        }
+        if (!scores) return null;
+        return (
         <Section title="Judge scores" full>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {rubricAxes.map((a) => {
-              const s = row.judgeScores?.[a.key];
+              const s = scores?.[a.key];
               const scale = a.scale ?? 5;
               const frac =
                 typeof s === "number" ? Math.max(0, Math.min(1, (s - 1) / (scale - 1))) : null;
@@ -330,12 +610,35 @@ function ResultDrilldown({
             })}
           </div>
         </Section>
-      )}
+        );
+      })()}
 
-      {row.validatorScores && Object.keys(row.validatorScores).length > 0 && (
+      {row.validatorScores && (() => {
+        // Defensive parse: older rows have validatorScores stored as a
+        // JSON-encoded string (worker wrote it without `::jsonb` cast).
+        // Try parsing once; if the result isn't a plain object, drop it
+        // entirely so we don't render character indices as keys.
+        let scores: Record<string, unknown> | null = null;
+        if (typeof row.validatorScores === "string") {
+          try {
+            const parsed = JSON.parse(row.validatorScores);
+            if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+              scores = parsed as Record<string, unknown>;
+            }
+          } catch {
+            scores = null;
+          }
+        } else if (
+          typeof row.validatorScores === "object" &&
+          !Array.isArray(row.validatorScores)
+        ) {
+          scores = row.validatorScores as Record<string, unknown>;
+        }
+        if (!scores || Object.keys(scores).length === 0) return null;
+        return (
         <Section title="Deterministic validators on candidate" full>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {Object.entries(row.validatorScores).map(([k, raw]) => {
+            {Object.entries(scores).map(([k, raw]) => {
               const v = raw as {
                 axis?: string;
                 verdict?: string;
@@ -363,7 +666,8 @@ function ResultDrilldown({
             })}
           </div>
         </Section>
-      )}
+        );
+      })()}
 
       {row.functionCallScore && row.functionCallScore.length > 0 && (
         <Section title="Function-call comparison" full>
@@ -373,7 +677,16 @@ function ResultDrilldown({
 
       {row.conversationId && (
         <p className="text-[11px] text-muted-foreground">
-          Source conversation: <code className="font-mono">{row.conversationId}</code>
+          Source conversation:{" "}
+          <Link
+            href={`/projects/${projectId}/conversations?focus=${row.conversationId}`}
+            className="inline-flex items-center gap-1 font-mono hover:text-foreground hover:underline"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            {row.conversationId}
+            <ExternalLink className="h-3 w-3" />
+          </Link>
         </p>
       )}
     </div>
@@ -400,12 +713,25 @@ function Section({
 }
 
 function MessagesView({ value }: { value: unknown[] | null }) {
-  if (!Array.isArray(value) || value.length === 0) {
+  // Defensive parse: older rows persist this JSON column as a
+  // JSON-encoded *string* (no `::jsonb` cast in the worker). Try parsing
+  // once so the view renders even on legacy data.
+  let arr: unknown[] | null = value;
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) arr = parsed;
+    } catch {
+      arr = null;
+    }
+  }
+  if (!Array.isArray(arr) || arr.length === 0) {
     return <p className="text-[11px] italic text-muted-foreground">—</p>;
   }
+  const value2 = arr;
   return (
     <div className="space-y-1">
-      {(value as Array<Record<string, unknown>>).map((m, i) => {
+      {(value2 as Array<Record<string, unknown>>).map((m, i) => {
         const role = String(m.role ?? "?");
         const content = String(m.content ?? "");
         const tc = m.tool_calls ?? m.toolCalls;

@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import re
 from dataclasses import asdict
 from typing import Any
 
@@ -431,6 +432,28 @@ async def _generate_tool_aware_user_text(
     language = lp.get("primary") or "ms"
     register = policy.register
 
+    # Build the leak sets so we can scrub the model's output for tool /
+    # parameter / enum names if the prompt's "don't name the API" rule is
+    # ignored.
+    tool_names_to_hide: set[str] = set()
+    enum_values_to_hide: set[str] = set()
+    for t in tool_defs:
+        name = t.get("name")
+        if isinstance(name, str):
+            tool_names_to_hide.add(name)
+        params = t.get("parameters") or {}
+        props = params.get("properties") if isinstance(params, dict) else None
+        if isinstance(props, dict):
+            for pname, pschema in props.items():
+                if isinstance(pname, str):
+                    tool_names_to_hide.add(pname)
+                if isinstance(pschema, dict):
+                    enums = pschema.get("enum")
+                    if isinstance(enums, list):
+                        for v in enums:
+                            if isinstance(v, str):
+                                enum_values_to_hide.add(v)
+
     sys = (
         "You write a realistic OPENING USER MESSAGE for a synthetic "
         "customer-support conversation. Speak in FIRST PERSON as the CUSTOMER. "
@@ -454,6 +477,13 @@ async def _generate_tool_aware_user_text(
         "  `format`, `enum`, and range constraints exactly. Use the `example args` "
         "  shown above as a guide for what plausible values look like, but vary "
         "  the actual values so they don't repeat.\n"
+        "- ABSOLUTELY FORBIDDEN: do NOT name the function/tool (no 'fraud_report', "
+        "  no 'check_account', no snake_case identifiers); do NOT say internal "
+        "  parameter names ('account_id', 'tone'); do NOT mention internal enum "
+        "  values like 'casual_manglish' or 'formal_baku' — speak the language "
+        "  naturally instead; do NOT write phrases like 'process this as X', "
+        "  'call X for me', 'using X tone'.\n"
+        "- NO markdown formatting at all — no **bold**, no _italics_, no `backticks`.\n"
         "- Locale (Malaysia): MyKad = 12-digit `^\\d{6}-\\d{2}-\\d{4}$`, mobile = "
         "  `^\\+?60\\d{9,10}$`, MYR amounts are decimals, ISO dates are `YYYY-MM-DD`, "
         "  state codes from {KUL,SGR,PNG,JHR,KTN,TRG,KDH,PRK,MLK,NSN,PHG,PLS,SBH,SWK,PJY,LBN}.\n"
@@ -484,6 +514,8 @@ async def _generate_tool_aware_user_text(
                 model,
             )
             text = _synthesize_customer_opening(persona, lp, tool_defs)
+        else:
+            text = _scrub_user_turn(text, tool_names_to_hide, enum_values_to_hide)
         return (text or _synthesize_customer_opening(persona, lp, tool_defs)), r.tokens_in, r.tokens_out, r.cost_usd
     except Exception as e:  # noqa: BLE001
         log.warning("tool-aware user-text generation failed: %s", e)
@@ -634,6 +666,28 @@ async def _simulate_user_turn(
                 name = (tc.get("function") or {}).get("name") if isinstance(tc, dict) else None
                 if isinstance(name, str):
                     already_called.add(name)
+    # Collect tool/parameter/enum names so we can both prompt against them
+    # and scrub them out of the output if the model still leaks.
+    tool_names_to_hide: set[str] = set()
+    enum_values_to_hide: set[str] = set()
+    if tool_defs:
+        for t in tool_defs:
+            name = t.get("name")
+            if isinstance(name, str):
+                tool_names_to_hide.add(name)
+            params = t.get("parameters") or {}
+            props = params.get("properties") if isinstance(params, dict) else None
+            if isinstance(props, dict):
+                for pname, pschema in props.items():
+                    if isinstance(pname, str):
+                        tool_names_to_hide.add(pname)
+                    if isinstance(pschema, dict):
+                        enums = pschema.get("enum")
+                        if isinstance(enums, list):
+                            for v in enums:
+                                if isinstance(v, str):
+                                    enum_values_to_hide.add(v)
+
     tool_hint = ""
     if tool_defs:
         unused = [t for t in tool_defs if (t.get("name") or "") not in already_called]
@@ -650,8 +704,22 @@ async def _simulate_user_turn(
                 "type / pattern / enum / format constraints (see the schema lines above; "
                 "use the `example args` as a shape guide but don't copy them verbatim). "
                 "Locale: MyKad `^\\d{6}-\\d{2}-\\d{4}$`, mobile `^\\+?60\\d{9,10}$`, "
-                "ISO dates `YYYY-MM-DD`. Don't say the tool name out loud — describe "
-                "what you need."
+                "ISO dates `YYYY-MM-DD`.\n\n"
+                "ABSOLUTELY FORBIDDEN — these are internal developer names the customer "
+                "would NEVER say:\n"
+                "- DO NOT name any function/tool. No 'fraud_report', no 'check_account', "
+                "  no snake_case identifiers anywhere in the message.\n"
+                "- DO NOT say internal parameter names ('account_id', 'tone', 'tier').\n"
+                "- DO NOT mention internal enum values like 'casual_manglish' or "
+                "  'formal_baku' — speak the language naturally instead.\n"
+                "- DO NOT write phrases like 'process this as X', 'call X for me', "
+                "  'use X tool', 'using X tone'. Customers describe their problem, "
+                "  they do not name the API.\n"
+                "- NO markdown formatting at all. No **bold**, no _italics_, no "
+                "  `backticks`, no asterisks around any word.\n"
+                "- Just describe the problem like a real customer chatting in a bank "
+                "  app. Mention concrete details (amount, account number, date) when "
+                "  natural, but never the API mechanics."
             )
 
     sys = (
@@ -664,6 +732,7 @@ async def _simulate_user_turn(
         f"({total_turns - turn_number} more turn(s) will follow after this one).\n"
         "Hard rules:\n"
         "- Reply with ONLY the user's next utterance — no role tag, no quotes, no preamble.\n"
+        "- NO markdown formatting at all — no **bold**, no _italics_, no `backticks`.\n"
         "- Stay in character. React naturally to the assistant's last message: ask a follow-up, "
         "  push back on something, clarify, escalate, or introduce an adjacent need.\n"
         "- Do NOT wrap the conversation up yet. The script expects you to keep going for "
@@ -711,10 +780,59 @@ async def _simulate_user_turn(
             chat_template_kwargs=sim_kwargs,
         )
         text = (r.content or "").strip().strip('"').strip("'")
+        text = _scrub_user_turn(text, tool_names_to_hide, enum_values_to_hide)
         return text, r.tokens_in, r.tokens_out, r.cost_usd
     except Exception as e:  # noqa: BLE001
         log.warning("user simulator failed: %s", e)
         return "[END]", 0, 0, 0.0
+
+
+# Compiled once at module load — used by _scrub_user_turn.
+_MD_BOLD_RE = re.compile(r"\*\*([^*]+?)\*\*")
+_MD_ITALIC_UNDERSCORE_RE = re.compile(r"\b_([^_]+?)_\b")
+_MD_ITALIC_STAR_RE = re.compile(r"(?<!\*)\*([^*]+?)\*(?!\*)")
+_MD_BACKTICK_RE = re.compile(r"`([^`]+?)`")
+_SNAKE_CASE_RE = re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b")
+
+
+def _scrub_user_turn(text: str, tool_names: set[str], enum_values: set[str]) -> str:
+    """Strip markdown emphasis and remove leaked API identifiers from a
+    simulated user turn. The simulator routinely outputs phrases like
+    "process this as **fraud_report** for account **123** using **casual_manglish**"
+    despite the prompt forbidding it — those strings break the realism of
+    the dataset because no real customer writes the function name out
+    loud. We unwrap markdown (keeping the inner text), then redact any
+    surviving tool / parameter / enum names with `[…]` so reviewers can
+    spot the leak instead of it being silently shipped.
+    """
+    if not text:
+        return text
+    # Unwrap markdown: keep inner content, drop the markup characters.
+    text = _MD_BOLD_RE.sub(r"\1", text)
+    text = _MD_ITALIC_UNDERSCORE_RE.sub(r"\1", text)
+    text = _MD_ITALIC_STAR_RE.sub(r"\1", text)
+    text = _MD_BACKTICK_RE.sub(r"\1", text)
+
+    def _redact(token: str) -> str:
+        return "[…]" if token else token
+
+    # Redact known tool / parameter / enum names verbatim.
+    for name in sorted(tool_names | enum_values, key=len, reverse=True):
+        if not name:
+            continue
+        text = re.sub(
+            r"\b" + re.escape(name) + r"\b",
+            _redact(name),
+            text,
+            flags=re.IGNORECASE,
+        )
+
+    # Redact any remaining snake_case identifier the model invented — real
+    # customers never type snake_case.
+    text = _SNAKE_CASE_RE.sub("[…]", text)
+
+    # Collapse double-spaces left by removals.
+    return re.sub(r" {2,}", " ", text).strip()
 
 
 async def _resolve_tool_names(tool_ids: list[str]) -> list[dict[str, str]]:

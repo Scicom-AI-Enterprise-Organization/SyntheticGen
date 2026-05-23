@@ -17,16 +17,34 @@ export function RunMetricsPanel({
   rubricAxes: RubricAxisLite[] | null;
   isChatReplay: boolean;
 }) {
-  if (!metrics || typeof metrics !== "object") {
+  // Defensive parse: legacy rows persist BenchmarkRun.metrics as a
+  // JSON-encoded *string* (`::jsonb` cast missing on the worker side).
+  // Without this, every old run renders "No metrics yet" forever even
+  // though the data is in the DB.
+  let parsedMetrics: Record<string, unknown> | null = null;
+  if (typeof metrics === "string") {
+    try {
+      const p = JSON.parse(metrics);
+      if (p && typeof p === "object" && !Array.isArray(p)) {
+        parsedMetrics = p as Record<string, unknown>;
+      }
+    } catch {
+      parsedMetrics = null;
+    }
+  } else if (metrics && typeof metrics === "object") {
+    parsedMetrics = metrics;
+  }
+
+  if (!parsedMetrics) {
     return (
       <p className="text-xs text-muted-foreground">
         No metrics yet — start the run and refresh once it completes.
       </p>
     );
   }
-  const overall = (metrics as { overall?: Record<string, unknown> }).overall;
+  const overall = (parsedMetrics as { overall?: Record<string, unknown> }).overall;
   const splits =
-    (metrics as { splits?: Record<string, Record<string, unknown>> }).splits ?? null;
+    (parsedMetrics as { splits?: Record<string, Record<string, unknown>> }).splits ?? null;
 
   if (!overall || typeof overall !== "object") {
     return (

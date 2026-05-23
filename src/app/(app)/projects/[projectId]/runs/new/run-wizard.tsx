@@ -5,6 +5,7 @@ import { Play, AlertTriangle, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select,
@@ -276,15 +277,13 @@ export function RunWizard({
               {temperature.toFixed(2)}
             </span>
           </div>
-          <input
+          <Slider
             id="r-temp"
-            type="range"
             min={0}
             max={2}
             step={0.05}
-            value={temperature}
-            onChange={(e) => setTemperature(Number(e.target.value))}
-            className="w-full accent-primary"
+            value={[temperature]}
+            onValueChange={([v]) => setTemperature(v ?? 0)}
           />
           <p className="text-xs text-muted-foreground">
             0 = deterministic, 1 = balanced, 2 = wildly creative.
@@ -314,15 +313,13 @@ export function RunWizard({
               {maxTokens.toLocaleString()}
             </span>
           </div>
-          <input
+          <Slider
             id="r-maxtok"
-            type="range"
             min={256}
             max={64000}
             step={256}
-            value={maxTokens}
-            onChange={(e) => setMaxTokens(Number(e.target.value))}
-            className="w-full accent-primary"
+            value={[maxTokens]}
+            onValueChange={([v]) => setMaxTokens(v ?? 256)}
           />
           <p className="text-xs text-muted-foreground">
             Sent as <code>max_tokens</code> on every generation call. Bump higher

@@ -13,6 +13,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Slider } from "@/components/ui/slider";
 import { Badge } from "@/components/ui/badge";
 import { startBenchmarkRun } from "../actions";
 
@@ -50,26 +51,38 @@ export function StartRunForm({
   const router = useRouter();
   const isChatReplay = benchmarkKind === "project-chat-replay";
 
-  // Candidate
-  const [providerId, setProviderId] = useState(providers[0]?.id ?? "");
-  const [model, setModel] = useState(providers[0]?.defaultModel ?? "");
-
-  // Chat-replay-only
+  // Chat-replay scores the EXISTING reference assistant turns from each
+  // frozen conversation against the rubric — no candidate model is
+  // re-invoked. Only the judge model + rubric + mode are configured.
   const [judgeProviderId, setJudgeProviderId] = useState(providers[0]?.id ?? "");
   const [judgeModel, setJudgeModel] = useState(providers[0]?.defaultModel ?? "");
   const [rubricId, setRubricId] = useState<string>(defaultRubricId ?? NONE);
   const [mode, setMode] = useState<"single-turn" | "multi-turn">(defaultMode ?? "multi-turn");
-  const [temperature, setTemperature] = useState("0.7");
-  const [maxTokens, setMaxTokens] = useState("4096");
+  // Judge sampling — lower temperature gives more deterministic verdicts;
+  // 4k tokens is enough for verdict + rationale on most rubrics.
+  const [judgeTemperature, setJudgeTemperature] = useState(0.2);
+  const [judgeMaxTokens, setJudgeMaxTokens] = useState(4096);
+  // Per-turn judging produces a separate BenchmarkResult per assistant
+  // turn (N×cost, finer-grained scores). One-shot scores the whole
+  // conversation in a single call (1×cost, holistic).
+  const [judgeStrategy, setJudgeStrategy] = useState<"one-shot" | "per-turn">(
+    // Per-turn gives the most useful drill-down — one rationale per
+    // assistant turn — and is what most users want for dataset
+    // curation. One-shot remains available for cheaper holistic runs.
+    "per-turn",
+  );
+  // Number of judge attempts before accepting a malformed response.
+  // Each retry bumps the judge temperature slightly so we don't
+  // re-roll the same broken JSON. Default 3 = 1 attempt + 2 retries.
+  const [judgeMaxRetries, setJudgeMaxRetries] = useState(3);
+  // Run K items concurrently. Same model as conversation-generation:
+  // bounded by an asyncio semaphore in the worker. 4 is a safe default
+  // for most APIs; pushing it too high can rate-limit the judge model.
+  const [concurrency, setConcurrency] = useState(4);
 
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
 
-  function onProviderChange(v: string) {
-    setProviderId(v);
-    const p = providers.find((x) => x.id === v);
-    if (p?.defaultModel) setModel(p.defaultModel);
-  }
   function onJudgeProviderChange(v: string) {
     setJudgeProviderId(v);
     const p = providers.find((x) => x.id === v);
@@ -79,10 +92,6 @@ export function StartRunForm({
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
-    if (!model.trim()) {
-      setError("Candidate model required");
-      return;
-    }
     if (isChatReplay) {
       if (!judgeModel.trim()) {
         setError("Judge model required for chat-replay");
@@ -99,8 +108,11 @@ export function StartRunForm({
       const res = await startBenchmarkRun({
         projectId,
         benchmarkId,
-        providerCredentialId: providerId,
-        model: model.trim(),
+        // BenchmarkRun's candidate columns are required by the schema, so
+        // we reuse the judge values — the worker no longer treats them
+        // as a separate model.
+        providerCredentialId: judgeProviderId,
+        model: judgeModel.trim(),
         ...(isChatReplay
           ? {
               judgeProviderCredentialId: judgeProviderId,
@@ -108,8 +120,11 @@ export function StartRunForm({
               rubricId: rubricId === NONE ? null : rubricId,
               mode,
               samplingParams: {
-                temperature: Number(temperature),
-                max_tokens: Number(maxTokens),
+                judge_temperature: judgeTemperature,
+                judge_max_tokens: judgeMaxTokens,
+                judge_strategy: judgeStrategy,
+                judge_max_retries: judgeMaxRetries,
+                concurrency,
               },
             }
           : {}),
@@ -123,45 +138,14 @@ export function StartRunForm({
   }
 
   return (
-    <form onSubmit={onSubmit} className="space-y-3">
-      <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto]">
-        <div className="space-y-2">
-          <Label htmlFor="b-provider">Candidate provider</Label>
-          <Select value={providerId} onValueChange={onProviderChange}>
-            <SelectTrigger id="b-provider">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {providers.map((p) => (
-                <SelectItem key={p.id} value={p.id}>
-                  {p.name} <span className="ml-1 text-muted-foreground">({p.kind})</span>
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-        <div className="space-y-2">
-          <Label htmlFor="b-model">Candidate model</Label>
-          <Input
-            id="b-model"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder="e.g. gpt-4o-mini, qwen/qwen2.5-7b-instruct"
-            required
-          />
-        </div>
-        {!isChatReplay && (
-          <div className="self-end">
-            <Button type="submit" disabled={pending}>
-              <Play className="mr-2 h-4 w-4" />
-              {pending ? "Starting…" : "Start run"}
-            </Button>
-          </div>
-        )}
-      </div>
-
+    <form onSubmit={onSubmit} className="space-y-4">
       {isChatReplay && (
         <>
+          <p className="rounded-md border border-border bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground">
+            This benchmark scores the <strong>existing reference assistant
+            turns</strong> in each frozen conversation against the rubric — no
+            candidate model is re-invoked. Configure the judge below.
+          </p>
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="b-jprovider">Judge provider</Label>
@@ -178,7 +162,7 @@ export function StartRunForm({
                 </SelectContent>
               </Select>
               <p className="text-[10px] text-muted-foreground">
-                Use a stronger model than the candidate (e.g. Claude Opus / GPT-4 / Qwen 72B).
+                Use a strong scoring model (e.g. Claude Opus / GPT-4 / Qwen 72B).
               </p>
             </div>
             <div className="space-y-2">
@@ -219,34 +203,121 @@ export function StartRunForm({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="single-turn">Single-turn</SelectItem>
-                  <SelectItem value="multi-turn">Multi-turn</SelectItem>
+                  <SelectItem value="single-turn">
+                    Single-turn (score first user/assistant exchange only)
+                  </SelectItem>
+                  <SelectItem value="multi-turn">
+                    Multi-turn (score every recorded user/assistant exchange)
+                  </SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="b-temp">Candidate temperature</Label>
-              <Input
-                id="b-temp"
-                type="number"
+              <Label htmlFor="b-jstrategy">Judge strategy</Label>
+              <Select
+                value={judgeStrategy}
+                onValueChange={(v) => setJudgeStrategy(v as typeof judgeStrategy)}
+              >
+                <SelectTrigger id="b-jstrategy">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="one-shot">
+                    One-shot — single judge call per conversation (cheap, holistic)
+                  </SelectItem>
+                  <SelectItem value="per-turn">
+                    Per-turn — separate judge call + score per assistant turn (N× cost, finer-grained)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-[10px] text-muted-foreground">
+                Per-turn writes one BenchmarkResult row per turn so you can
+                see which turn the model fumbles. Only useful when mode is
+                multi-turn.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="b-jtemp">Judge temperature</Label>
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  {judgeTemperature.toFixed(2)}
+                </span>
+              </div>
+              <Slider
+                id="b-jtemp"
                 min={0}
                 max={2}
-                step={0.1}
-                value={temperature}
-                onChange={(e) => setTemperature(e.target.value)}
+                step={0.05}
+                value={[judgeTemperature]}
+                onValueChange={([v]) => setJudgeTemperature(v)}
               />
+              <p className="text-[10px] text-muted-foreground">
+                Lower is usually better — verdict stability over creativity.
+              </p>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="b-maxtok">Candidate max_tokens</Label>
-              <Input
-                id="b-maxtok"
-                type="number"
-                min={1}
-                max={64000}
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(e.target.value)}
+              <div className="flex items-center justify-between">
+                <Label htmlFor="b-jmaxtok">Judge max_tokens</Label>
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  {judgeMaxTokens.toLocaleString()}
+                </span>
+              </div>
+              <Slider
+                id="b-jmaxtok"
+                min={128}
+                max={8_192}
+                step={128}
+                value={[judgeMaxTokens]}
+                onValueChange={([v]) => setJudgeMaxTokens(v)}
               />
+              <p className="text-[10px] text-muted-foreground">
+                Token budget for the judge's verdict + rationale.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="b-jretries">Judge retries on bad JSON</Label>
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  {judgeMaxRetries}
+                </span>
+              </div>
+              <Slider
+                id="b-jretries"
+                min={1}
+                max={10}
+                step={1}
+                value={[judgeMaxRetries]}
+                onValueChange={([v]) => setJudgeMaxRetries(v)}
+              />
+              <p className="text-[10px] text-muted-foreground">
+                Total judge attempts when the response isn't valid JSON.
+                Each retry bumps the judge temperature by +0.1 so we
+                don't re-roll the same broken output. 3 = 1 attempt + 2
+                retries.
+              </p>
+            </div>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="b-conc">Parallel items</Label>
+                <span className="font-mono text-[11px] text-muted-foreground">
+                  {concurrency}
+                </span>
+              </div>
+              <Slider
+                id="b-conc"
+                min={1}
+                max={16}
+                step={1}
+                value={[concurrency]}
+                onValueChange={([v]) => setConcurrency(v)}
+              />
+              <p className="text-[10px] text-muted-foreground">
+                How many conversations the worker scores in parallel.
+                Higher = faster, but watch the judge model's rate limit.
+              </p>
             </div>
           </div>
 
@@ -257,13 +328,19 @@ export function StartRunForm({
               <Badge variant="outline">rubric: default</Badge>
             )}
           </div>
-
-          <Button type="submit" disabled={pending}>
-            <Play className="mr-2 h-4 w-4" />
-            {pending ? "Starting…" : "Start chat-replay run"}
-          </Button>
         </>
       )}
+
+      <div className="flex items-center justify-end">
+        <Button type="submit" disabled={pending}>
+          <Play className="mr-2 h-4 w-4" />
+          {pending
+            ? "Starting…"
+            : isChatReplay
+              ? "Start judge run"
+              : "Start run"}
+        </Button>
+      </div>
 
       {error && (
         <p className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">

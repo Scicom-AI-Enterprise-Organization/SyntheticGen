@@ -13,9 +13,10 @@ from __future__ import annotations
 import json
 import logging
 import re
-from typing import Any
+import time
+from typing import Any, Awaitable, Callable
 
-from ..providers import chat_completion
+from ..providers import chat_completion, chat_completion_stream, estimate_cost
 
 
 log = logging.getLogger(__name__)
@@ -84,50 +85,91 @@ def build_judge_prompt(
     keys = [a.get("key", "axis") for a in rubric_axes]
     score_schema = "\n  ".join(f'"{k}": <integer score>,' for k in keys).rstrip(",")
 
-    system_prompt = f"""You are a strict, impartial judge scoring a candidate AI model's
-response against a reference response produced by a stronger model.
+    keys_list = ", ".join(f'"{k}"' for k in keys)
+    fault_schema = "\n  ".join(f'"{k}": "<one-sentence fault or empty string if genuinely none>",' for k in keys).rstrip(",")
+
+    system_prompt = f"""You are a STRICT, SKEPTICAL quality judge grading an
+assistant's response for dataset-curation purposes. Your job is to
+DIFFERENTIATE response quality so the user can rank generations. Uniform
+top scores are useless — if you produce them, you have failed the task.
 
 You will receive:
-- The conversation system prompt and user input(s).
-- The REFERENCE assistant output (treat as a strong but not infallible benchmark).
-- The CANDIDATE assistant output (the model under evaluation).
+- The conversation system prompt and the user's input(s).
+- The ASSISTANT'S RESPONSE — the output you must grade.
 
-You will score the candidate on these axes:
+You will score the response on these axes:
 
 {axes_block}
 
-Scoring rules:
-- Each score is an integer on the axis's stated scale (1 = worst, top = best).
-- Compare to the reference for *content fidelity* axes (faithfulness, helpfulness)
-  but do NOT penalise paraphrasing or stylistic differences.
-- Compare to the user's needs and the conversation context for *quality* axes
-  (language fidelity, register, safety). The reference is just one data point;
-  judge absolutely on the rubric description.
-- Pick a single overall verdict: "pass" if every axis scores >= 60% of its scale,
-  "warn" if any axis scores in the lower-middle (30-59%), "fail" if any axis
-  scores below 30% of its scale.
-- Be specific and brief in the rationale (≤ 3 sentences).
+────────────────────────────────────────────────────────────────────────
+SCORING DISCIPLINE — follow these rules in order:
 
-Return ONLY a single JSON object — no surrounding text, no markdown fences:
+STEP 1 — PER-AXIS FAULT HUNT (mandatory, do this FIRST):
+For EACH axis listed above ({keys_list}), independently re-read the
+response and ask: "what's the single biggest faultable thing on THIS
+axis?" Look for:
+  - missing instructions from the system prompt
+  - register/tone slips (formal where casual, casual where formal)
+  - awkward code-switching or unnatural phrasing
+  - generic / non-specific language
+  - missing concrete details a real user would expect
+  - over-confident claims, hedging, or hallucinations
+  - clunky or repetitive structure
+Write a one-sentence fault per axis. ONLY leave a fault empty if you
+have re-read the response and can credibly say "no improvement is
+possible on this axis from any reviewer's perspective."
+
+STEP 2 — SCORE FROM FAULTS:
+For each axis, score based on the fault you found:
+    top                = "I genuinely could not find a fault" (RARE —
+                          requires the fault field to be empty)
+    top - 1            = "I found one minor, defensible deduction"
+    top - 2            = "I found a clear weakness or two"
+    middle             = "mediocre — the axis is met but unimpressive"
+    bottom third       = "the axis is missed (wrong language, wrong
+                          register, unhelpful, unsafe, hallucinated)"
+
+STEP 3 — DISTRIBUTION CHECK:
+After scoring, count how many axes you put at the top. If MORE THAN ONE
+axis is at the top, go back to Step 1 — you were too lenient. Real
+responses almost always have a noticeable rough edge in 2+ areas. The
+typical "good" response scores at top-1 across most axes, with maybe
+ONE genuine top, NOT multiple tops.
+
+STEP 4 — VERDICT:
+    "pass" → every axis ≥ top-1 (i.e. 4 or 5 on a 5-pt scale) AND no
+             obvious failures called out
+    "warn" → at least one axis at mid-scale OR multiple axes at top-2
+    "fail" → any axis at or below the bottom third
+
+────────────────────────────────────────────────────────────────────────
+
+Return ONLY a single JSON object — no surrounding text, no markdown fences.
+The `faults` field must list a fault per axis (or empty string for a
+genuine top score) — this is the audit trail your scores are based on.
 
 {{
+  "faults": {{
+  {fault_schema}
+  }},
   "scores": {{
   {score_schema}
   }},
   "verdict": "pass" | "warn" | "fail",
-  "rationale": "≤ 3 sentence explanation"
+  "rationale": "≤ 3 sentences summarising the most important faults driving the verdict"
 }}
 """
+    # User prompt — no "REFERENCE" section anymore. In our judge-only
+    # mode the reference IS the response being scored, so showing it
+    # twice (once as reference, once as candidate) gave the judge a
+    # 5/5-by-default bias.
     user_prompt = f"""SYSTEM PROMPT (from the original conversation):
 {system_text or '(no system prompt was used)'}
 
 CONVERSATION INPUT(S):
 {_format_messages([m for m in reference_messages if m.get('role') in ('user', 'tool')]) or user_text}
 
-REFERENCE (assistant output produced by the stronger generator):
-{_format_messages([m for m in reference_messages if m.get('role') == 'assistant'])}
-
-CANDIDATE (assistant output produced by the model under test):
+ASSISTANT'S RESPONSE (the output to grade):
 {_format_messages(candidate_messages)}
 """
     return system_prompt, user_prompt
@@ -218,6 +260,12 @@ async def call_judge(
     extra_headers: dict[str, str] | None = None,
     reasoning_effort: str | None = None,
     chat_template_kwargs: dict[str, Any] | None = None,
+    # Per-run overrides exposed through BenchmarkRun.samplingParams. When
+    # omitted, fall back to the conservative defaults that worked well for
+    # most local judges (low temperature for verdict stability, ~4k tokens
+    # for verdict + rationale).
+    temperature: float | None = None,
+    max_tokens: int | None = None,
 ) -> dict[str, Any]:
     """Call the judge model and return parsed scores + cost/tokens.
 
@@ -245,9 +293,9 @@ async def call_judge(
             {"role": "system", "content": sys_prompt},
             {"role": "user", "content": user_prompt},
         ],
-        temperature=0.0,
+        temperature=0.0 if temperature is None else float(temperature),
         top_p=1.0,
-        max_tokens=2000,
+        max_tokens=4096 if max_tokens is None else int(max_tokens),
         extra_headers=extra_headers,
         reasoning_effort=reasoning_effort,
         chat_template_kwargs=chat_template_kwargs,
@@ -257,4 +305,182 @@ async def call_judge(
     parsed["tokens_out"] = result.tokens_out
     parsed["cost_usd"] = result.cost_usd
     parsed["latency_ms"] = result.latency_ms
+    return parsed
+
+
+async def call_judge_streaming(
+    *,
+    base_url: str,
+    api_key: str,
+    model: str,
+    rubric_axes: list[dict[str, Any]],
+    system_text: str,
+    user_text: str,
+    reference_messages: list[dict[str, Any]],
+    candidate_messages: list[dict[str, Any]],
+    extra_headers: dict[str, str] | None = None,
+    reasoning_effort: str | None = None,
+    chat_template_kwargs: dict[str, Any] | None = None,
+    temperature: float | None = None,
+    max_tokens: int | None = None,
+    # Total number of judge attempts before giving up. The first attempt
+    # is at temperature `temperature`; retries bump the temperature
+    # slightly (+0.1 per attempt) so the model doesn't deterministically
+    # produce the same malformed output. Default 3 = 1 attempt + 2 retries.
+    max_retries: int = 3,
+    # Callback fired for every visible content delta. Receives (text)
+    # and is expected to be a short async function — typically just
+    # pg_notify. Reasoning deltas are NOT forwarded (they're noisy and
+    # the UI only wants the final JSON output to render).
+    on_delta: Callable[[str], Awaitable[None]] | None = None,
+) -> dict[str, Any]:
+    """Same as call_judge but streams the response so the caller can
+    forward deltas to the Live Benchmark Preview SSE. Accumulates the
+    full text + tokens internally, then parses identically to call_judge.
+
+    Falls back to the non-streaming path if `on_delta` is None — there's
+    no point paying the streaming cost if no one's listening.
+    """
+    if on_delta is None:
+        # Non-streaming fallback — same retry loop, just without delta
+        # forwarding.
+        started_at = time.perf_counter()
+        accum_in = 0
+        accum_out = 0
+        last_parsed: dict[str, Any] | None = None
+        for attempt in range(max(1, max_retries)):
+            base_t = 0.0 if temperature is None else float(temperature)
+            r = await call_judge(
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                rubric_axes=rubric_axes,
+                system_text=system_text,
+                user_text=user_text,
+                reference_messages=reference_messages,
+                candidate_messages=candidate_messages,
+                extra_headers=extra_headers,
+                reasoning_effort=reasoning_effort,
+                chat_template_kwargs=chat_template_kwargs,
+                temperature=base_t + 0.1 * attempt,
+                max_tokens=max_tokens,
+            )
+            accum_in += int(r.get("tokens_in") or 0)
+            accum_out += int(r.get("tokens_out") or 0)
+            last_parsed = r
+            if r.get("_parsed_ok"):
+                r["tokens_in"] = accum_in
+                r["tokens_out"] = accum_out
+                r["latency_ms"] = int((time.perf_counter() - started_at) * 1000)
+                r["judge_retries_used"] = attempt
+                return r
+            log.warning(
+                "judge response failed to parse (attempt %d/%d, model=%s)",
+                attempt + 1,
+                max_retries,
+                model,
+            )
+        # Out of attempts — return the last (still-marked _parsed_ok=False) result.
+        if last_parsed is not None:
+            last_parsed["tokens_in"] = accum_in
+            last_parsed["tokens_out"] = accum_out
+            last_parsed["latency_ms"] = int((time.perf_counter() - started_at) * 1000)
+            last_parsed["judge_retries_used"] = max_retries - 1
+            return last_parsed
+        return {
+            "scores": {},
+            "verdict": "fail",
+            "rationale": "judge call failed",
+            "_parsed_ok": False,
+            "tokens_in": 0,
+            "tokens_out": 0,
+            "cost_usd": 0.0,
+            "latency_ms": int((time.perf_counter() - started_at) * 1000),
+        }
+
+    sys_prompt, user_prompt = build_judge_prompt(
+        rubric_axes=rubric_axes,
+        system_text=system_text,
+        user_text=user_text,
+        reference_messages=reference_messages,
+        candidate_messages=candidate_messages,
+    )
+    started_at = time.perf_counter()
+    base_t = 0.0 if temperature is None else float(temperature)
+    accum_in = 0
+    accum_out = 0
+    last_full_text = ""
+
+    for attempt in range(max(1, max_retries)):
+        parts: list[str] = []
+        tokens_in = 0
+        tokens_out = 0
+        full_text = ""
+        try:
+            async for ev in chat_completion_stream(
+                base_url=base_url,
+                api_key=api_key,
+                model=model,
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                # Bump temperature on retries so we don't deterministically
+                # regenerate the same malformed JSON. +0.1 per attempt is
+                # enough to perturb without breaking the scoring discipline.
+                temperature=base_t + 0.1 * attempt,
+                top_p=1.0,
+                max_tokens=4096 if max_tokens is None else int(max_tokens),
+                extra_headers=extra_headers,
+                reasoning_effort=reasoning_effort,
+                chat_template_kwargs=chat_template_kwargs,
+            ):
+                if ev.error:
+                    continue
+                if ev.done:
+                    tokens_in = ev.tokens_in
+                    tokens_out = ev.tokens_out
+                    full_text = ev.full_text or "".join(parts)
+                    break
+                if ev.delta and not ev.reasoning:
+                    parts.append(ev.delta)
+                    try:
+                        await on_delta(ev.delta)
+                    except Exception:  # noqa: BLE001
+                        # A misbehaving notify handler must not break the
+                        # judge call.
+                        pass
+        except Exception as e:  # noqa: BLE001
+            log.warning("judge stream failed (attempt %d/%d): %s", attempt + 1, max_retries, e)
+            full_text = "".join(parts)
+
+        accum_in += tokens_in
+        accum_out += tokens_out
+        last_full_text = full_text or last_full_text
+
+        parsed = parse_judge_response(full_text, rubric_axes)
+        if parsed.get("_parsed_ok"):
+            parsed["tokens_in"] = accum_in
+            parsed["tokens_out"] = accum_out
+            parsed["cost_usd"] = estimate_cost(model, accum_in, accum_out)
+            parsed["latency_ms"] = int((time.perf_counter() - started_at) * 1000)
+            parsed["judge_retries_used"] = attempt
+            return parsed
+        log.warning(
+            "judge response failed to parse (attempt %d/%d, model=%s) — preview=%r",
+            attempt + 1,
+            max_retries,
+            model,
+            (full_text or "")[:200],
+        )
+
+    # All retries exhausted — return the last attempt's parse (with
+    # _parsed_ok=False) so the run progresses with a degraded verdict
+    # rather than crashing.
+    parsed = parse_judge_response(last_full_text, rubric_axes)
+    parsed["tokens_in"] = accum_in
+    parsed["tokens_out"] = accum_out
+    parsed["cost_usd"] = estimate_cost(model, accum_in, accum_out)
+    parsed["latency_ms"] = int((time.perf_counter() - started_at) * 1000)
+    parsed["judge_retries_used"] = max_retries - 1
     return parsed

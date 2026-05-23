@@ -97,12 +97,31 @@ function defaultNodeData(kind: FlowNodeKind): Record<string, unknown> {
 }
 
 function toRfNodes(nodes: FlowNode[]): Node[] {
-  return nodes.map((n) => ({
-    id: n.id,
-    type: n.type,
-    position: n.position,
-    data: { ...n.data },
-  }));
+  // Generated flows from the AI dialog occasionally arrive with missing /
+  // malformed `position` objects (no x or y, or position entirely
+  // undefined). ReactFlow crashes on first render in that case
+  // ("Cannot read properties of undefined (reading 'x')"). Coerce to a
+  // safe {x,y} pair here; the auto-layout button will reflow them into a
+  // proper arrangement after the editor mounts.
+  return nodes.map((n, i) => {
+    const rawX =
+      n.position && typeof n.position === "object"
+        ? (n.position as { x?: unknown }).x
+        : undefined;
+    const rawY =
+      n.position && typeof n.position === "object"
+        ? (n.position as { y?: unknown }).y
+        : undefined;
+    return {
+      id: n.id,
+      type: n.type,
+      position: {
+        x: typeof rawX === "number" && Number.isFinite(rawX) ? rawX : i * 240,
+        y: typeof rawY === "number" && Number.isFinite(rawY) ? rawY : 0,
+      },
+      data: { ...n.data },
+    };
+  });
 }
 
 function toRfEdges(edges: FlowEdge[]): Edge[] {
@@ -119,7 +138,7 @@ function toFlowNodes(nodes: Node[]): FlowNode[] {
   return nodes.map((n) => ({
     id: n.id,
     type: (n.type as FlowNodeKind) ?? "action",
-    position: n.position,
+    position: n.position ?? { x: 0, y: 0 },
     data: (n.data ?? {}) as Record<string, unknown>,
   }));
 }

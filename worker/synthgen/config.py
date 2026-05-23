@@ -24,6 +24,10 @@ class Settings(BaseSettings):
 
     worker_poll_interval_seconds: float = 2.0
     worker_concurrency: int = 4
+    # Number of benchmark runs to execute simultaneously per worker
+    # container. A run handles item-level parallelism internally via
+    # samplingParams.concurrency, so we don't need many parallel runs.
+    benchmark_worker_concurrency: int = 2
     worker_lock_id: int = 924715  # arbitrary advisory-lock namespace
 
     exports_dir: str = "./storage/exports"

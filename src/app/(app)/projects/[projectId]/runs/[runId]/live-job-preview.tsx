@@ -333,11 +333,21 @@ export function LiveJobPreview({
       if (!doneSeenRef.current) {
         setStreamBroken(true);
         if (es.readyState === EventSource.CLOSED) {
+          // EventSource gave up reconnecting. Flip streamRunning off so the
+          // throughput badge stops ticking — otherwise it ticks forever
+          // because we never received a `done` event to clear it.
+          setStreamRunning(false);
           es.close();
         }
       }
     };
-    return () => es.close();
+    return () => {
+      // Component-unmount / job-switch cleanup. Stop the badge too in
+      // case we never saw `done` (e.g. user switched away mid-stream or
+      // the run finished while the page was hidden).
+      setStreamRunning(false);
+      es.close();
+    };
   }, [projectId, runId, selectedId, subscribeNonce]);
 
   // (Previously had a scroll listener that maintained a `userScrolledUpRef`

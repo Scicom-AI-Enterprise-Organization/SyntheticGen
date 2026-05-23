@@ -244,13 +244,33 @@ class AiAssistRequest(BaseModel):
 
 @app.post("/internal/benchmark-runs/{run_id}/start")
 async def start_benchmark_run(run_id: str, _=Depends(require_internal)):
-    """Kick off a benchmark run as a background task and return immediately.
+    """Enqueue a benchmark run for the background worker to pick up.
 
-    The run drives a long-running asyncio task that streams progress into the
-    BenchmarkRun row; the UI polls (or subscribes via SSE) to track it.
+    Previously this used `asyncio.create_task` in the api process — which
+    meant a uvicorn reload (or any api restart) killed in-flight runs.
+    Now we just confirm the row exists and is in a startable state; the
+    synthgen-worker container's benchmark consumer pool claims queued
+    rows via SELECT ... FOR UPDATE SKIP LOCKED and runs them in a
+    persistent process. The UI polls / streams progress the same way as
+    before.
     """
-    asyncio.create_task(execute_benchmark_run(run_id))
-    return {"ok": True, "runId": run_id}
+    row = await db.fetch_one(
+        'SELECT status FROM "BenchmarkRun" WHERE id = $1',
+        run_id,
+    )
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"benchmark run {run_id} not found")
+    # Only re-queue if the row isn't already running. We do NOT flip a
+    # 'running' row back to queued — that would let two workers pick it
+    # up.
+    if row["status"] not in {"queued", "running"}:
+        await db.execute(
+            """UPDATE "BenchmarkRun" SET status = 'queued',
+               "completedAt" = NULL, "updatedAt" = NOW()
+               WHERE id = $1""",
+            run_id,
+        )
+    return {"ok": True, "runId": run_id, "queued": True}
 
 
 @app.post("/internal/ai-assist")

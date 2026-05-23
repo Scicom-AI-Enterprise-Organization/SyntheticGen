@@ -20,7 +20,10 @@ function Slider({
     >
       <SliderPrimitive.Track
         data-slot="slider-track"
-        className="relative h-1.5 w-full grow overflow-hidden rounded-full bg-muted"
+        // bg-muted is near-white in light mode and disappears against a
+        // light card; bg-primary/20 (20% of foreground primary) stays
+        // visible in both themes. Bumping height to h-2 also helps.
+        className="relative h-2 w-full grow overflow-hidden rounded-full bg-primary/20"
       >
         <SliderPrimitive.Range
           data-slot="slider-range"
@@ -29,7 +32,7 @@ function Slider({
       </SliderPrimitive.Track>
       <SliderPrimitive.Thumb
         data-slot="slider-thumb"
-        className="block h-4 w-4 rounded-full border border-primary bg-background shadow-xs ring-ring/50 transition-colors focus-visible:outline-none focus-visible:ring-[3px] disabled:pointer-events-none"
+        className="block h-4 w-4 rounded-full border-2 border-primary bg-background shadow ring-ring/50 transition-colors focus-visible:outline-none focus-visible:ring-[3px] disabled:pointer-events-none"
       />
     </SliderPrimitive.Root>
   );

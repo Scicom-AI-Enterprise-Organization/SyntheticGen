@@ -737,6 +737,18 @@ model Conversation {
   //   }
   settingsSnapshot Json?
 
+  // Calibration flag — when true, this conversation is part of the
+  // hand-rated reference set used to detect judge drift. Calibration
+  // conversations are re-judged at the start of every benchmark run
+  // and their scores compared against the expected baseline. If the
+  // judge's scores drift beyond a threshold, the run is flagged
+  // before the user trusts its rankings.
+  isCalibration Boolean @default(false)
+  // Expected per-axis scores from the human rater for this calibration
+  // item. Shape: { axisKey: number, ... } keyed by rubric axis. Used by
+  // the drift detector to compare against the judge's output.
+  calibrationExpected Json?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -753,6 +765,7 @@ model Conversation {
   @@index([projectId, status, createdAt(sort: Desc)])
   @@index([runId])
   @@index([dedupHash])
+  @@index([projectId, isCalibration])
 }
 
 model Message {
@@ -1017,6 +1030,21 @@ model BenchmarkRun {
   startedAt   DateTime?
   completedAt DateTime?
   lastError   String?
+
+  // Calibration drift report — populated when the run scores any
+  // conversations marked isCalibration=true at the start of the run.
+  // Shape:
+  //   {
+  //     items: [{ conversationId, expected: {axis: n}, actual: {axis: n},
+  //               delta: {axis: n}, maxDelta: n }],
+  //     maxDelta: n,                  // worst per-axis delta across items
+  //     meanDelta: n,                 // average per-axis delta
+  //     driftFlagged: boolean,        // true if maxDelta > threshold
+  //     threshold: n
+  //   }
+  // The UI surfaces this on the run page so reviewers can decide
+  // whether to trust the run's rankings or re-evaluate.
+  calibrationReport Json?
 
   createdById String
   createdAt   DateTime @default(now())

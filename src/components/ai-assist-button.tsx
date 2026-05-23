@@ -13,6 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -433,16 +434,14 @@ export function AiAssistButton({
                   {maxTokens.toLocaleString()}
                 </span>
               </div>
-              <input
+              <Slider
                 id="ai-max-tokens"
-                type="range"
                 min={1000}
                 max={32000}
                 step={500}
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(Number(e.target.value))}
+                value={[maxTokens]}
+                onValueChange={([v]) => setMaxTokens(v ?? 1000)}
                 disabled={pending}
-                className="w-full accent-primary"
               />
               <p className="text-xs text-muted-foreground">
                 Caps how many tokens the model can generate (reasoning + answer).

@@ -162,10 +162,14 @@ def _load_split_rows(source: str, split: str, max_rows: int | None) -> list[dict
 async def _set_status(run_id: str, **fields: Any) -> None:
     if not fields:
         return
+    # JSONB columns must be cast `::jsonb` so the json.dumps string we
+    # pass is parsed into an object/array, not stored as a JSON string.
+    jsonb_columns = {"metrics", "samplingParams"}
     set_clauses = []
     values: list[Any] = []
     for i, (k, v) in enumerate(fields.items(), start=2):
-        set_clauses.append(f'"{k}" = ${i}')
+        cast = "::jsonb" if k in jsonb_columns else ""
+        set_clauses.append(f'"{k}" = ${i}{cast}')
         values.append(v)
     set_clauses.append('"updatedAt" = NOW()')
     sql = f'UPDATE "BenchmarkRun" SET {", ".join(set_clauses)} WHERE id = $1'
@@ -336,9 +340,9 @@ async def execute_benchmark_run(run_id: str) -> None:
 
 
 def _now_marker() -> Any:
-    """Return a value asyncpg accepts as a timestamp. We use Postgres NOW()
-    via the SET clause when possible, but for parameterised updates a Python
-    datetime is the simplest portable thing."""
+    """Return a value asyncpg accepts as a timestamp. BenchmarkRun's
+    timestamp columns are `timestamp without time zone`, so asyncpg
+    refuses tz-aware datetimes — compute UTC, drop the tzinfo."""
     from datetime import datetime, timezone
 
-    return datetime.now(timezone.utc)
+    return datetime.now(timezone.utc).replace(tzinfo=None)

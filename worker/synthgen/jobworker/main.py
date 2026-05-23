@@ -13,6 +13,7 @@ import sys
 from typing import Optional
 
 from .. import db
+from ..benchmarks.runner import execute_benchmark_run
 from ..config import get_settings
 from ..generation import execute_job
 
@@ -125,6 +126,84 @@ async def _consumer(name: str, idle_sleep: float) -> None:
     log.info("consumer %s stopped", name)
 
 
+# ─── Benchmark runs ──────────────────────────────────────────────────────────
+#
+# BenchmarkRun rows in status='queued' are claimed by a separate consumer
+# pool. A run is one long-lived asyncio task (potentially hours for 100k
+# items), so the pool runs at low concurrency (1-2 simultaneous runs is
+# usually enough — within each run the worker already parallelises items
+# via samplingParams.concurrency). Same SKIP LOCKED pattern as the
+# generation-job claimer so multiple worker containers don't double-pick.
+
+
+async def _claim_benchmark_run() -> Optional[str]:
+    """Atomically claim one queued BenchmarkRun. Returns its id or None."""
+    async with db.acquire() as conn:
+        async with conn.transaction():
+            row = await conn.fetchrow(
+                """
+                WITH next AS (
+                    SELECT id FROM "BenchmarkRun"
+                    WHERE status = 'queued'
+                    ORDER BY "createdAt" ASC
+                    FOR UPDATE SKIP LOCKED
+                    LIMIT 1
+                )
+                UPDATE "BenchmarkRun" SET status = 'running',
+                    "startedAt" = COALESCE("startedAt", NOW()),
+                    "updatedAt" = NOW()
+                WHERE id = (SELECT id FROM next)
+                RETURNING id
+                """,
+            )
+            return row["id"] if row else None
+
+
+async def _process_one_benchmark() -> bool:
+    run_id = await _claim_benchmark_run()
+    if not run_id:
+        return False
+    log.info("benchmark run %s claimed — executing", run_id)
+    try:
+        await execute_benchmark_run(run_id)
+    except Exception:  # noqa: BLE001
+        log.exception("benchmark run %s crashed", run_id)
+        # Best-effort flip back to failed so the row doesn't sit at
+        # 'running' forever after a crash. The run itself usually sets
+        # this in its own try/except, but a hard crash here means we
+        # might not get there.
+        try:
+            await db.execute(
+                """UPDATE "BenchmarkRun" SET status = 'failed',
+                   "lastError" = COALESCE("lastError", 'worker crashed'),
+                   "completedAt" = NOW(),
+                   "updatedAt" = NOW()
+                   WHERE id = $1 AND status = 'running'""",
+                run_id,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+    return True
+
+
+async def _benchmark_consumer(name: str, idle_sleep: float) -> None:
+    log.info("benchmark consumer %s starting", name)
+    while not _shutdown.is_set():
+        try:
+            did_work = await _process_one_benchmark()
+        except Exception:  # noqa: BLE001
+            log.exception("benchmark consumer loop error")
+            did_work = False
+        if not did_work:
+            try:
+                # Idle a bit longer than the generation poller — a few
+                # seconds extra delay on benchmark pickup is fine.
+                await asyncio.wait_for(_shutdown.wait(), timeout=idle_sleep * 2)
+            except asyncio.TimeoutError:
+                pass
+    log.info("benchmark consumer %s stopped", name)
+
+
 async def main_async() -> None:
     settings = get_settings()
     await db.get_pool()
@@ -135,8 +214,18 @@ async def main_async() -> None:
         asyncio.create_task(_consumer(f"c{i}", settings.worker_poll_interval_seconds))
         for i in range(max(1, settings.worker_concurrency))
     ]
+    # Benchmark runs: low-concurrency pool (default 2). Each run handles
+    # its own internal item-level parallelism via samplingParams.
+    # concurrency, so we don't need many simultaneous runs.
+    bench_concurrency = max(1, getattr(settings, "benchmark_worker_concurrency", 2))
+    benchmark_consumers = [
+        asyncio.create_task(
+            _benchmark_consumer(f"b{i}", settings.worker_poll_interval_seconds)
+        )
+        for i in range(bench_concurrency)
+    ]
     try:
-        await asyncio.gather(*consumers)
+        await asyncio.gather(*consumers, *benchmark_consumers)
     finally:
         await db.close_pool()
 

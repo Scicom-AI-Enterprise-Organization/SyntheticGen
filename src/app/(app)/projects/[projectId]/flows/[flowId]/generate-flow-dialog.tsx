@@ -22,6 +22,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
+import { Slider } from "@/components/ui/slider";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Select,
@@ -506,16 +507,14 @@ export function GenerateFlowDialog({
                   {maxTokens.toLocaleString()}
                 </span>
               </div>
-              <input
+              <Slider
                 id="gf-max-tokens"
-                type="range"
                 min={1000}
                 max={64000}
                 step={500}
-                value={maxTokens}
-                onChange={(e) => setMaxTokens(Number(e.target.value))}
+                value={[maxTokens]}
+                onValueChange={([v]) => setMaxTokens(v ?? 1000)}
                 disabled={pending || randomizing}
-                className="w-full accent-primary"
               />
               <p className="text-xs text-muted-foreground">
                 Reasoning models (Qwen3-thinking, DeepSeek-R1) burn lots of tokens
@@ -531,16 +530,14 @@ export function GenerateFlowDialog({
                   {temperature.toFixed(2)}
                 </span>
               </div>
-              <input
+              <Slider
                 id="gf-temp"
-                type="range"
                 min={0}
                 max={2}
                 step={0.05}
-                value={temperature}
-                onChange={(e) => setTemperature(Number(e.target.value))}
+                value={[temperature]}
+                onValueChange={([v]) => setTemperature(v ?? 0)}
                 disabled={pending || randomizing}
-                className="w-full accent-primary"
               />
               <p className="text-xs text-muted-foreground">
                 0 = deterministic (often repeats), 0.7 = balanced default,

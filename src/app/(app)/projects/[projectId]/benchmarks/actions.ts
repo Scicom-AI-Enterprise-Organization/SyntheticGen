@@ -113,6 +113,99 @@ export async function createBenchmark(input: z.infer<typeof createBenchmarkSchem
   return { ok: true, id: created.id };
 }
 
+// ───── Edit source ───────────────────────────────────────────────────────────
+
+const editSourceSchema = z.object({
+  projectId: z.string(),
+  benchmarkId: z.string(),
+  // Same filter shape as create — re-evaluates to a new frozen set.
+  filter: chatReplayFilterSchema,
+});
+
+// Re-pick the source run / filter for an existing benchmark and re-freeze
+// the conversation set. Useful when the original source run got deleted /
+// reset, when new conversations have been accepted since, or when the
+// user wants to change which run's conversations the benchmark replays.
+//
+// Caveat: existing BenchmarkRun rows (and their per-item BenchmarkResult
+// rows) continue to reference the OLD conversation IDs. Some of those IDs
+// may no longer be in the benchmark's new frozen set — past runs become
+// historical snapshots of a stale conversation list. The UI surfaces this.
+export async function editBenchmarkSource(input: z.infer<typeof editSourceSchema>) {
+  const parsed = editSourceSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
+  const { user } = await requireProjectPermission(parsed.data.projectId, "benchmarks.write");
+
+  const { projectId, benchmarkId, filter } = parsed.data;
+
+  const benchmark = await prisma.benchmark.findFirst({
+    where: { id: benchmarkId, projectId },
+    select: { id: true, kind: true, config: true },
+  });
+  if (!benchmark) return { error: "Benchmark not found" };
+  if (benchmark.kind !== "project-chat-replay") {
+    return { error: "Only project-chat-replay benchmarks have an editable source today" };
+  }
+
+  const where: Prisma.ConversationWhereInput = { projectId };
+  if (filter.runIds?.length) where.runId = { in: filter.runIds };
+  if (filter.personaIds?.length) where.personaId = { in: filter.personaIds };
+  if (filter.taxonomyNodeIds?.length) where.taxonomyNodeId = { in: filter.taxonomyNodeIds };
+  if (filter.statuses?.length) where.status = { in: filter.statuses };
+  else where.status = "accepted";
+
+  const limit = filter.limit ?? 200;
+  const conversations = await prisma.conversation.findMany({
+    where,
+    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    take: limit,
+    select: { id: true, primaryLanguage: true },
+  });
+  if (conversations.length === 0) {
+    return { error: "No conversations match the new filter — adjust and try again." };
+  }
+
+  const splits = Array.from(
+    new Set(conversations.map((c) => c.primaryLanguage ?? "unknown")),
+  ).sort();
+
+  // Preserve the existing config (mode, etc.) and just swap in the new filter.
+  const prevConfig =
+    (benchmark.config as { mode?: string; filter?: unknown } | null) ?? {};
+
+  await prisma.benchmark.update({
+    where: { id: benchmarkId },
+    data: {
+      source:
+        filter.runIds?.length === 1
+          ? `project-run:${filter.runIds[0]}`
+          : "project-filter",
+      splits,
+      config: {
+        ...prevConfig,
+        kind: "chat-replay",
+        filter,
+      } as unknown as Prisma.InputJsonValue,
+      frozenConversationIds: conversations.map((c) => c.id),
+    },
+  });
+
+  await logAudit({
+    projectId,
+    actorUserId: user.id,
+    action: "benchmark.source.edit",
+    targetKind: "Benchmark",
+    targetId: benchmarkId,
+    metadata: {
+      newItemCount: conversations.length,
+      runIds: filter.runIds ?? [],
+    },
+  });
+
+  revalidatePath(`/projects/${projectId}/benchmarks/${benchmarkId}`);
+  return { ok: true, itemCount: conversations.length };
+}
+
 // ───── Delete ────────────────────────────────────────────────────────────────
 
 export async function deleteBenchmark(projectId: string, benchmarkId: string) {
@@ -158,6 +251,24 @@ const startRunSchema = z.object({
       top_p: z.number().min(0).max(1).optional(),
       max_tokens: z.number().int().min(1).max(64000).optional(),
       seed: z.number().int().optional().nullable(),
+      // Judge-side overrides for chat-replay benchmarks. Stored in the
+      // same samplingParams JSON blob so the worker picks them up without
+      // schema changes; if absent, the worker falls back to its own
+      // judge defaults.
+      judge_temperature: z.number().min(0).max(2).optional(),
+      judge_max_tokens: z.number().int().min(1).max(64000).optional(),
+      // "one-shot" scores the whole conversation in a single judge call;
+      // "per-turn" calls the judge once per assistant turn and writes a
+      // separate BenchmarkResult per turn. Defaults to "one-shot" if
+      // omitted.
+      judge_strategy: z.enum(["one-shot", "per-turn"]).optional(),
+      // Total judge attempts before accepting a malformed response.
+      // Default 3 (1 attempt + 2 retries). Each retry bumps temperature
+      // slightly so we don't re-roll the same broken JSON.
+      judge_max_retries: z.number().int().min(1).max(10).optional(),
+      // Worker concurrency for this run — bounded asyncio.Semaphore.
+      // Allowed 1..32 to keep upstream rate-limits sane.
+      concurrency: z.number().int().min(1).max(32).optional(),
     })
     .optional()
     .nullable(),
@@ -303,4 +414,105 @@ export async function cancelBenchmarkRun(projectId: string, runId: string) {
   });
   revalidatePath(`/projects/${projectId}/benchmarks`);
   return { ok: true };
+}
+
+// ───── Restart ───────────────────────────────────────────────────────────────
+
+// Reset a benchmark run back to queued and re-dispatch it. Useful when:
+//   - status is "queued" but the worker never picked it up (lost dispatch,
+//     api container reload between create + start).
+//   - status is "running" but the worker died and the row is stuck.
+//   - status is "failed" / "cancelled" and the user wants another go.
+// Two modes via `mode`:
+//   - "fresh" (default): wipe every BenchmarkResult row and re-judge
+//     the whole frozen set from scratch. Best when prompts/judge changed.
+//   - "resume": KEEP existing BenchmarkResult rows and only judge
+//     conversations that haven't been judged yet. Idempotent — safe to
+//     call repeatedly after a crash or a manual cancel. The worker's
+//     `_process_one` skips rowIdx values it finds in BenchmarkResult.
+export async function restartBenchmarkRun(
+  projectId: string,
+  runId: string,
+  mode: "fresh" | "resume" = "fresh",
+) {
+  const { user } = await requireProjectPermission(projectId, "benchmarks.execute");
+
+  const run = await prisma.benchmarkRun.findFirst({
+    where: { id: runId, benchmark: { projectId } },
+    select: { id: true, benchmarkId: true },
+  });
+  if (!run) return { error: "Benchmark run not found in this project" };
+
+  if (mode === "fresh") {
+    await prisma.$transaction(async (tx) => {
+      // Clear per-item results so the rerun doesn't show stale verdicts
+      // alongside the new ones.
+      await tx.benchmarkResult.deleteMany({ where: { runId } });
+      await tx.benchmarkRun.update({
+        where: { id: runId },
+        data: {
+          status: "queued",
+          startedAt: null,
+          completedAt: null,
+          lastError: null,
+          completedTurns: 0,
+          failedTurns: 0,
+          totalTurns: 0,
+          tokensIn: 0,
+          tokensOut: 0,
+          costUsd: 0,
+          metrics: Prisma.JsonNull,
+        },
+      });
+    });
+  } else {
+    // Resume — keep existing per-item rows. Reset only the run-level
+    // status fields so the worker can pick it up again.
+    await prisma.benchmarkRun.update({
+      where: { id: runId },
+      data: {
+        status: "queued",
+        completedAt: null,
+        lastError: null,
+      },
+    });
+  }
+
+  await logAudit({
+    projectId,
+    actorUserId: user.id,
+    action:
+      mode === "fresh" ? "benchmark.run.restart" : "benchmark.run.resume",
+    targetKind: "BenchmarkRun",
+    targetId: runId,
+  });
+
+  const dispatch = await tryCall(
+    () =>
+      fetch(
+        `${process.env.SYNTHGEN_API_URL ?? "http://localhost:8000"}/internal/benchmark-runs/${runId}/start`,
+        {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            "x-internal-token": process.env.SYNTHGEN_INTERNAL_TOKEN ?? "",
+          },
+          cache: "no-store",
+        },
+      ),
+    `restart benchmark run ${runId}`,
+  );
+
+  revalidatePath(`/projects/${projectId}/benchmarks/${run.benchmarkId}/runs/${runId}`);
+  revalidatePath(`/projects/${projectId}/benchmarks/${run.benchmarkId}`);
+
+  if (!dispatch || !dispatch.ok) {
+    return {
+      ok: true,
+      runId,
+      warning:
+        "Run reset to queued, but worker dispatch failed (check that the api container is reachable). Click Restart again once the worker is up.",
+    };
+  }
+  return { ok: true, runId };
 }
