@@ -79,6 +79,10 @@ const updateSchema = z.object({
   name: z.string().min(2).max(120).optional(),
   description: z.string().max(500).optional().or(z.literal("")).transform((v) => v ?? undefined),
   defaultFormality: z.enum(["formal", "semi-formal", "colloquial", "mixed"]).optional(),
+  // Labeling platform connection. Empty string on `labelingApiKey`
+  // means "clear it"; undefined means "keep existing".
+  labelingBaseUrl: z.string().url().optional().or(z.literal("")),
+  labelingApiKey: z.string().optional(),
 });
 
 export async function updateProject(input: {
@@ -86,12 +90,31 @@ export async function updateProject(input: {
   name?: string;
   description?: string;
   defaultFormality?: string;
+  labelingBaseUrl?: string;
+  labelingApiKey?: string;
 }) {
   const parsed = updateSchema.safeParse(input);
   if (!parsed.success) return { error: "Invalid input" };
   const { user } = await requireProjectPermission(parsed.data.projectId, "project.update");
 
-  const { projectId, ...patch } = parsed.data;
+  const { projectId, labelingBaseUrl, labelingApiKey, ...rest } = parsed.data;
+
+  // Build the patch — separate the labeling fields because the key is
+  // encrypted, and "" means "clear" while undefined means "keep".
+  const patch: Record<string, unknown> = { ...rest };
+  if (labelingBaseUrl !== undefined) {
+    patch.labelingBaseUrl = labelingBaseUrl === "" ? null : labelingBaseUrl;
+  }
+  if (labelingApiKey !== undefined) {
+    if (labelingApiKey === "") {
+      patch.labelingApiKeyEnc = null;
+    } else {
+      // Lazy import so the encryption crypto stays out of edge bundles.
+      const { encryptSecret } = await import("@/lib/crypto");
+      patch.labelingApiKeyEnc = encryptSecret(labelingApiKey);
+    }
+  }
+
   await prisma.project.update({ where: { id: projectId }, data: patch });
 
   await logAudit({
@@ -100,7 +123,15 @@ export async function updateProject(input: {
     action: "project.update",
     targetKind: "Project",
     targetId: projectId,
-    metadata: patch,
+    // Don't log the API key itself in the audit metadata — just mark
+    // whether it was set/cleared.
+    metadata: {
+      ...rest,
+      ...(labelingBaseUrl !== undefined && { labelingBaseUrl }),
+      ...(labelingApiKey !== undefined && {
+        labelingApiKey: labelingApiKey === "" ? "<cleared>" : "<set>",
+      }),
+    },
   });
 
   revalidatePath(`/projects/${projectId}`);

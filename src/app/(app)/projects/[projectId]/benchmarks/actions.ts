@@ -397,6 +397,381 @@ export async function startBenchmarkRun(input: z.infer<typeof startRunSchema>) {
   return { ok: true, runId: run.id };
 }
 
+// ───── Export top-K% to labeling platform ────────────────────────────────────
+
+const labelingExportSchema = z.object({
+  projectId: z.string(),
+  runId: z.string(),
+  // Labeling platform connection — both optional. When omitted, the
+  // server falls back to the values stored in Project.labelingBaseUrl
+  // and Project.labelingApiKeyEnc.
+  labelingBaseUrl: z.string().url().optional(),
+  labelingToken: z.string().min(10).optional(),
+  // What percentage of conversations to export, e.g. 0.01 = top 1%.
+  percent: z.number().min(0.001).max(1).default(0.01),
+  // Optional override for the labeling project name; defaults to
+  // "<benchmark name> · top <pct>% · <date>".
+  labelingProjectName: z.string().min(2).max(120).optional(),
+  // Minimum per-axis floor (1-N scale). Any conversation with ANY axis
+  // below this is dropped. Default 4 — only top-2-tier results.
+  minAxisScore: z.number().min(1).max(10).default(4),
+});
+
+// Helper: parse a JSONB field that might be a Prisma object or a JSON
+// string (legacy rows).
+function parseJsonbField<T = Record<string, unknown>>(raw: unknown): T | null {
+  if (typeof raw === "string") {
+    try {
+      const p = JSON.parse(raw);
+      if (p && typeof p === "object") return p as T;
+    } catch {
+      return null;
+    }
+  } else if (raw && typeof raw === "object") {
+    return raw as T;
+  }
+  return null;
+}
+
+// Pick the top-K% of conversations from a benchmark run, stratified by
+// (split × persona × taxonomy node) to preserve diversity, then upload
+// them as tasks to a `human_mos` project on the labeling platform.
+//
+// Selection algorithm:
+//   1. Drop rows with verdict != "pass" OR any axis below `minAxisScore`.
+//   2. Compute a composite quality score per row (mean of axis scores).
+//   3. Group by (split, personaId, taxonomyNodeId) cells.
+//   4. Round-robin pick the highest-scoring row from each cell until we
+//      hit the target count (`ceil(totalPass * percent)`).
+//   5. Inside each cell, items are sorted score-desc so the best
+//      example from each (persona × topic × language) combo is picked
+//      first — gives broad coverage even if one persona dominates.
+//   6. Hash-dedupe via Conversation.dedupHash (already populated by the
+//      worker on persist).
+//
+// The labeling project is created with rubric axes mapped 1:1 from the
+// benchmark's rubric so the annotator's MOS scale matches the judge's.
+export async function exportToLabelingPlatform(
+  input: z.infer<typeof labelingExportSchema>,
+) {
+  const parsed = labelingExportSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
+  const { user } = await requireProjectPermission(parsed.data.projectId, "benchmarks.execute");
+
+  const run = await prisma.benchmarkRun.findFirst({
+    where: { id: parsed.data.runId, benchmark: { projectId: parsed.data.projectId } },
+    include: {
+      benchmark: { select: { id: true, name: true } },
+      rubric: { select: { id: true, axes: true } },
+    },
+  });
+  if (!run) return { error: "Benchmark run not found" };
+  if (run.status !== "completed") {
+    return { error: `Run is ${run.status}; export requires status='completed'.` };
+  }
+
+  // Resolve labeling base URL + token from the project settings when
+  // the caller didn't pass overrides. The encrypted token blob is
+  // decrypted here, never sent to the client.
+  let labelingBaseUrl: string | undefined = parsed.data.labelingBaseUrl;
+  let labelingToken: string | undefined = parsed.data.labelingToken;
+  if (!labelingBaseUrl || !labelingToken) {
+    const projectRow = await prisma.project.findUnique({
+      where: { id: parsed.data.projectId },
+      select: { labelingBaseUrl: true, labelingApiKeyEnc: true },
+    });
+    if (!labelingBaseUrl) labelingBaseUrl = projectRow?.labelingBaseUrl ?? undefined;
+    if (!labelingToken && projectRow?.labelingApiKeyEnc) {
+      const { decryptSecret } = await import("@/lib/crypto");
+      labelingToken = decryptSecret(projectRow.labelingApiKeyEnc as unknown as Buffer);
+    }
+  }
+  if (!labelingBaseUrl) {
+    return { error: "Labeling platform base URL not configured (Settings → Labeling platform)." };
+  }
+  if (!labelingToken) {
+    return { error: "Labeling platform API token not configured (Settings → Labeling platform)." };
+  }
+
+  // Pull conversation-level rows only (drop per-turn detail rows so each
+  // task is one logical conversation).
+  const results = await prisma.benchmarkResult.findMany({
+    where: { runId: run.id, kind: "chat-replay" },
+    select: {
+      conversationId: true,
+      judgeVerdict: true,
+      judgeScores: true,
+      judgeRationale: true,
+      candidateMessages: true,
+      split: true,
+    },
+  });
+
+  // Rubric axes drive both the score floor + the labeling axes.
+  type RubricAxis = { key: string; name?: string; scale?: number };
+  const rubricAxes = (run.rubric?.axes as RubricAxis[] | null) ?? [];
+  if (rubricAxes.length === 0) {
+    return { error: "Run's rubric has no axes — nothing to map to MOS." };
+  }
+
+  // 1+2: filter to passing rows above the per-axis floor + composite score.
+  type Candidate = {
+    conversationId: string;
+    score: number;
+    minAxis: number;
+    split: string;
+    candidateMessages: unknown;
+    judgeRationale: string;
+  };
+  const candidates: Candidate[] = [];
+  for (const r of results) {
+    if (!r.conversationId) continue;
+    if (r.judgeVerdict !== "pass") continue;
+    const scores = parseJsonbField<Record<string, number>>(r.judgeScores);
+    if (!scores) continue;
+    let sum = 0;
+    let count = 0;
+    let minAxis = Infinity;
+    for (const ax of rubricAxes) {
+      const v = scores[ax.key];
+      if (typeof v !== "number") continue;
+      sum += v;
+      count += 1;
+      if (v < minAxis) minAxis = v;
+    }
+    if (count === 0) continue;
+    if (minAxis < parsed.data.minAxisScore) continue;
+    candidates.push({
+      conversationId: r.conversationId,
+      score: sum / count,
+      minAxis,
+      split: r.split ?? "unknown",
+      candidateMessages: r.candidateMessages,
+      judgeRationale: r.judgeRationale ?? "",
+    });
+  }
+  if (candidates.length === 0) {
+    return {
+      error: "No conversations passed the quality floor — relax minAxisScore or check the run.",
+    };
+  }
+
+  // Load conversation metadata for stratification + dedup.
+  const convIds = candidates.map((c) => c.conversationId);
+  const convs = await prisma.conversation.findMany({
+    where: { id: { in: convIds } },
+    select: {
+      id: true,
+      personaId: true,
+      taxonomyNodeId: true,
+      primaryLanguage: true,
+      dedupHash: true,
+    },
+  });
+  const convMeta = new Map(convs.map((c) => [c.id, c]));
+
+  // 3: group by (split, personaId, taxonomyNodeId).
+  const cells = new Map<string, Candidate[]>();
+  const seenHashes = new Set<string>();
+  for (const c of candidates) {
+    const meta = convMeta.get(c.conversationId);
+    if (!meta) continue;
+    // Dedup: skip if we've already kept a conversation with the same content hash.
+    if (meta.dedupHash) {
+      if (seenHashes.has(meta.dedupHash)) continue;
+      seenHashes.add(meta.dedupHash);
+    }
+    const cellKey = `${c.split}|${meta.personaId ?? "_"}|${meta.taxonomyNodeId ?? "_"}`;
+    const list = cells.get(cellKey) ?? [];
+    list.push(c);
+    cells.set(cellKey, list);
+  }
+  for (const list of cells.values()) {
+    list.sort((a, b) => b.score - a.score);
+  }
+
+  // 4+5: round-robin from cells (best of each cell first, second-best,
+  // etc.) until we hit the target count.
+  const target = Math.max(1, Math.ceil(candidates.length * parsed.data.percent));
+  const picked: Candidate[] = [];
+  const cellLists = Array.from(cells.values());
+  let cursor = 0;
+  while (picked.length < target && cellLists.some((l) => l.length > cursor)) {
+    for (const list of cellLists) {
+      if (picked.length >= target) break;
+      if (list.length > cursor) picked.push(list[cursor]);
+    }
+    cursor += 1;
+  }
+
+  if (picked.length === 0) {
+    return { error: "Stratified sampling picked 0 conversations — try a larger percent or lower minAxisScore." };
+  }
+
+  // 6: build the labeling-platform payload.
+  const labelingProjectName =
+    parsed.data.labelingProjectName ??
+    `${run.benchmark.name} · top ${Math.round(parsed.data.percent * 100)}% · ${new Date().toISOString().slice(0, 10)}`;
+
+  // Create the labeling project (`human_mos` type).
+  const createRes = await fetch(`${labelingBaseUrl.replace(/\/$/, "")}/api/projects`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${labelingToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      name: labelingProjectName,
+      description: `Top ${Math.round(parsed.data.percent * 100)}% of ${run.benchmark.name} (BenchmarkRun ${run.id.slice(0, 12)}). Auto-exported for human MOS spot-check.`,
+      type: "human_mos",
+    }),
+  });
+  if (!createRes.ok) {
+    const body = await createRes.text().catch(() => "");
+    return { error: `Labeling platform create-project failed: ${createRes.status} ${body.slice(0, 200)}` };
+  }
+  const createJson = (await createRes.json()) as { project?: { id?: string } };
+  const labelingProjectId = createJson.project?.id;
+  if (!labelingProjectId) {
+    return { error: "Labeling platform create-project returned no project id" };
+  }
+
+  // Configure the project's MOS axes from the rubric. Use axis `name` if
+  // present (human-readable), falling back to `key`.
+  const axisLabels = rubricAxes.map((a) => a.name ?? a.key);
+  const patchRes = await fetch(
+    `${labelingBaseUrl.replace(/\/$/, "")}/api/projects/${labelingProjectId}`,
+    {
+      method: "PATCH",
+      headers: {
+        Authorization: `Bearer ${labelingToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        mos_enabled: true,
+        mos_axes: axisLabels,
+      }),
+    },
+  );
+  if (!patchRes.ok) {
+    const body = await patchRes.text().catch(() => "");
+    return { error: `Labeling platform configure-axes failed: ${patchRes.status} ${body.slice(0, 200)}` };
+  }
+
+  // Upload tasks. The platform expects OpenAI-style messages with the
+  // last entry being the assistant turn to rate. We pull from the
+  // candidateMessages field which the worker writes per benchmark row.
+  type LabelTaskMessage = { role: string; content: string };
+  type LabelTask = {
+    human_mos_data: {
+      messages: LabelTaskMessage[];
+      model: string;
+      metadata?: Record<string, unknown>;
+    };
+  };
+  const candidateModel = run.model;
+  const tasks: LabelTask[] = [];
+  for (const p of picked) {
+    let msgs: unknown = p.candidateMessages;
+    if (typeof msgs === "string") {
+      try {
+        msgs = JSON.parse(msgs);
+      } catch {
+        msgs = null;
+      }
+    }
+    if (!Array.isArray(msgs) || msgs.length === 0) continue;
+    // Reduce to just role+content (the labeling platform doesn't need
+    // _turn or tool_calls — those would only confuse the annotator UI).
+    // Ensure the last message is `assistant` per the API requirement.
+    const cleaned: LabelTaskMessage[] = [];
+    for (const m of msgs as Array<Record<string, unknown>>) {
+      if (!m || typeof m !== "object") continue;
+      const role = String(m.role ?? "");
+      if (!["system", "user", "assistant", "tool"].includes(role)) continue;
+      cleaned.push({ role, content: String(m.content ?? "") });
+    }
+    // Make sure last entry is assistant; if it's not, drop trailing
+    // non-assistant entries.
+    while (cleaned.length > 0 && cleaned[cleaned.length - 1].role !== "assistant") {
+      cleaned.pop();
+    }
+    if (cleaned.length === 0) continue;
+    tasks.push({
+      human_mos_data: {
+        messages: cleaned,
+        model: candidateModel,
+        metadata: {
+          benchmarkRunId: run.id,
+          conversationId: p.conversationId,
+          judgeRationale: p.judgeRationale,
+          compositeScore: Number(p.score.toFixed(3)),
+          minAxis: p.minAxis,
+          split: p.split,
+        },
+      },
+    });
+  }
+
+  if (tasks.length === 0) {
+    return { error: "No valid tasks to upload (all picks had empty / malformed messages)." };
+  }
+
+  // Upload in batches of 100 so we don't hit any single-request limits.
+  let imported = 0;
+  for (let i = 0; i < tasks.length; i += 100) {
+    const chunk = tasks.slice(i, i + 100);
+    const upRes = await fetch(
+      `${labelingBaseUrl.replace(/\/$/, "")}/api/projects/${labelingProjectId}/tasks`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${labelingToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ tasks: chunk }),
+      },
+    );
+    if (!upRes.ok) {
+      const body = await upRes.text().catch(() => "");
+      return {
+        error: `Labeling platform task upload failed at batch ${i / 100 + 1}: ${upRes.status} ${body.slice(0, 200)}`,
+        partialImported: imported,
+        labelingProjectId,
+      };
+    }
+    const upJson = (await upRes.json().catch(() => ({}))) as { imported?: number };
+    imported += upJson.imported ?? chunk.length;
+  }
+
+  await logAudit({
+    projectId: parsed.data.projectId,
+    actorUserId: user.id,
+    action: "benchmark.export.labeling",
+    targetKind: "BenchmarkRun",
+    targetId: run.id,
+    metadata: {
+      labelingProjectId,
+      labelingProjectName,
+      pickedCount: picked.length,
+      uploadedCount: imported,
+      percent: parsed.data.percent,
+      minAxisScore: parsed.data.minAxisScore,
+      totalCandidates: candidates.length,
+    },
+  });
+
+  return {
+    ok: true,
+    labelingProjectId,
+    labelingProjectName,
+    labelingProjectUrl: `${labelingBaseUrl.replace(/\/$/, "")}/dashboard/projects/${labelingProjectId}`,
+    pickedCount: picked.length,
+    uploadedCount: imported,
+    totalPassing: candidates.length,
+  };
+}
+
 // ───── Cancel ────────────────────────────────────────────────────────────────
 
 export async function cancelBenchmarkRun(projectId: string, runId: string) {

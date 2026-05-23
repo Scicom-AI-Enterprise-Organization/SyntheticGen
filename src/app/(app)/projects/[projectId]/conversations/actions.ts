@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { z } from "zod";
 import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission } from "@/lib/project-rbac";
@@ -121,4 +122,61 @@ export async function deleteConversations(projectId: string, conversationIds: st
 
   if (okCount > 0) revalidatePath(`/projects/${projectId}/conversations`);
   return { okCount, errors };
+}
+
+// ─── Calibration set ─────────────────────────────────────────────────
+//
+// Mark a conversation as a calibration baseline with human-rated
+// per-axis scores. Every benchmark run re-judges these and compares
+// against the expected scores to detect judge drift.
+
+const calibrationSchema = z.object({
+  projectId: z.string(),
+  conversationId: z.string(),
+  isCalibration: z.boolean(),
+  // Map of axis key -> expected human-rated score. Optional when
+  // turning calibration OFF, required (or omitted to keep existing)
+  // when turning ON.
+  expected: z.record(z.string(), z.number()).optional().nullable(),
+});
+
+export async function setCalibration(input: z.infer<typeof calibrationSchema>) {
+  const parsed = calibrationSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
+  const { user } = await requireProjectPermission(parsed.data.projectId, "conversations.annotate");
+
+  const conv = await prisma.conversation.findFirst({
+    where: { id: parsed.data.conversationId, projectId: parsed.data.projectId },
+    select: { id: true, calibrationExpected: true },
+  });
+  if (!conv) return { error: "Conversation not found in this project" };
+
+  // Build the update payload — preserve existing expected scores when the
+  // caller didn't pass any (e.g. they're just toggling the flag off).
+  const data: { isCalibration: boolean; calibrationExpected?: Prisma.InputJsonValue | typeof Prisma.JsonNull } = {
+    isCalibration: parsed.data.isCalibration,
+  };
+  if (parsed.data.expected !== undefined) {
+    data.calibrationExpected = parsed.data.expected === null
+      ? Prisma.JsonNull
+      : (parsed.data.expected as Prisma.InputJsonValue);
+  }
+
+  await prisma.conversation.update({
+    where: { id: parsed.data.conversationId },
+    data,
+  });
+
+  await logAudit({
+    projectId: parsed.data.projectId,
+    actorUserId: user.id,
+    action: parsed.data.isCalibration
+      ? "conversation.calibration.mark"
+      : "conversation.calibration.unmark",
+    targetKind: "Conversation",
+    targetId: parsed.data.conversationId,
+    metadata: parsed.data.expected ?? undefined,
+  });
+  revalidatePath(`/projects/${parsed.data.projectId}/conversations`);
+  return { ok: true };
 }

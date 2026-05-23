@@ -15,6 +15,7 @@ import { RunMetricsPanel } from "./run-metrics-panel";
 import { ResultsTable, type ResultRow } from "./results-table";
 import { RestartBenchmarkRunButton } from "./restart-button";
 import { LiveBenchmarkPreview } from "./live-benchmark-preview";
+import { ExportToLabelingDialog } from "./export-to-labeling-dialog";
 import { projectRoleAllows } from "@/lib/project-rbac";
 
 export default async function BenchmarkRunPage({
@@ -25,6 +26,17 @@ export default async function BenchmarkRunPage({
   const { projectId, benchmarkId, runId } = await params;
   const { role } = await requireProjectPermission(projectId, "benchmarks.read");
   const canRestart = role ? projectRoleAllows(role, "benchmarks.execute") : false;
+
+  // Look up the labeling-platform connection saved on the project so the
+  // export dialog can pre-fill the URL and skip the token field if one
+  // is stored. We never read the encrypted blob client-side — only the
+  // boolean "is one configured".
+  const projectMeta = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { labelingBaseUrl: true, labelingApiKeyEnc: true },
+  });
+  const labelingBaseUrl = projectMeta?.labelingBaseUrl ?? null;
+  const hasLabelingApiKey = !!projectMeta?.labelingApiKeyEnc;
 
   const run = await prisma.benchmarkRun.findFirst({
     where: { id: runId, benchmarkId },
@@ -126,15 +138,26 @@ export default async function BenchmarkRunPage({
               </>
             )}
           </h1>
-          {canRestart && (
-            <RestartBenchmarkRunButton
-              projectId={projectId}
-              runId={run.id}
-              status={run.status}
-              completedTurns={run.completedTurns}
-              totalTurns={run.totalTurns}
-            />
-          )}
+          <div className="flex shrink-0 items-center gap-2">
+            {canRestart && run.status === "completed" && (
+              <ExportToLabelingDialog
+                projectId={projectId}
+                runId={run.id}
+                benchmarkName={run.benchmark.name}
+                labelingBaseUrl={labelingBaseUrl}
+                hasLabelingApiKey={hasLabelingApiKey}
+              />
+            )}
+            {canRestart && (
+              <RestartBenchmarkRunButton
+                projectId={projectId}
+                runId={run.id}
+                status={run.status}
+                completedTurns={run.completedTurns}
+                totalTurns={run.totalTurns}
+              />
+            )}
+          </div>
         </div>
           );
         })()}

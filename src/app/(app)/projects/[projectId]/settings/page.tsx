@@ -21,6 +21,17 @@ export default async function ProjectSettingsPage({
 
   const canEdit = role === "OWNER";
 
+  // The form only needs a yes/no for the labeling key — DO NOT pass the
+  // encrypted blob down. Reading it would defeat the encryption.
+  const projectForForm = {
+    id: project.id,
+    name: project.name,
+    description: project.description,
+    defaultFormality: project.defaultFormality,
+    labelingBaseUrl: project.labelingBaseUrl,
+    hasLabelingApiKey: project.labelingApiKeyEnc != null,
+  };
+
   return (
     <div className="space-y-6">
       <div>
@@ -30,7 +41,7 @@ export default async function ProjectSettingsPage({
         </p>
       </div>
 
-      <ProjectSettingsForm project={project} disabled={!canEdit} />
+      <ProjectSettingsForm project={projectForForm} disabled={!canEdit} />
 
       {canEdit && (
         <Card>
