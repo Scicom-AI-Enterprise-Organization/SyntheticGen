@@ -164,9 +164,7 @@ Uses MLA attention (same as DeepSeek v3). `FLASH_ATTN_MLA` backend is required f
 
 ```bash
 vllm serve mistralai/Mistral-Small-4-119B-2603 \
-  --tensor-parallel-size 2 \
-  --quantization fp8 \
-  --max-model-len 131072 \
+  --tensor-parallel-size 8 \
   --attention-backend FLASH_ATTN_MLA \
   --tool-call-parser mistral \
   --enable-auto-tool-choice

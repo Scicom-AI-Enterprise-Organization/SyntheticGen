@@ -139,6 +139,100 @@ export async function updateProject(input: {
   return { ok: true };
 }
 
+// Quick connectivity check for the labeling-platform settings card.
+// Performs a GET against the platform's projects-list endpoint with
+// the supplied credentials (or the stored ones if absent) so the user
+// can confirm URL + token work BEFORE saving. Returns a short status
+// string suitable for inline rendering.
+const testLabelingSchema = z.object({
+  projectId: z.string(),
+  // Both optional — fall back to stored values when missing.
+  labelingBaseUrl: z.string().url().optional().or(z.literal("")),
+  labelingApiKey: z.string().optional(),
+});
+
+export async function testLabelingConnection(
+  input: z.infer<typeof testLabelingSchema>,
+): Promise<{ ok: true; message: string } | { ok: false; error: string }> {
+  const parsed = testLabelingSchema.safeParse(input);
+  if (!parsed.success) return { ok: false, error: parsed.error.errors[0]?.message ?? "Invalid input" };
+  await requireProjectPermission(parsed.data.projectId, "project.update");
+
+  // Resolve URL + token from the form first, then fall back to stored
+  // project values.
+  let url = parsed.data.labelingBaseUrl;
+  let token = parsed.data.labelingApiKey;
+  if (!url || !token) {
+    const projectRow = await prisma.project.findUnique({
+      where: { id: parsed.data.projectId },
+      select: { labelingBaseUrl: true, labelingApiKeyEnc: true },
+    });
+    if (!url) url = projectRow?.labelingBaseUrl ?? undefined;
+    if (!token && projectRow?.labelingApiKeyEnc) {
+      const { decryptSecret } = await import("@/lib/crypto");
+      token = decryptSecret(projectRow.labelingApiKeyEnc as unknown as Buffer);
+    }
+  }
+  if (!url || url === "") return { ok: false, error: "No labeling URL — type one or save it first." };
+  if (!token) return { ok: false, error: "No labeling token — type one or save it first." };
+
+  const cleanUrl = url.replace(/\/$/, "");
+  try {
+    // Brief timeout so a wrong URL doesn't hang the UI.
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 10_000);
+    // `/api/auth/me` is the platform's "who am I" endpoint — lightweight
+    // and specifically intended for token verification.
+    const res = await fetch(`${cleanUrl}/api/auth/me`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/json",
+      },
+      signal: ctrl.signal,
+      cache: "no-store",
+    });
+    clearTimeout(t);
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, error: `Auth failed (HTTP ${res.status}) — token rejected by ${cleanUrl}.` };
+    }
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      return {
+        ok: false,
+        error: `HTTP ${res.status} from ${cleanUrl}/api/auth/me${body ? ` — ${body.slice(0, 120)}` : ""}`,
+      };
+    }
+    const json = (await res.json().catch(() => ({}))) as {
+      user?: { email?: string; name?: string };
+      email?: string;
+      name?: string;
+      id?: string;
+    };
+    // Different platforms shape /me differently — surface whatever
+    // identifying field we can find.
+    const who =
+      json.user?.email ??
+      json.user?.name ??
+      json.email ??
+      json.name ??
+      json.id ??
+      "authenticated";
+    return {
+      ok: true,
+      message: `Connected to ${cleanUrl} — token valid (as ${who}).`,
+    };
+  } catch (e) {
+    const msg = (e as Error).message ?? "unknown";
+    return {
+      ok: false,
+      error: msg.includes("aborted")
+        ? `Timed out connecting to ${cleanUrl} (10s).`
+        : `Failed to reach ${cleanUrl}: ${msg.slice(0, 160)}`,
+    };
+  }
+}
+
 export async function archiveProject(projectId: string) {
   const { user } = await requireProjectPermission(projectId, "project.delete");
   await prisma.project.update({

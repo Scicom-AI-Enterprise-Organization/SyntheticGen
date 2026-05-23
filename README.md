@@ -82,6 +82,65 @@ generation, and exports.
   chain **multiple tool calls per turn** (sequential when later calls depend on
   earlier results, parallel for independent fan-out). Generate flows from a plain
   English description, round-trip as YAML.
+- **One-prompt project bootstrap** — `/projects/[id]/bootstrap` takes a single
+  free-text prompt and generates an entire project's seed data end-to-end:
+  taxonomy nodes → language profiles → personas → templates (system +
+  user-seed) → tools → flows → rubrics → benchmarks. Each phase streams tokens
+  live into a structured event log card. Resumable mid-stream — refresh and
+  the orchestrator picks up from the last committed phase. The user-seed
+  template's body is treated as an instruction prompt, NOT rendered verbatim
+  as turn 1 — the worker uses it to LLM-generate a realistic first-person
+  customer utterance per conversation, so the dataset doesn't leak
+  template-style content into user messages.
+- **Benchmarks with self-evaluation pipeline** — `/projects/[id]/benchmarks`
+  scores generated conversations against a per-axis rubric using LLM-as-judge.
+  Key features:
+  - **Judge-only mode** — the judge evaluates the existing reference
+    assistant turns; no candidate model is re-invoked. Avoids the
+    classic "judge same as candidate" leniency where the model
+    rubber-stamps its own output as 5/5.
+  - **One-shot vs per-turn judging** — score the whole conversation in
+    one call (cheap, holistic) or one call per turn (N× cost, finer
+    grained — writes one BenchmarkResult per turn AND a rolled-up
+    conversation-level row with averaged scores + worst verdict).
+  - **Turn-block grouping** — multi-turn conversations with tool calls
+    are grouped by user message position (one block = user turn +
+    assistant tool_call + tool result + follow-up text), so the judge
+    scores each user turn as a unit, not split per assistant message.
+  - **Strict judge prompt** — forces per-axis fault enumeration before
+    scoring with explicit calibration anchors, with retry on malformed
+    JSON (configurable up to 10 attempts, temperature bumped per retry).
+  - **Parallel item processing** — semaphore-bounded gather; default 4
+    concurrent items per run, configurable via slider.
+  - **Resumable runs** — restart can be "fresh" (wipe all
+    BenchmarkResult rows) or "resume" (keep them, skip the rowIdx
+    values already judged). After a worker crash, click Resume to pick
+    up from the last persisted row.
+  - **Background queue worker** — benchmark runs are claimed by a
+    dedicated consumer pool inside the `synthgen-worker` container via
+    `SELECT … FOR UPDATE SKIP LOCKED`, so api restarts no longer kill
+    in-flight runs.
+  - **Multi-tab live preview** — tile row of in-flight items
+    (concurrent, color-coded by verdict); click any tile to focus its
+    streaming candidate + judge panes. Judge output streams token-by-
+    token (the full JSON output including scores), candidate is replayed
+    full-turn-at-a-time (no model re-invocation in judge-only mode).
+  - **Calibration set + drift detector** — flag conversations with
+    `isCalibration=true` and human-rated `calibrationExpected` scores.
+    Every benchmark run re-judges them up front and flags the run if
+    the judge's scores drift from baseline beyond a threshold.
+    Surfaced as a green/red banner on the run page so reviewers know
+    whether to trust the rankings.
+  - **Export top-K% to labeling platform** — once a run completes,
+    stratified-sample the best conversations (by composite axis score,
+    grouped by split × persona × taxonomy, deduped via `dedupHash`) and
+    push them as a `human_mos` project on a labeling platform for human
+    spot-check. Labeling platform connection (base URL + bearer token)
+    is configured once per project under Settings, encrypted at rest
+    with the same AES-256-GCM helper as provider credentials. Includes
+    a Test-connection button against the platform's `/api/auth/me`
+    endpoint, and Save is gated on a passing test so wrong credentials
+    don't get persisted.
 - **Project-scoped RBAC** — `OWNER / EDITOR / ANNOTATOR / VIEWER` per project, on top
   of the existing global Auth.js permissions.
 - **AI-assist on every complex form** — Persona, LanguageProfile, PromptTemplate,
@@ -151,8 +210,9 @@ Two processes share Postgres as the integration bus:
  │  - trace timeline  │        │  - KnowledgeBase     │        │              │
  └────────────────────┘        └──────────────────────┘        └──────────────┘
                                        ▲
-                                       │ NOTIFY synthgen_run (job done)
-                                       │ NOTIFY synthgen_job  (per-token live stream)
+                                       │ NOTIFY synthgen_run        (job done)
+                                       │ NOTIFY synthgen_job        (per-token live stream)
+                                       │ NOTIFY synthgen_benchmark  (per-item + per-turn benchmark stream)
 ```
 
 The Python service exposes only **internal endpoints** that Next.js calls
@@ -179,6 +239,14 @@ src/                   Next.js app (TS)
         runs/          Run wizard, list, detail (SSE counts + live job tokens)
         conversations/ Generated conversations + per-axis verdicts + trace tab
         datasets/      Datasets / versions / OpenAI JSONL export
+        bootstrap/     One-prompt project generator + live streaming progress
+        benchmarks/    Chat-replay benchmarks: rubric-scored runs, judge-only
+                       evaluation, per-turn vs one-shot, parallel items,
+                       resumable / cancellable, live multi-tab preview,
+                       calibration drift detection, top-K% export to a
+                       labeling platform for human spot-check
+        rubrics/       Per-axis rubrics (name, key, scale, description,
+                       example anchors) consumed by benchmark judges
   app/api/             SSE + JSON APIs Next.js calls
     projects/[id]/
       ai-assist/                        Single endpoint, kind = persona /
@@ -192,6 +260,15 @@ src/                   Next.js app (TS)
                                         results in KnowledgeCrawl
       runs/[runId]/stream/              SSE run snapshot
       runs/[runId]/jobs/[id]/stream/    LISTEN synthgen_job → per-token SSE
+      benchmarks/[bid]/runs/[rid]/
+        stream/                         LISTEN synthgen_benchmark → per-item +
+                                        per-turn SSE for the Live Benchmark
+                                        Preview (item.start/done/error,
+                                        candidate.replay, judge.start/delta,
+                                        run.done). Terminal runs replay from
+                                        the in-memory cache OR rebuild from
+                                        BenchmarkResult rows when the cache
+                                        has been evicted.
       conversations/[id]/               GET conversation + messages + reasoning
       conversations/[id]/trace/         Full provenance JSON (events + run +
                                         template body + persona + lp + provider
@@ -206,6 +283,10 @@ src/                   Next.js app (TS)
     crypto.ts          AES-256-GCM matching the Python wire format
     audit.ts           Audit log helper
     synthgen-api.ts    Thin client for the Python service (incl. ai-assist kinds)
+    bootstrap-bus.ts   Process-wide in-memory bus for bootstrap streaming
+    job-event-cache.ts Process-wide LISTEN client for synthgen_job events —
+                       buffers per-jobId so SSE refresh replays the stream
+    benchmark-event-cache.ts  Same pattern for synthgen_benchmark events
 worker/                Python service
   synthgen/
     presets.py         Manglish particles, Formal-Malay shortcuts, loanword allowlists
@@ -227,8 +308,27 @@ worker/                Python service
     ai_assist.py       Per-kind structured-output prompts + tolerant JSON
                        extractor + jsonschema-based tool-def example verifier
     api/main.py        FastAPI internal endpoints (incl. NDJSON streaming
-                       /internal/ai-assist/stream + /internal/random-prompt/stream)
-    jobworker/main.py  Job poller (SELECT ... FOR UPDATE SKIP LOCKED)
+                       /internal/ai-assist/stream + /internal/random-prompt/stream).
+                       Also tracks _running_tasks per jobId so cancel
+                       endpoints actually abort in-flight LLM HTTP calls
+                       via task.cancel() — not just flip the DB row.
+    jobworker/main.py  Job poller (SELECT ... FOR UPDATE SKIP LOCKED) +
+                       benchmark-run consumer pool that claims queued
+                       BenchmarkRun rows the same way. Separate consumer
+                       count (BENCHMARK_WORKER_CONCURRENCY, default 2).
+    benchmarks/
+      runner.py        execute_benchmark_run dispatcher (function-call
+                       + chat-replay)
+      chat_replay.py   Chat-replay benchmark engine: turn-block grouping,
+                       per-turn vs one-shot judging, parallel item
+                       dispatch via semaphore-bounded gather, incremental
+                       metrics rollup after every item, calibration set
+                       re-judge at run start with drift detection
+      judge.py         Strict judge prompt (per-axis fault enumeration,
+                       calibration anchors), call_judge_streaming with
+                       retry-on-malformed-JSON (configurable up to 10
+                       attempts, temperature bumped per retry)
+      scoring.py       Function-call rubric scoring helpers
     crypto.py          AES-256-GCM matching the TS wire format
   tests/               smoke_e2e.py + smoke_export.py + stub_openai.py
 storage/exports/       Built export artifacts (local FS in slice 1)
@@ -459,6 +559,102 @@ enough for the typical KB size (hundreds of entries). The retrieval seam is
 isolated; swap in semantic search later without changing the template / worker
 contract.
 
+## Benchmarks — self-evaluation pipeline
+
+`/projects/[id]/benchmarks` lets you score generated conversations against a
+per-axis rubric using LLM-as-judge, then pick the best ones for human review.
+
+**Flow:**
+
+1. **Create a benchmark** (`/benchmarks/new`) — pick a source `GenerationRun`
+   or filter (persona × taxonomy × language), sample size, default rubric.
+   The conversation list is frozen at create time as
+   `Benchmark.frozenConversationIds` so subsequent runs evaluate the same
+   items even if the source run is later mutated.
+
+2. **Start a run** — pick the judge provider + model, judge sampling
+   (temperature / max_tokens / strategy: one-shot vs per-turn), the replay
+   mode (single-turn / multi-turn), parallel item count (default 4), and
+   retry count for malformed judge JSON (default 3).
+
+3. **Worker grades each conversation**. In **judge-only mode** (default,
+   recommended), the worker takes the EXISTING reference assistant turns
+   from each conversation and feeds them to the judge — no candidate model
+   is re-invoked. The judge sees the conversation context + the assistant's
+   response and grades each axis with a hardcoded **per-axis fault
+   enumeration** step (the judge MUST list one fault per axis or explain
+   why none exists before scoring), with explicit calibration anchors
+   ("top = no improvement I'd make", "top-1 = one minor polish", etc.).
+
+4. **Turn-block grouping** — multi-turn conversations with tool calls are
+   grouped by user-message position. One block = `[user]` + everything
+   between it and the next `[user]` (so `tool_call` assistant message +
+   `tool` result + follow-up `assistant` text are all ONE turn block). The
+   per-turn judge scores each block once, instead of treating each
+   assistant message as a separate turn (which would slip the pairing
+   every time the assistant uses a tool).
+
+5. **Multi-tab live preview** — the run page subscribes to
+   `synthgen_benchmark` pg_notify events and renders a tile row of active
+   items (color-coded green/amber/red by verdict as they complete). Click
+   any tile to focus its candidate (assistant turns being scored) + judge
+   (streaming JSON output with scores) panes. Per-turn mode renders one
+   row per turn so turn 1 candidate aligns with turn 1 rationale, etc.
+
+6. **Resumable** — Restart has two modes:
+   - **Fresh** wipes every `BenchmarkResult` row and re-judges from scratch.
+   - **Resume** keeps the existing rows and only judges items whose
+     `rowIdx` isn't already in `BenchmarkResult` for this run. Use after
+     a crash, a manual cancel, or a worker container reload — the next
+     run picks up exactly where it stopped.
+
+7. **Background queue** — benchmark runs are NOT executed in the api
+   process anymore. The `synthgen-worker` container runs a dedicated
+   consumer pool (default 2 simultaneous runs) that claims
+   `BenchmarkRun` rows in `status='queued'` via `SELECT ... FOR UPDATE
+   SKIP LOCKED`. Survives uvicorn reloads, multi-container scale-out
+   without double-claim.
+
+8. **Calibration set + drift detector** — flag conversations with
+   `isCalibration=true` and hand-rated `calibrationExpected` per-axis
+   scores. Every chat-replay run re-judges these at start, compares
+   actual scores to baseline, and sets `BenchmarkRun.calibrationReport`
+   with `{ items, maxDelta, meanDelta, driftFlagged, threshold }`. The
+   run page shows a green or red banner so reviewers know whether to
+   trust the rankings.
+
+9. **Top-K% export to labeling platform** — once a run completes, click
+   "Export top % to labeling" on the run page header. The selector:
+   - filters out `verdict='fail'` rows;
+   - keeps anything with all axes ≥ `minAxisScore` (slider 1–5);
+   - groups by `(split × personaId × taxonomyNodeId)` cells;
+   - dedupes via `Conversation.dedupHash`;
+   - round-robin picks the best from each cell until target count
+     (`ceil(passing * percent)`) is reached;
+   - creates a `human_mos` project on the labeling platform, configures
+     its MOS axes from the rubric, uploads picks as tasks (batched 100
+     at a time);
+   - the labeling platform connection (base URL + bearer token) is
+     stored once per project under Settings → Labeling platform,
+     encrypted with the same AES-256-GCM helper as provider
+     credentials. A **Test connection** button hits the platform's
+     `/api/auth/me` endpoint to verify before save; Save is gated on
+     a passing test.
+
+**Why a Tier-1 / Tier-2 / Tier-3 split for 100k-scale curation:**
+
+The benchmark engine is designed to be Tier 2 in a three-tier filter:
+
+| Tier | Filter | Cost | Throughput |
+|---|---|---|---|
+| 1 | Deterministic validators (lang-id, register, schema, ngram) | $0 | ~instant |
+| 2 | LLM-as-judge with strict per-axis prompt (this) | $0.001–0.01/item | ~30 items/min/worker |
+| 3 | Multi-judge consensus or stronger model on the top % | $0.05–0.20/item | bounded by selection |
+
+100k generations → Tier 1 kills ~30-50% → Tier 2 ranks the ~50k
+survivors → Tier 3 (separate run with a stronger judge model) or
+human-MOS export validates the top 1%.
+
 ## AI-assist — structured-output dialog on every complex form
 
 Every form whose schema has more than a couple of fields (Persona, LanguageProfile,
@@ -620,7 +816,8 @@ Both expect a smoke project named `smoke-proj-001` (created by the first run).
 | `SYNTHGEN_INTERNAL_TOKEN` | (required) | Shared secret for service-to-service calls |
 | `EXPORTS_DIR` | `./storage/exports` | Where built export files land |
 | `WORKER_POLL_INTERVAL_SECONDS` | `2` | Idle poll interval for the job worker |
-| `WORKER_CONCURRENCY` | `4` | Number of in-process consumer coroutines |
+| `WORKER_CONCURRENCY` | `4` | Number of in-process generation-job consumer coroutines |
+| `BENCHMARK_WORKER_CONCURRENCY` | `2` | Number of in-process benchmark-run consumer coroutines (each run handles its own item-level parallelism via samplingParams.concurrency) |
 
 ## Roadmap
 
@@ -668,6 +865,42 @@ Both expect a smoke project named `smoke-proj-001` (created by the first run).
 - No-toast policy throughout — every transient notification is inline UI
   (status banner, button flash, destructive panel) so nothing disappears
   before the user reads it
+- **One-prompt project bootstrap** — taxonomy → languages → personas →
+  templates → tools → flows → rubrics → benchmarks, all from a single
+  free-text prompt, streaming live; resumable via `currentPhaseBuffer`;
+  body-shape heuristic + user-seed-as-instructions so templates don't
+  leak into user turns
+- **Benchmarks with judge-only scoring** — chat-replay benchmarks score
+  reference conversations against a per-axis rubric; one-shot vs
+  per-turn judge strategy; strict judge prompt with per-axis fault
+  enumeration + calibration anchors + retry-on-malformed-JSON
+- **Turn-block grouping** in multi-turn benchmarks so tool-call +
+  follow-up text are scored as one logical turn, not as separate
+  pair-mismatched messages
+- **Parallel item processing** within a benchmark run (semaphore-bounded
+  gather, configurable concurrency 1-16)
+- **Resumable benchmark runs** — Restart distinguishes "fresh" (wipe
+  results) from "resume" (keep them, skip already-judged rowIdx values)
+- **Background benchmark queue** — dedicated consumer pool in the
+  worker container claims `BenchmarkRun` rows via SKIP LOCKED;
+  survives api/worker restarts
+- **Real cancellation** — `_running_tasks` registry on the api lets
+  cancel routes call `asyncio.Task.cancel()` to abort in-flight
+  `httpx.AsyncClient.stream()` calls at the network layer, instead of
+  letting the model run to completion after the DB row is already
+  marked cancelled
+- **Multi-tab live benchmark preview** — tiles for in-flight items,
+  click to focus, streaming candidate + judge panes per turn,
+  calibration drift banner on the run page
+- **Calibration set + drift detector** — flag conversations as
+  baseline with `isCalibration=true` + `calibrationExpected` scores;
+  every benchmark run re-judges them at start and flags the run if the
+  judge drifts beyond a threshold
+- **Top-K% export to labeling platform** — stratified-sample best
+  conversations (split × persona × taxonomy) and push as a `human_mos`
+  project on a labeling platform for human spot-check; platform
+  credentials stored encrypted per-project under Settings with a
+  Test-connection button gating Save
 
 **Next slice**
 - **Worker walks Flow graphs** — pick a path through the published flow, generate
@@ -679,9 +912,10 @@ Both expect a smoke project named `smoke-proj-001` (created by the first run).
 - **More locale seeds** — out-of-the-box `LanguageProfile` presets for FR-FR
   formal/casual, DE-DE Sie/du, ES-ES tú/usted/voseo, IT-IT lei/tu, plus the
   associated lang-ID extension and per-language function-word stoplists.
-- **Judge-LLM validators** — per-axis rubrics (correctness, naturalness, language
-  fidelity, code-switch realism, tool-arg validity), sampled (e.g. 10%) to keep cost
-  bounded, calibrated against a human-rated gold set.
+- **Judge-LLM ensemble** — second-pass strong judge (Claude / GPT-4) on
+  the top % from the Tier-2 ranking, with multi-judge consensus and
+  disagreement flagging for human review. Current single-judge pipeline
+  already ships (see "Benchmarks" section).
 - **Annotation UI** at `/projects/[id]/annotate` — accept / reject / edit feeds
   rejected samples into DPO/KTO preference pairs.
 - **Embedding-based KB retrieval** (pgvector) — swap the tag-based knowledge

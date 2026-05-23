@@ -48,7 +48,11 @@ export function ExportToLabelingDialog({
   const [pending, start] = useTransition();
   const [labelingProjectName, setLabelingProjectName] = useState("");
   const [percent, setPercent] = useState(1); // 1%
-  const [minAxisScore, setMinAxisScore] = useState(4);
+  // Default floor of 3 (not 4) — with the strict judge prompt, very
+  // few responses get straight 5s, so 4 was filtering out almost
+  // everything. 3 is a more workable starting point; users can crank
+  // it higher with the slider.
+  const [minAxisScore, setMinAxisScore] = useState(3);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<{
     labelingProjectUrl: string;
@@ -118,6 +122,24 @@ export function ExportToLabelingDialog({
           </DialogDescription>
         </DialogHeader>
 
+        {/* Destination URL — always visible (form view AND result view)
+            so the user knows where data went / is going to. */}
+        {labelingBaseUrl && (
+          <div className="rounded-md border border-border bg-muted/30 px-2 py-1.5 text-[11px]">
+            <span className="text-muted-foreground">Destination: </span>
+            <a
+              href={labelingBaseUrl.replace(/\/$/, "")}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 font-mono hover:underline"
+              title={labelingBaseUrl}
+            >
+              {labelingBaseUrl.replace(/\/$/, "")}
+              <ExternalLink className="h-3 w-3" />
+            </a>
+          </div>
+        )}
+
         {result ? (
           <div className="space-y-3">
             <p className="rounded-md border border-emerald-500/40 bg-emerald-500/5 px-2 py-1.5 text-xs text-emerald-700 dark:text-emerald-300">
@@ -148,27 +170,6 @@ export function ExportToLabelingDialog({
           </div>
         ) : (
           <form onSubmit={onSubmit} className="space-y-3">
-            {/* Read-only confirmation of the destination, pulled from
-                Settings. Saves the user from accidentally sending data
-                to the wrong platform. */}
-            <div className="rounded-md border border-border bg-muted/30 px-2 py-1.5 text-[11px]">
-              <span className="text-muted-foreground">Destination: </span>
-              {labelingBaseUrl ? (
-                <a
-                  href={labelingBaseUrl.replace(/\/$/, "")}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex items-center gap-1 font-mono hover:underline"
-                  title={labelingBaseUrl}
-                >
-                  {labelingBaseUrl.replace(/\/$/, "")}
-                  <ExternalLink className="h-3 w-3" />
-                </a>
-              ) : (
-                <span className="italic text-muted-foreground">(not configured)</span>
-              )}
-            </div>
-
             <div className="space-y-1.5">
               <Label htmlFor="lp-name">Labeling project name (optional)</Label>
               <Input

@@ -514,11 +514,17 @@ export async function exportToLabelingPlatform(
     return { error: "Run's rubric has no axes — nothing to map to MOS." };
   }
 
-  // 1+2: filter to passing rows above the per-axis floor + composite score.
+  // Filter + score. We DELIBERATELY don't filter by judgeVerdict —
+  // with the strict judge prompt very few rows actually earn "pass"
+  // (most land on "warn" since the prompt awards "pass" only when
+  // every axis is in the top 20%). The axis floor is the real quality
+  // gate; verdict is just a coarse summary the user can ignore for
+  // export purposes.
   type Candidate = {
     conversationId: string;
     score: number;
     minAxis: number;
+    verdict: string;
     split: string;
     candidateMessages: unknown;
     judgeRationale: string;
@@ -526,7 +532,6 @@ export async function exportToLabelingPlatform(
   const candidates: Candidate[] = [];
   for (const r of results) {
     if (!r.conversationId) continue;
-    if (r.judgeVerdict !== "pass") continue;
     const scores = parseJsonbField<Record<string, number>>(r.judgeScores);
     if (!scores) continue;
     let sum = 0;
@@ -541,18 +546,59 @@ export async function exportToLabelingPlatform(
     }
     if (count === 0) continue;
     if (minAxis < parsed.data.minAxisScore) continue;
+    // We exclude verdict="fail" rows entirely — those are explicit
+    // model failures and shouldn't reach human review even at low
+    // floors.
+    if (r.judgeVerdict === "fail") continue;
     candidates.push({
       conversationId: r.conversationId,
       score: sum / count,
       minAxis,
+      verdict: r.judgeVerdict ?? "",
       split: r.split ?? "unknown",
       candidateMessages: r.candidateMessages,
       judgeRationale: r.judgeRationale ?? "",
     });
   }
   if (candidates.length === 0) {
+    // Help the user pick a workable floor: report the verdict breakdown
+    // and the actual axis-min distribution across rows.
+    const minDistribution = new Map<number, number>();
+    const verdictCounts: Record<string, number> = {};
+    let totalScored = 0;
+    for (const r of results) {
+      const v = r.judgeVerdict ?? "(none)";
+      verdictCounts[v] = (verdictCounts[v] ?? 0) + 1;
+      const scores = parseJsonbField<Record<string, number>>(r.judgeScores);
+      if (!scores) continue;
+      let m = Infinity;
+      for (const ax of rubricAxes) {
+        const val = scores[ax.key];
+        if (typeof val !== "number") continue;
+        if (val < m) m = val;
+      }
+      if (m !== Infinity) {
+        totalScored++;
+        // Round to 1 decimal so the histogram is readable
+        // (per-turn averaging produces fractional minAxis values).
+        const bucket = Math.round(m * 10) / 10;
+        minDistribution.set(bucket, (minDistribution.get(bucket) ?? 0) + 1);
+      }
+    }
+    const dist = Array.from(minDistribution.entries())
+      .sort(([a], [b]) => b - a)
+      .map(([score, n]) => `${score}: ${n}`)
+      .join(", ");
+    const verdictSummary = Object.entries(verdictCounts)
+      .map(([v, n]) => `${v}=${n}`)
+      .join(", ");
     return {
-      error: "No conversations passed the quality floor — relax minAxisScore or check the run.",
+      error:
+        `No conversations passed the floor (minAxisScore=${parsed.data.minAxisScore}). ` +
+        `Of ${results.length} rows: verdict { ${verdictSummary} }, ${totalScored} have scores. ` +
+        `Min-axis distribution (rounded): ${dist || "(none)"}. ` +
+        `Destination: ${labelingBaseUrl}. ` +
+        `Lower minAxisScore or improve the run.`,
     };
   }
 
