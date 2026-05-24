@@ -38,6 +38,10 @@ export interface ResultRow {
   tokensIn: number;
   tokensOut: number;
   costUsd: number | null;
+  // Multi-judge ensemble (Tier-3) result. Null until a "Re-judge with
+  // ensemble" pass has been run over this row.
+  ensembleResult: Record<string, unknown> | null;
+  ensembledAt: string | null;
 }
 
 interface RubricAxisLite {
@@ -610,6 +614,145 @@ function ResultDrilldown({
             })}
           </div>
         </Section>
+        );
+      })()}
+
+      {row.ensembleResult && (() => {
+        // Multi-judge ensemble result. Shape:
+        //   { judges: [{providerName, model, scores, verdict, rationale}],
+        //     medianScores, worstVerdict, maxDisagreement, threshold }
+        type EnsembleJudge = {
+          providerName?: string;
+          model?: string;
+          scores?: Record<string, number>;
+          verdict?: string;
+          rationale?: string;
+          tokensIn?: number;
+          tokensOut?: number;
+        };
+        type Ensemble = {
+          judges?: EnsembleJudge[];
+          medianScores?: Record<string, number>;
+          worstVerdict?: string;
+          maxDisagreement?: number;
+          threshold?: number;
+        };
+        const raw = row.ensembleResult as unknown;
+        let e: Ensemble | null = null;
+        if (typeof raw === "string") {
+          try {
+            const p = JSON.parse(raw);
+            if (p && typeof p === "object" && !Array.isArray(p)) e = p as Ensemble;
+          } catch {
+            e = null;
+          }
+        } else if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+          e = raw as Ensemble;
+        }
+        if (!e || !Array.isArray(e.judges) || e.judges.length === 0) return null;
+        const flagged =
+          typeof e.maxDisagreement === "number" &&
+          typeof e.threshold === "number" &&
+          e.maxDisagreement > e.threshold;
+        return (
+          <Section title="Multi-judge ensemble (Tier-3)" full>
+            <div className="space-y-2">
+              {/* Headline: consensus verdict + median + disagreement chip */}
+              <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                <Badge variant="outline">
+                  consensus: {e.worstVerdict ?? "—"}
+                </Badge>
+                <Badge
+                  variant="outline"
+                  className={
+                    flagged
+                      ? "border-destructive/50 text-destructive"
+                      : undefined
+                  }
+                  title={
+                    flagged
+                      ? `Spread > threshold (${e.threshold}). Judges disagree — review manually.`
+                      : "Spread ≤ threshold — judges agree."
+                  }
+                >
+                  Δ max: {(e.maxDisagreement ?? 0).toFixed(2)} / threshold{" "}
+                  {(e.threshold ?? 1).toFixed(2)}
+                </Badge>
+                <span className="text-muted-foreground">
+                  {e.judges.length} judge{e.judges.length === 1 ? "" : "s"}
+                </span>
+              </div>
+
+              {/* Median per-axis scores */}
+              {e.medianScores && Object.keys(e.medianScores).length > 0 && (
+                <div className="rounded border border-border bg-card p-2">
+                  <div className="mb-1 text-[10px] font-mono uppercase text-muted-foreground">
+                    median per-axis
+                  </div>
+                  <div className="flex flex-wrap gap-2 text-[11px]">
+                    {Object.entries(e.medianScores).map(([k, v]) => (
+                      <span
+                        key={k}
+                        className="rounded border border-border/60 bg-muted/40 px-1.5 py-0.5 font-mono"
+                      >
+                        {k}: {typeof v === "number" ? v.toFixed(2) : "—"}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Per-judge breakdown — borderless table, one row per judge */}
+              <table className="w-full border-collapse text-xs">
+                <thead>
+                  <tr className="text-left text-[10px] uppercase tracking-wide text-muted-foreground">
+                    <th className="w-1/4 py-1 pr-2">Judge</th>
+                    <th className="w-16 py-1 pr-2">Verdict</th>
+                    <th className="py-1">Rationale</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {e.judges.map((j, i) => (
+                    <tr key={i} className="align-top border-t border-border/30">
+                      <td className="py-1.5 pr-2">
+                        <div className="font-mono text-[11px]">
+                          {j.model ?? "—"}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground">
+                          via {j.providerName ?? "—"}
+                        </div>
+                        {j.scores && (
+                          <div className="mt-1 flex flex-wrap gap-1 text-[10px]">
+                            {Object.entries(j.scores).map(([k, v]) => (
+                              <span
+                                key={k}
+                                className="rounded bg-muted/40 px-1 font-mono"
+                              >
+                                {k}: {v}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-1.5 pr-2">
+                        <Badge
+                          variant={VERDICT_VARIANT[j.verdict ?? ""] ?? "outline"}
+                          className="text-[10px]"
+                        >
+                          {j.verdict ?? "—"}
+                        </Badge>
+                      </td>
+                      <td className="py-1.5">
+                        <p className="whitespace-pre-wrap text-[11px] italic">
+                          {j.rationale || "—"}
+                        </p>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Section>
         );
       })()}
 

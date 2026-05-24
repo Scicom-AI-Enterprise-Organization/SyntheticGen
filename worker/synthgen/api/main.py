@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 from .. import db
 from ..ai_assist import ai_assist, ai_assist_stream, random_prompt, random_prompt_stream
+from ..benchmarks.ensemble import execute_ensemble
 from ..benchmarks.runner import execute_benchmark_run
 from ..bootstrap import bootstrap_project_defaults
 from ..config import get_settings
@@ -271,6 +272,78 @@ async def start_benchmark_run(run_id: str, _=Depends(require_internal)):
             run_id,
         )
     return {"ok": True, "runId": run_id, "queued": True}
+
+
+class EnsembleJudgeSpec(BaseModel):
+    providerCredentialId: str
+    model: str
+
+
+class EnsembleFilterSpec(BaseModel):
+    verdict: str | None = None         # "pass" | "warn" | None
+    topPercent: float | None = None    # 0..1
+    minAxisScore: float | None = None  # axis floor
+    conversationIds: list[str] | None = None
+
+
+class EnsembleRequest(BaseModel):
+    judges: list[EnsembleJudgeSpec]
+    filter: EnsembleFilterSpec | None = None
+    threshold: float = 1.0
+    samplingParams: dict[str, Any] | None = None
+
+
+@app.post("/internal/benchmark-runs/{run_id}/ensemble")
+async def benchmark_ensemble(
+    run_id: str,
+    req: EnsembleRequest,
+    _=Depends(require_internal),
+):
+    """Run a multi-judge ensemble re-judge over a subset of a completed
+    benchmark run. Fire-and-forget: starts an asyncio task that writes
+    `BenchmarkResult.ensembleResult` rows in place. The api endpoint
+    returns immediately so the UI can poll for progress.
+    """
+    row = await db.fetch_one(
+        'SELECT status FROM "BenchmarkRun" WHERE id = $1',
+        run_id,
+    )
+    if not row:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"benchmark run {run_id} not found")
+    if row["status"] != "completed":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"ensemble requires status='completed' — current status is '{row['status']}'",
+        )
+    judges_spec = [
+        {"providerCredentialId": j.providerCredentialId, "model": j.model}
+        for j in req.judges
+    ]
+    filter_spec: dict[str, Any] = {}
+    if req.filter:
+        if req.filter.verdict:
+            filter_spec["verdict"] = req.filter.verdict
+        if req.filter.topPercent is not None:
+            filter_spec["topPercent"] = req.filter.topPercent
+        if req.filter.minAxisScore is not None:
+            filter_spec["minAxisScore"] = req.filter.minAxisScore
+        if req.filter.conversationIds is not None:
+            filter_spec["conversationIds"] = req.filter.conversationIds
+
+    async def _bg() -> None:
+        try:
+            await execute_ensemble(
+                run_id,
+                judges_spec=judges_spec,
+                filter_spec=filter_spec,
+                sampling=req.samplingParams or {},
+                threshold=req.threshold,
+            )
+        except Exception:  # noqa: BLE001
+            _job_log.exception("ensemble crashed for run %s", run_id)
+
+    asyncio.create_task(_bg())
+    return {"ok": True, "runId": run_id, "dispatched": True}
 
 
 @app.post("/internal/ai-assist")

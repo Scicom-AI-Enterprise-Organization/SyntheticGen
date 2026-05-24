@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { EnsembleJudgesCard } from "./ensemble-judges-card";
 
 export default async function BenchmarksPage({
   params,
@@ -20,18 +21,58 @@ export default async function BenchmarksPage({
   const { role } = await requireProjectPermission(projectId, "benchmarks.read");
   const canWrite = role ? projectRoleAllows(role, "benchmarks.write") : false;
 
-  const benchmarks = await prisma.benchmark.findMany({
-    where: { projectId },
-    orderBy: { createdAt: "desc" },
-    include: {
-      _count: { select: { runs: true } },
-      runs: {
-        orderBy: { createdAt: "desc" },
-        take: 1,
-        select: { status: true, model: true, createdAt: true, metrics: true },
+  const [benchmarks, project, providers] = await Promise.all([
+    prisma.benchmark.findMany({
+      where: { projectId },
+      orderBy: { createdAt: "desc" },
+      include: {
+        _count: { select: { runs: true } },
+        runs: {
+          orderBy: { createdAt: "desc" },
+          take: 1,
+          select: { status: true, model: true, createdAt: true, metrics: true },
+        },
       },
-    },
-  });
+    }),
+    prisma.project.findUnique({
+      where: { id: projectId },
+      select: { ensembleJudges: true },
+    }),
+    prisma.providerCredential.findMany({
+      where: { projectId },
+      orderBy: { name: "asc" },
+      select: { id: true, name: true, kind: true, defaultModel: true },
+    }),
+  ]);
+
+  // Parse saved ensemble judges, defensively — JSONB columns sometimes
+  // arrive as strings on legacy rows.
+  let initialJudges: Array<{ providerCredentialId: string; model: string }> = [];
+  const raw = project?.ensembleJudges as unknown;
+  const arr = typeof raw === "string"
+    ? (() => {
+        try {
+          return JSON.parse(raw);
+        } catch {
+          return null;
+        }
+      })()
+    : raw;
+  if (Array.isArray(arr)) {
+    for (const j of arr) {
+      if (
+        j &&
+        typeof j === "object" &&
+        typeof (j as Record<string, unknown>).providerCredentialId === "string" &&
+        typeof (j as Record<string, unknown>).model === "string"
+      ) {
+        initialJudges.push({
+          providerCredentialId: (j as { providerCredentialId: string }).providerCredentialId,
+          model: (j as { model: string }).model,
+        });
+      }
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -53,6 +94,20 @@ export default async function BenchmarksPage({
           </Button>
         )}
       </div>
+
+      {canWrite && (
+        <EnsembleJudgesCard
+          projectId={projectId}
+          providers={providers.map((p) => ({
+            id: p.id,
+            name: p.name,
+            kind: p.kind,
+            defaultModel: p.defaultModel,
+          }))}
+          initialJudges={initialJudges}
+          disabled={!canWrite}
+        />
+      )}
 
       <Card>
         <CardHeader>

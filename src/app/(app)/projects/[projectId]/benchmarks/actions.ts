@@ -818,6 +818,195 @@ export async function exportToLabelingPlatform(
   };
 }
 
+// ───── Project-level ensemble judges (shared across all benchmarks) ──────────
+
+const ensembleJudgesSchema = z.object({
+  projectId: z.string(),
+  judges: z
+    .array(
+      z.object({
+        providerCredentialId: z.string(),
+        model: z.string().min(1).max(120),
+      }),
+    )
+    .max(8),
+});
+
+// Save the project's ensemble judge list. Reused by every benchmark in
+// the project — configure once on the benchmarks list page, every
+// run's "Re-judge with ensemble" reads from this list. Empty array
+// disables the ensemble button across all runs.
+export async function setProjectEnsembleJudges(
+  input: z.infer<typeof ensembleJudgesSchema>,
+) {
+  const parsed = ensembleJudgesSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
+  const { user } = await requireProjectPermission(parsed.data.projectId, "benchmarks.write");
+
+  if (parsed.data.judges.length > 0) {
+    const providerIds = parsed.data.judges.map((j) => j.providerCredentialId);
+    const providers = await prisma.providerCredential.findMany({
+      where: { id: { in: providerIds }, projectId: parsed.data.projectId },
+      select: { id: true },
+    });
+    const validIds = new Set(providers.map((p) => p.id));
+    for (const j of parsed.data.judges) {
+      if (!validIds.has(j.providerCredentialId)) {
+        return { error: `Provider ${j.providerCredentialId} not in this project` };
+      }
+    }
+  }
+
+  await prisma.project.update({
+    where: { id: parsed.data.projectId },
+    data: {
+      ensembleJudges: parsed.data.judges as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  await logAudit({
+    projectId: parsed.data.projectId,
+    actorUserId: user.id,
+    action: "project.ensemble_judges.set",
+    targetKind: "Project",
+    targetId: parsed.data.projectId,
+    metadata: {
+      count: parsed.data.judges.length,
+      models: parsed.data.judges.map((j) => j.model),
+    },
+  });
+
+  revalidatePath(`/projects/${parsed.data.projectId}/benchmarks`);
+  return { ok: true };
+}
+
+// ───── Ensemble re-judge (Tier-3) ────────────────────────────────────────────
+
+const ensembleSchema = z.object({
+  projectId: z.string(),
+  runId: z.string(),
+  filter: z
+    .object({
+      verdict: z.enum(["pass", "warn"]).optional(),
+      topPercent: z.number().min(0.001).max(1).optional(),
+      minAxisScore: z.number().min(1).max(10).optional(),
+      conversationIds: z.array(z.string()).optional(),
+    })
+    .optional(),
+  threshold: z.number().min(0).max(5).default(1.0),
+});
+
+// Dispatch a multi-judge ensemble re-judge over a subset of a completed
+// benchmark run. The judges themselves are read from the parent
+// Benchmark.ensembleJudges so the same ensemble config applies across
+// every run of that benchmark — users configure it once on the
+// benchmark detail page, then any completed run can be ensembled with
+// just a filter + threshold. The Python api updates
+// `BenchmarkResult.ensembleResult` in place; returns immediately.
+export async function ensembleRejudge(input: z.infer<typeof ensembleSchema>) {
+  const parsed = ensembleSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
+  const { user } = await requireProjectPermission(parsed.data.projectId, "benchmarks.execute");
+
+  // Confirm run + ownership, then pull judges from the PROJECT (shared
+  // across every benchmark in the project — configured once on the
+  // benchmarks list page).
+  const run = await prisma.benchmarkRun.findFirst({
+    where: { id: parsed.data.runId, benchmark: { projectId: parsed.data.projectId } },
+    select: { id: true, status: true, benchmarkId: true },
+  });
+  if (!run) return { error: "Benchmark run not found" };
+  if (run.status !== "completed") {
+    return { error: `Run is ${run.status}; ensemble requires status='completed'.` };
+  }
+
+  const projectRow = await prisma.project.findUnique({
+    where: { id: parsed.data.projectId },
+    select: { ensembleJudges: true },
+  });
+  const rawJudges = projectRow?.ensembleJudges as unknown;
+  const judges: Array<{ providerCredentialId: string; model: string }> = [];
+  if (Array.isArray(rawJudges)) {
+    for (const j of rawJudges) {
+      if (
+        j &&
+        typeof j === "object" &&
+        typeof (j as Record<string, unknown>).providerCredentialId === "string" &&
+        typeof (j as Record<string, unknown>).model === "string"
+      ) {
+        judges.push({
+          providerCredentialId: (j as { providerCredentialId: string }).providerCredentialId,
+          model: (j as { model: string }).model,
+        });
+      }
+    }
+  }
+  if (judges.length < 2) {
+    return {
+      error:
+        "Configure at least 2 ensemble judges on the project first " +
+        "(Benchmarks page → Ensemble judges card).",
+    };
+  }
+
+  // Defence in depth: validate each judge's provider is still in-project.
+  const providers = await prisma.providerCredential.findMany({
+    where: {
+      id: { in: judges.map((j) => j.providerCredentialId) },
+      projectId: parsed.data.projectId,
+    },
+    select: { id: true },
+  });
+  const validIds = new Set(providers.map((p) => p.id));
+  for (const j of judges) {
+    if (!validIds.has(j.providerCredentialId)) {
+      return { error: `Saved judge provider ${j.providerCredentialId} is no longer in this project — re-configure on the benchmark page.` };
+    }
+  }
+
+  const apiUrl = process.env.SYNTHGEN_API_URL ?? "http://localhost:8000";
+  const internalToken = process.env.SYNTHGEN_INTERNAL_TOKEN ?? "";
+  const res = await fetch(
+    `${apiUrl}/internal/benchmark-runs/${parsed.data.runId}/ensemble`,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        "x-internal-token": internalToken,
+      },
+      body: JSON.stringify({
+        judges,
+        filter: parsed.data.filter ?? {},
+        threshold: parsed.data.threshold,
+      }),
+      cache: "no-store",
+    },
+  );
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    return { error: `Worker dispatch failed (HTTP ${res.status}): ${body.slice(0, 200)}` };
+  }
+
+  await logAudit({
+    projectId: parsed.data.projectId,
+    actorUserId: user.id,
+    action: "benchmark.run.ensemble",
+    targetKind: "BenchmarkRun",
+    targetId: parsed.data.runId,
+    metadata: {
+      judgeCount: judges.length,
+      judgeModels: judges.map((j) => j.model),
+      filter: parsed.data.filter ?? {},
+      threshold: parsed.data.threshold,
+    },
+  });
+
+  revalidatePath(
+    `/projects/${parsed.data.projectId}/benchmarks/${run.benchmarkId}/runs/${parsed.data.runId}`,
+  );
+  return { ok: true };
+}
+
 // ───── Cancel ────────────────────────────────────────────────────────────────
 
 export async function cancelBenchmarkRun(projectId: string, runId: string) {

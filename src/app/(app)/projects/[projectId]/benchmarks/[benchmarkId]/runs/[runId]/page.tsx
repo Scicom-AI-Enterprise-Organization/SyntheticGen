@@ -16,6 +16,7 @@ import { ResultsTable, type ResultRow } from "./results-table";
 import { RestartBenchmarkRunButton } from "./restart-button";
 import { LiveBenchmarkPreview } from "./live-benchmark-preview";
 import { ExportToLabelingDialog } from "./export-to-labeling-dialog";
+import { EnsembleDialog } from "./ensemble-dialog";
 import { projectRoleAllows } from "@/lib/project-rbac";
 
 export default async function BenchmarkRunPage({
@@ -33,10 +34,60 @@ export default async function BenchmarkRunPage({
   // boolean "is one configured".
   const projectMeta = await prisma.project.findUnique({
     where: { id: projectId },
-    select: { labelingBaseUrl: true, labelingApiKeyEnc: true },
+    select: {
+      labelingBaseUrl: true,
+      labelingApiKeyEnc: true,
+      ensembleJudges: true,
+    },
   });
   const labelingBaseUrl = projectMeta?.labelingBaseUrl ?? null;
   const hasLabelingApiKey = !!projectMeta?.labelingApiKeyEnc;
+
+  // Resolve the project's saved ensemble judges into a list of
+  // {providerCredentialId, providerName, providerKind, model}. The
+  // dialog renders them read-only — actual configuration happens on
+  // the Benchmarks list page.
+  type EnsembleJudgeSpec = { providerCredentialId: string; model: string };
+  const rawJudges = projectMeta?.ensembleJudges as unknown;
+  const judgeSpecs: EnsembleJudgeSpec[] = [];
+  const arr = typeof rawJudges === "string"
+    ? (() => {
+        try { return JSON.parse(rawJudges); } catch { return null; }
+      })()
+    : rawJudges;
+  if (Array.isArray(arr)) {
+    for (const j of arr) {
+      if (
+        j &&
+        typeof j === "object" &&
+        typeof (j as Record<string, unknown>).providerCredentialId === "string" &&
+        typeof (j as Record<string, unknown>).model === "string"
+      ) {
+        judgeSpecs.push({
+          providerCredentialId: (j as { providerCredentialId: string }).providerCredentialId,
+          model: (j as { model: string }).model,
+        });
+      }
+    }
+  }
+  const judgeProviders = judgeSpecs.length > 0
+    ? await prisma.providerCredential.findMany({
+        where: { id: { in: judgeSpecs.map((j) => j.providerCredentialId) } },
+        select: { id: true, name: true, kind: true },
+      })
+    : [];
+  const providerById = new Map(judgeProviders.map((p) => [p.id, p]));
+  const ensembleJudges = judgeSpecs
+    .filter((j) => providerById.has(j.providerCredentialId))
+    .map((j) => {
+      const p = providerById.get(j.providerCredentialId)!;
+      return {
+        providerCredentialId: j.providerCredentialId,
+        providerName: p.name,
+        providerKind: p.kind,
+        model: j.model,
+      };
+    });
 
   const run = await prisma.benchmarkRun.findFirst({
     where: { id: runId, benchmarkId },
@@ -87,6 +138,8 @@ export default async function BenchmarkRunPage({
     tokensIn: Number(r.tokensIn),
     tokensOut: Number(r.tokensOut),
     costUsd: r.costUsd ? Number(r.costUsd) : null,
+    ensembleResult: (r.ensembleResult as Record<string, unknown> | null) ?? null,
+    ensembledAt: r.ensembledAt ? r.ensembledAt.toISOString() : null,
   }));
 
   return (
@@ -139,6 +192,13 @@ export default async function BenchmarkRunPage({
             )}
           </h1>
           <div className="flex shrink-0 items-center gap-2">
+            {canRestart && run.status === "completed" && (
+              <EnsembleDialog
+                projectId={projectId}
+                runId={run.id}
+                judges={ensembleJudges}
+              />
+            )}
             {canRestart && run.status === "completed" && (
               <ExportToLabelingDialog
                 projectId={projectId}

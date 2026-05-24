@@ -158,6 +158,13 @@ model Project {
   // the same AES-256-GCM helper as provider credentials.
   labelingBaseUrl     String?
   labelingApiKeyEnc   Bytes?
+  // Multi-judge ensemble (Tier-3) config — applies to every "Re-judge
+  // with ensemble" pass on benchmark runs in this project. Shape:
+  //   [{ providerCredentialId, model }, ...]
+  // Configured once on the benchmarks list page; reused across every
+  // benchmark in the project. The ensemble button on a run page is
+  // disabled until at least 2 judges are saved here.
+  ensembleJudges      Json    @default("[]")
   archivedAt       DateTime?
   createdById      String
   createdAt        DateTime  @default(now())
@@ -1117,6 +1124,28 @@ model BenchmarkResult {
   tokensOut BigInt   @default(0)
   costUsd   Decimal? @db.Decimal(12, 6)
 
+  // ── Multi-judge ensemble re-judge (Tier-3) ───────────────────────────────
+  // Populated when an "ensemble re-judge" pass runs over a subset of a
+  // completed run (typically the top-K% or a verdict filter). Each entry in
+  // ensembleResult.judges has the same per-axis scores + verdict + rationale
+  // as a single-judge call; the row's medianScores / worstVerdict /
+  // maxDisagreement are the consensus across them.
+  //
+  // Shape:
+  //   {
+  //     judges: [
+  //       { providerCredentialId, providerName, model, scores: {axis:n},
+  //         verdict, rationale, tokensIn, tokensOut, costUsd, latencyMs }
+  //     ],
+  //     medianScores: { axis: n },
+  //     worstVerdict: "pass" | "warn" | "fail",
+  //     maxDisagreement: number,   // max axis-spread across judges
+  //     threshold: number,         // disagreement threshold at re-judge time
+  //     ensembledAt: ISO datetime
+  //   }
+  ensembleResult Json?
+  ensembledAt    DateTime?
+
   createdAt DateTime @default(now())
 
   run BenchmarkRun @relation(fields: [runId], references: [id], onDelete: Cascade)
@@ -1125,6 +1154,7 @@ model BenchmarkResult {
   @@index([runId, funcMatch])
   @@index([runId, kind])
   @@index([runId, judgeVerdict])
+  @@index([runId, ensembledAt])
 }
 
 // ---------------------------------------------------------------------------
