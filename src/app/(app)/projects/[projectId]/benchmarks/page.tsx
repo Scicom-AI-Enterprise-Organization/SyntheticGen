@@ -10,7 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { EnsembleJudgesCard } from "./ensemble-judges-card";
+import { EnsembleGroupsCard } from "./ensemble-groups-card";
 
 export default async function BenchmarksPage({
   params,
@@ -21,7 +21,7 @@ export default async function BenchmarksPage({
   const { role } = await requireProjectPermission(projectId, "benchmarks.read");
   const canWrite = role ? projectRoleAllows(role, "benchmarks.write") : false;
 
-  const [benchmarks, project, providers] = await Promise.all([
+  const [benchmarks, ensembleGroupsRaw, providers] = await Promise.all([
     prisma.benchmark.findMany({
       where: { projectId },
       orderBy: { createdAt: "desc" },
@@ -34,9 +34,15 @@ export default async function BenchmarksPage({
         },
       },
     }),
-    prisma.project.findUnique({
-      where: { id: projectId },
-      select: { ensembleJudges: true },
+    prisma.ensembleJudgeGroup.findMany({
+      where: { projectId },
+      orderBy: { createdAt: "asc" },
+      select: {
+        id: true,
+        name: true,
+        description: true,
+        judges: true,
+      },
     }),
     prisma.providerCredential.findMany({
       where: { projectId },
@@ -45,34 +51,38 @@ export default async function BenchmarksPage({
     }),
   ]);
 
-  // Parse saved ensemble judges, defensively — JSONB columns sometimes
-  // arrive as strings on legacy rows.
-  let initialJudges: Array<{ providerCredentialId: string; model: string }> = [];
-  const raw = project?.ensembleJudges as unknown;
-  const arr = typeof raw === "string"
-    ? (() => {
-        try {
-          return JSON.parse(raw);
-        } catch {
-          return null;
+  // Coerce each group's judges JSONB into a typed array — JSONB
+  // columns are sometimes strings on legacy rows.
+  const ensembleGroups = ensembleGroupsRaw.map((g) => {
+    const raw = g.judges as unknown;
+    const arr = typeof raw === "string"
+      ? (() => {
+          try { return JSON.parse(raw); } catch { return null; }
+        })()
+      : raw;
+    const judges: Array<{ providerCredentialId: string; model: string }> = [];
+    if (Array.isArray(arr)) {
+      for (const j of arr) {
+        if (
+          j &&
+          typeof j === "object" &&
+          typeof (j as Record<string, unknown>).providerCredentialId === "string" &&
+          typeof (j as Record<string, unknown>).model === "string"
+        ) {
+          judges.push({
+            providerCredentialId: (j as { providerCredentialId: string }).providerCredentialId,
+            model: (j as { model: string }).model,
+          });
         }
-      })()
-    : raw;
-  if (Array.isArray(arr)) {
-    for (const j of arr) {
-      if (
-        j &&
-        typeof j === "object" &&
-        typeof (j as Record<string, unknown>).providerCredentialId === "string" &&
-        typeof (j as Record<string, unknown>).model === "string"
-      ) {
-        initialJudges.push({
-          providerCredentialId: (j as { providerCredentialId: string }).providerCredentialId,
-          model: (j as { model: string }).model,
-        });
       }
     }
-  }
+    return {
+      id: g.id,
+      name: g.name,
+      description: g.description,
+      judges,
+    };
+  });
 
   return (
     <div className="space-y-6">
@@ -96,7 +106,7 @@ export default async function BenchmarksPage({
       </div>
 
       {canWrite && (
-        <EnsembleJudgesCard
+        <EnsembleGroupsCard
           projectId={projectId}
           providers={providers.map((p) => ({
             id: p.id,
@@ -104,7 +114,7 @@ export default async function BenchmarksPage({
             kind: p.kind,
             defaultModel: p.defaultModel,
           }))}
-          initialJudges={initialJudges}
+          initialGroups={ensembleGroups}
           disabled={!canWrite}
         />
       )}

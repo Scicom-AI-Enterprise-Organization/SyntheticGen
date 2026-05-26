@@ -56,6 +56,8 @@ async def _load_chat_replay_run(run_id: str) -> dict[str, Any] | None:
         SELECT br.id, br."benchmarkId", br."providerCredentialId" AS candidate_provider_id,
                br.model AS candidate_model, br.status, br.mode,
                br."judgeProviderCredentialId" AS judge_provider_id, br."judgeModel" AS judge_model,
+               br."ensembleGroupId" AS ensemble_group_id,
+               br."consensusMethod" AS consensus_method,
                br."rubricId" AS rubric_id, br."samplingParams" AS sampling_params,
                b.kind AS benchmark_kind, b."frozenConversationIds" AS frozen_ids,
                b.config AS benchmark_config, b."projectId" AS project_id,
@@ -72,21 +74,84 @@ async def _load_chat_replay_run(run_id: str) -> dict[str, Any] | None:
     if not row:
         return None
     out = dict(row)
-    if out["judge_provider_id"]:
+    # Build the list of judges this run scores against. Preference:
+    #   1. ensembleGroupId set → fetch the group's judges JSON and hydrate
+    #      each one with provider auth.
+    #   2. Otherwise (legacy rows) → synthesise a single-judge list from
+    #      judgeProviderCredentialId + judgeModel.
+    # A group of 1 judge collapses to the old single-judge behaviour
+    # — same code path, no special-casing.
+    judges: list[dict[str, Any]] = []
+    if out.get("ensemble_group_id"):
+        grow = await db.fetch_one(
+            'SELECT name, judges FROM "EnsembleJudgeGroup" WHERE id = $1',
+            out["ensemble_group_id"],
+        )
+        if grow:
+            out["ensemble_group_name"] = grow["name"]
+            raw = _parse_jsonb(grow["judges"]) or []
+            if isinstance(raw, list):
+                for j in raw:
+                    if not isinstance(j, dict):
+                        continue
+                    pid = j.get("providerCredentialId")
+                    model = j.get("model")
+                    if not pid or not model:
+                        continue
+                    jrow = await db.fetch_one(
+                        """
+                        SELECT name, kind, "baseUrl", "encryptedApiKey", headers,
+                               "reasoningEffort", "chatTemplateKwargs"
+                        FROM "ProviderCredential"
+                        WHERE id = $1
+                        """,
+                        pid,
+                    )
+                    if not jrow:
+                        continue
+                    judges.append({
+                        "provider_id": pid,
+                        "provider_name": jrow["name"],
+                        "provider_kind": jrow["kind"],
+                        "base_url": jrow["baseUrl"],
+                        "key": jrow["encryptedApiKey"],
+                        "model": model,
+                        "headers": jrow["headers"],
+                        "reasoning": jrow["reasoningEffort"],
+                        "chat_template": jrow["chatTemplateKwargs"],
+                    })
+    if not judges and out.get("judge_provider_id"):
         jrow = await db.fetch_one(
             """
-            SELECT "baseUrl", "encryptedApiKey", headers, "reasoningEffort", "chatTemplateKwargs"
+            SELECT name, kind, "baseUrl", "encryptedApiKey", headers,
+                   "reasoningEffort", "chatTemplateKwargs"
             FROM "ProviderCredential"
             WHERE id = $1
             """,
             out["judge_provider_id"],
         )
         if jrow:
+            judges.append({
+                "provider_id": out["judge_provider_id"],
+                "provider_name": jrow["name"],
+                "provider_kind": jrow["kind"],
+                "base_url": jrow["baseUrl"],
+                "key": jrow["encryptedApiKey"],
+                "model": out["judge_model"],
+                "headers": jrow["headers"],
+                "reasoning": jrow["reasoningEffort"],
+                "chat_template": jrow["chatTemplateKwargs"],
+            })
+            # Also keep the flat fields populated for legacy code paths
+            # (calibration uses them).
             out["judge_base_url"] = jrow["baseUrl"]
             out["judge_key"] = jrow["encryptedApiKey"]
             out["judge_headers"] = jrow["headers"]
             out["judge_reasoning"] = jrow["reasoningEffort"]
             out["judge_chat_template"] = jrow["chatTemplateKwargs"]
+    out["judges"] = judges
+    if not out.get("consensus_method"):
+        out["consensus_method"] = "median"
     if out["rubric_id"]:
         rrow = await db.fetch_one(
             'SELECT name, axes FROM "Rubric" WHERE id = $1',
@@ -593,14 +658,20 @@ async def execute_chat_replay_run(run_id: str) -> None:
             completedAt=_now(),
         )
         return
-    if not run.get("judge_provider_id") or not run.get("judge_model"):
+    judges = run.get("judges") or []
+    if not judges:
         await _set_status(
             run_id,
             status="failed",
-            lastError="No judge provider/model configured for this run.",
+            lastError=(
+                "No judges configured for this run. Either set an "
+                "ensembleGroupId with ≥1 judge, or (legacy) populate "
+                "judgeProviderCredentialId + judgeModel."
+            ),
             completedAt=_now(),
         )
         return
+    consensus_method = run.get("consensus_method") or "median"
 
     frozen_ids = run["frozen_ids"] or []
     if not frozen_ids:
@@ -613,20 +684,39 @@ async def execute_chat_replay_run(run_id: str) -> None:
         return
 
     candidate_key = decrypt_secret(run["cand_key"])
-    judge_key = decrypt_secret(run["judge_key"])
     cand_headers = _parse_jsonb(run.get("cand_headers"))
-    judge_headers = _parse_jsonb(run.get("judge_headers"))
     cand_chat_template = _parse_jsonb(run.get("cand_chat_template"))
-    judge_chat_template = _parse_jsonb(run.get("judge_chat_template"))
     sampling = _parse_jsonb(run.get("sampling_params")) or {}
     mode = run.get("mode") or "multi-turn"
+
+    # Decrypt every judge's API key + parse JSONB columns up-front so the
+    # per-item loop just reads them. Each judge in the list has the same
+    # shape as the (legacy) single-judge config used to.
+    prepared_judges: list[dict[str, Any]] = []
+    for j in judges:
+        prepared_judges.append({
+            "provider_id": j["provider_id"],
+            "provider_name": j.get("provider_name"),
+            "provider_kind": j.get("provider_kind"),
+            "base_url": j["base_url"] or "",
+            "key": decrypt_secret(j["key"]) if j.get("key") else "",
+            "model": j["model"],
+            "headers": _parse_jsonb(j.get("headers")),
+            "reasoning": j.get("reasoning"),
+            "chat_template": _parse_jsonb(j.get("chat_template")),
+        })
 
     await _set_status(run_id, status="running", startedAt=_now(), totalTurns=len(frozen_ids))
     await _notify(run_id, {
         "event": "run.start",
         "total": len(frozen_ids),
         "candidateModel": run.get("candidate_model"),
-        "judgeModel": run.get("judge_model"),
+        "judgeModel": prepared_judges[0]["model"] if prepared_judges else None,
+        "judges": [
+            {"providerName": j["provider_name"], "providerKind": j["provider_kind"], "model": j["model"]}
+            for j in prepared_judges
+        ],
+        "consensusMethod": consensus_method,
         "mode": mode,
     })
 
@@ -639,17 +729,21 @@ async def execute_chat_replay_run(run_id: str) -> None:
     # waste hours of compute on results we can't trust.
     project_id = run.get("project_id")
     candidate_key_dec = decrypt_secret(run["cand_key"]) if run.get("cand_key") else ""
+    # Calibration always uses the first judge in the ensemble — the goal
+    # is a cheap drift check, not consensus. If a multi-judge group is
+    # picked, the first judge is the proxy.
+    cal_judge = prepared_judges[0]
     try:
         calibration_report = await _run_calibration(
             run_id=run_id,
             project_id=project_id,
             rubric_axes=rubric_axes,
-            judge_base=run.get("judge_base_url") or "",
-            judge_key=judge_key,
-            judge_model=run["judge_model"],
-            judge_headers=judge_headers,
-            judge_reasoning=run.get("judge_reasoning"),
-            judge_chat_template=judge_chat_template,
+            judge_base=cal_judge["base_url"],
+            judge_key=cal_judge["key"],
+            judge_model=cal_judge["model"],
+            judge_headers=cal_judge["headers"],
+            judge_reasoning=cal_judge["reasoning"],
+            judge_chat_template=cal_judge["chat_template"],
             sampling=sampling,
         )
         if calibration_report is not None:
@@ -780,12 +874,8 @@ async def execute_chat_replay_run(run_id: str) -> None:
                     candidate_headers=cand_headers,
                     candidate_reasoning=run.get("cand_reasoning"),
                     candidate_chat_template=cand_chat_template,
-                    judge_base=run["judge_base_url"],
-                    judge_key=judge_key,
-                    judge_model=run["judge_model"],
-                    judge_headers=judge_headers,
-                    judge_reasoning=run.get("judge_reasoning"),
-                    judge_chat_template=judge_chat_template,
+                    judges=prepared_judges,
+                    consensus_method=consensus_method,
                 )
             except Exception as e:
                 log.exception("chat-replay item failed run=%s conv=%s", run_id, conv_id)
@@ -931,6 +1021,144 @@ async def execute_chat_replay_run(run_id: str) -> None:
         })
 
 
+def _aggregate_per_axis(values: list[float], method: str) -> float:
+    """Aggregate one axis's per-judge scores into a consensus value.
+
+    Methods:
+      median (default) — robust to one outlier judge
+      mean             — average of all judges' scores
+      min              — strictest judge wins
+    """
+    if not values:
+        return 0.0
+    if method == "mean":
+        return sum(values) / len(values)
+    if method == "min":
+        return min(values)
+    # median (default). For an even-N list we take the lower-median so
+    # the consensus tracks the stricter half — matches the "be strict"
+    # framing of the rubric.
+    s = sorted(values)
+    return s[(len(s) - 1) // 2]
+
+
+_VERDICT_ORDER = {"pass": 0, "warn": 1, "fail": 2}
+
+
+def _worst_verdict(verdicts: list[str]) -> str:
+    worst = "pass"
+    for v in verdicts:
+        if _VERDICT_ORDER.get(v, 0) > _VERDICT_ORDER.get(worst, 0):
+            worst = v
+    return worst
+
+
+async def _call_consensus_judge(
+    *,
+    judges: list[dict[str, Any]],
+    consensus_method: str,
+    rubric_axes: list[dict[str, Any]],
+    system_text: str,
+    user_text: str,
+    reference_messages: list[dict[str, Any]],
+    candidate_messages: list[dict[str, Any]],
+    sampling: dict[str, Any],
+    on_delta,
+) -> dict[str, Any]:
+    """Call every judge in the ensemble sequentially and aggregate.
+
+    Returns the same shape as the single-judge call PLUS an
+    `ensemble` block describing the per-judge breakdown + disagreement.
+    A list of 1 judge produces an `ensemble` of size 1; the consensus
+    scores match that judge's raw scores exactly.
+    """
+    per_judge: list[dict[str, Any]] = []
+    total_in = 0
+    total_out = 0
+    total_cost = 0.0
+    for idx, j in enumerate(judges):
+        # Tag streamed deltas with the judge's index so the UI can
+        # distinguish per-judge streams (judge 1 of N, etc).
+        async def _tagged_delta(text: str, _idx=idx, _name=j.get("provider_name"), _model=j.get("model")) -> None:
+            if on_delta is None:
+                return
+            await on_delta(text, _idx, _name, _model)
+
+        jr = await call_judge_streaming(
+            base_url=j["base_url"],
+            api_key=j["key"],
+            model=j["model"],
+            rubric_axes=rubric_axes,
+            system_text=system_text,
+            user_text=user_text,
+            reference_messages=reference_messages,
+            candidate_messages=candidate_messages,
+            extra_headers=j["headers"] if isinstance(j.get("headers"), dict) else None,
+            reasoning_effort=j.get("reasoning"),
+            chat_template_kwargs=j["chat_template"] if isinstance(j.get("chat_template"), dict) else None,
+            temperature=sampling.get("judge_temperature"),
+            max_tokens=sampling.get("judge_max_tokens"),
+            max_retries=int(sampling.get("judge_max_retries", 3) or 3),
+            on_delta=_tagged_delta,
+        )
+        per_judge.append({
+            "providerCredentialId": j.get("provider_id"),
+            "providerName": j.get("provider_name"),
+            "providerKind": j.get("provider_kind"),
+            "model": j["model"],
+            "scores": jr.get("scores") or {},
+            "verdict": jr.get("verdict") or "fail",
+            "rationale": jr.get("rationale") or "",
+            "tokensIn": int(jr.get("tokens_in") or 0),
+            "tokensOut": int(jr.get("tokens_out") or 0),
+            "costUsd": float(jr.get("cost_usd") or 0.0),
+        })
+        total_in += int(jr.get("tokens_in") or 0)
+        total_out += int(jr.get("tokens_out") or 0)
+        total_cost += float(jr.get("cost_usd") or 0.0)
+
+    # Aggregate per axis. Use only axes that at least one judge scored.
+    all_axis_keys: set[str] = set()
+    for pj in per_judge:
+        for k in (pj["scores"] or {}).keys():
+            all_axis_keys.add(k)
+    consensus_scores: dict[str, float] = {}
+    disagreement: dict[str, float] = {}
+    for k in all_axis_keys:
+        vals: list[float] = []
+        for pj in per_judge:
+            v = (pj["scores"] or {}).get(k)
+            if isinstance(v, (int, float)):
+                vals.append(float(v))
+        if not vals:
+            continue
+        consensus_scores[k] = _aggregate_per_axis(vals, consensus_method)
+        disagreement[k] = max(vals) - min(vals)
+    verdict = _worst_verdict([pj["verdict"] for pj in per_judge])
+    # Concatenate rationales with provider/model labels so the user
+    # sees who said what. For N=1 this is just the single rationale.
+    rationale_parts: list[str] = []
+    for pj in per_judge:
+        head = f"### {pj['providerName']} · {pj['model']} (verdict: {pj['verdict']})"
+        body = pj["rationale"] or "(no rationale returned)"
+        rationale_parts.append(f"{head}\n\n{body}")
+    rationale = "\n\n— next judge —\n\n".join(rationale_parts)
+    return {
+        "scores": consensus_scores,
+        "verdict": verdict,
+        "rationale": rationale,
+        "tokens_in": total_in,
+        "tokens_out": total_out,
+        "cost_usd": total_cost,
+        "ensemble": {
+            "method": consensus_method,
+            "perJudge": per_judge,
+            "disagreement": disagreement,
+            "maxDisagreement": max(disagreement.values()) if disagreement else 0.0,
+        },
+    }
+
+
 async def _replay_one(
     *,
     run_id: str,
@@ -945,12 +1173,8 @@ async def _replay_one(
     candidate_headers: Any,
     candidate_reasoning: str | None,
     candidate_chat_template: Any,
-    judge_base: str,
-    judge_key: str,
-    judge_model: str,
-    judge_headers: Any,
-    judge_reasoning: str | None,
-    judge_chat_template: Any,
+    judges: list[dict[str, Any]],
+    consensus_method: str,
 ) -> dict[str, Any]:
     """Replay a single conversation. Returns aggregated rollup inputs for this
     item and persists a BenchmarkResult row."""
@@ -1119,16 +1343,22 @@ async def _replay_one(
     # separate sections instead of one concatenated blob.
     current_turn_for_deltas: dict[str, int] = {"value": 0}
 
-    async def _judge_delta(text: str) -> None:
+    async def _judge_delta(text: str, judge_idx: int = 0, judge_name: str | None = None, judge_model_name: str | None = None) -> None:
         await _notify(run_id, {
             "event": "judge.delta",
             "index": row_idx,
             "turn": current_turn_for_deltas["value"],
+            "judgeIdx": judge_idx,
+            "judgeName": judge_name,
+            "judgeModel": judge_model_name,
             "text": text,
         })
 
     per_turn_rows: list[dict[str, Any]] = []
     judge_result: dict[str, Any]
+    # Collected per-turn ensemble breakdowns (one entry per turn block
+    # when judge_strategy='per-turn', or a single entry for one-shot).
+    ensemble_turns: list[dict[str, Any]] = []
 
     if judge_strategy == "per-turn":
         # Score each (user, assistant) pair separately. Aggregate scores
@@ -1207,23 +1437,21 @@ async def _replay_one(
                     if tool_call_id:
                         cand_m_tool["tool_call_id"] = tool_call_id
                     block_candidate_messages.append(cand_m_tool)
-            turn_judge = await call_judge_streaming(
-                base_url=judge_base,
-                api_key=judge_key,
-                model=judge_model,
+            turn_judge = await _call_consensus_judge(
+                judges=judges,
+                consensus_method=consensus_method,
                 rubric_axes=rubric_axes,
                 system_text=system_text,
                 user_text=u_text or "",
                 reference_messages=ref_msgs_through_t,
                 candidate_messages=block_candidate_messages,
-                extra_headers=judge_headers if isinstance(judge_headers, dict) else None,
-                reasoning_effort=judge_reasoning,
-                chat_template_kwargs=judge_chat_template if isinstance(judge_chat_template, dict) else None,
-                temperature=sampling.get("judge_temperature"),
-                max_tokens=sampling.get("judge_max_tokens"),
-                max_retries=int(sampling.get("judge_max_retries", 3) or 3),
+                sampling=sampling,
                 on_delta=_judge_delta,
             )
+            ensemble_turns.append({
+                "turn": t_i + 1,
+                **(turn_judge.get("ensemble") or {}),
+            })
             ts = turn_judge.get("scores") or {}
             for k_axis, v_axis in ts.items():
                 if isinstance(v_axis, (int, float)):
@@ -1243,6 +1471,7 @@ async def _replay_one(
                 "tokens_in": int(turn_judge.get("tokens_in") or 0),
                 "tokens_out": int(turn_judge.get("tokens_out") or 0),
                 "cost_usd": float(turn_judge.get("cost_usd") or 0.0),
+                "ensemble": turn_judge.get("ensemble"),
             })
 
         avg_scores = {k: sum(vs) / len(vs) for k, vs in accum_scores.items() if vs}
@@ -1273,10 +1502,9 @@ async def _replay_one(
             for m in reference_assistants[:user_idx]
         ]
         await _notify(run_id, {"event": "judge.start", "index": row_idx})
-        judge_result = await call_judge_streaming(
-            base_url=judge_base,
-            api_key=judge_key,
-            model=judge_model,
+        judge_result = await _call_consensus_judge(
+            judges=judges,
+            consensus_method=consensus_method,
             rubric_axes=rubric_axes,
             system_text=system_text,
             user_text=judge_input_user_text or "",
@@ -1286,13 +1514,11 @@ async def _replay_one(
             + [{"role": "user", "content": m.get("content") or ""} for m in user_msgs[:user_idx]]
             + judge_reference,
             candidate_messages=candidate_outputs,
-            extra_headers=judge_headers if isinstance(judge_headers, dict) else None,
-            reasoning_effort=judge_reasoning,
-            chat_template_kwargs=judge_chat_template if isinstance(judge_chat_template, dict) else None,
-            temperature=sampling.get("judge_temperature"),
-            max_tokens=sampling.get("judge_max_tokens"),
+            sampling=sampling,
             on_delta=_judge_delta,
         )
+        if judge_result.get("ensemble"):
+            ensemble_turns.append({"turn": 1, **judge_result["ensemble"]})
         tokens_in += int(judge_result.get("tokens_in") or 0)
         tokens_out += int(judge_result.get("tokens_out") or 0)
         cost_usd += float(judge_result.get("cost_usd") or 0.0)
@@ -1303,18 +1529,32 @@ async def _replay_one(
     # not stored as a quoted string. Without the cast, asyncpg encodes a
     # Python str as a JSON-string value, which made the Next.js UI iterate
     # it character-by-character (the "0..442 axis: —" bug).
+    # Build the conversation-level ensembleResult payload. For per-turn
+    # runs this is the list of per-turn ensemble breakdowns; for one-
+    # shot it's a single entry. The UI reads this to render the per-
+    # judge table in the expanded view.
+    ensemble_payload: dict[str, Any] | None = None
+    if ensemble_turns:
+        ensemble_payload = {
+            "method": consensus_method,
+            "turns": ensemble_turns,
+            "judgeCount": len(judges),
+        }
+    has_ensemble = bool(ensemble_payload)
     await db.execute(
         """
         INSERT INTO "BenchmarkResult" (
             id, "runId", split, "rowIdx", "turnNum", kind,
             "conversationId", "referenceMessages", "candidateMessages",
             "validatorScores", "judgeScores", "judgeVerdict", "judgeRationale",
-            "functionCallScore", "apiFailed", "tokensIn", "tokensOut", "costUsd"
+            "functionCallScore", "apiFailed", "tokensIn", "tokensOut", "costUsd",
+            "ensembleResult", "ensembledAt"
         )
         VALUES (
             $1, $2, $3, $4, $5, 'chat-replay',
             $6, $7::jsonb, $8::jsonb, $9::jsonb, $10::jsonb, $11, $12,
-            $13::jsonb, false, $14, $15, $16
+            $13::jsonb, false, $14, $15, $16,
+            $17::jsonb, $18
         )
         """,
         _new_id(),
@@ -1343,6 +1583,8 @@ async def _replay_one(
         tokens_in,
         tokens_out,
         round(cost_usd, 6),
+        json.dumps(ensemble_payload) if ensemble_payload else None,
+        _now() if has_ensemble else None,
     )
 
     # In per-turn mode, also write one BenchmarkResult per turn so the
@@ -1352,18 +1594,21 @@ async def _replay_one(
     # same way.
     if judge_strategy == "per-turn":
         for tr in per_turn_rows:
+            tr_ens = tr.get("ensemble") or None
             await db.execute(
                 """
                 INSERT INTO "BenchmarkResult" (
                     id, "runId", split, "rowIdx", "turnNum", kind,
                     "conversationId", "referenceMessages", "candidateMessages",
                     "validatorScores", "judgeScores", "judgeVerdict", "judgeRationale",
-                    "functionCallScore", "apiFailed", "tokensIn", "tokensOut", "costUsd"
+                    "functionCallScore", "apiFailed", "tokensIn", "tokensOut", "costUsd",
+                    "ensembleResult", "ensembledAt"
                 )
                 VALUES (
                     $1, $2, $3, $4, $5, 'chat-replay-turn',
                     $6, $7::jsonb, $8::jsonb, NULL, $9::jsonb, $10, $11,
-                    NULL, false, $12, $13, $14
+                    NULL, false, $12, $13, $14,
+                    $15::jsonb, $16
                 )
                 """,
                 _new_id(),
@@ -1390,6 +1635,8 @@ async def _replay_one(
                 int(tr["tokens_in"]),
                 int(tr["tokens_out"]),
                 round(float(tr["cost_usd"]), 6),
+                json.dumps(tr_ens) if tr_ens else None,
+                _now() if tr_ens else None,
             )
 
     return {

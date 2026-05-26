@@ -241,8 +241,11 @@ const startRunSchema = z.object({
   providerCredentialId: z.string(),
   model: z.string().min(1).max(120),
   // Chat-replay-only fields; ignored for hf-function-call benchmarks.
-  judgeProviderCredentialId: z.string().optional().nullable(),
-  judgeModel: z.string().min(1).max(120).optional().nullable(),
+  // Judging is unified on EnsembleJudgeGroup — a group of 1 judge is the
+  // "single judge" case, ≥2 produces per-row consensus (median per-axis
+  // scores, worst verdict, max disagreement).
+  ensembleGroupId: z.string().optional().nullable(),
+  consensusMethod: z.enum(["median", "mean", "min"]).optional().nullable(),
   rubricId: z.string().optional().nullable(),
   mode: z.enum(["single-turn", "multi-turn"]).optional().nullable(),
   samplingParams: z
@@ -288,6 +291,7 @@ export async function startBenchmarkRun(input: z.infer<typeof startRunSchema>) {
       source: true,
       name: true,
       defaultRubricId: true,
+      defaultEnsembleGroupId: true,
       config: true,
     },
   });
@@ -307,10 +311,12 @@ export async function startBenchmarkRun(input: z.infer<typeof startRunSchema>) {
   let judgeProviderCredentialId: string | null = null;
   let judgeModel: string | null = null;
   let rubricId: string | null = null;
+  let ensembleGroupId: string | null = null;
+  const consensusMethod = parsed.data.consensusMethod ?? "median";
 
   if (benchmark.kind === "project-chat-replay") {
-    // Chat-replay needs a judge + rubric. Fall back to the benchmark's
-    // configured defaults if the form didn't override them.
+    // Chat-replay needs an ensemble group + rubric. Fall back to the
+    // benchmark's configured defaults if the form didn't override them.
     const configMode =
       benchmark.config && typeof benchmark.config === "object" && "mode" in benchmark.config
         ? ((benchmark.config as { mode?: string }).mode ?? "single-turn")
@@ -320,18 +326,62 @@ export async function startBenchmarkRun(input: z.infer<typeof startRunSchema>) {
         ? parsed.data.mode
         : (configMode === "multi-turn" ? "multi-turn" : "single-turn");
 
-    if (!parsed.data.judgeProviderCredentialId || !parsed.data.judgeModel) {
-      return { error: "Chat-replay benchmarks require a judge provider and model" };
+    const resolvedGroupId =
+      parsed.data.ensembleGroupId ?? benchmark.defaultEnsembleGroupId ?? null;
+    if (!resolvedGroupId) {
+      return {
+        error:
+          "Chat-replay benchmarks require an ensemble judge group. Create one on the Benchmarks page (Ensemble judge groups) or set a default for this benchmark.",
+      };
     }
-    const judgeProvider = await prisma.providerCredential.findUnique({
-      where: { id: parsed.data.judgeProviderCredentialId },
-      select: { projectId: true },
+    const group = await prisma.ensembleJudgeGroup.findFirst({
+      where: { id: resolvedGroupId, projectId: parsed.data.projectId },
+      select: { id: true, name: true, judges: true },
     });
-    if (!judgeProvider || judgeProvider.projectId !== parsed.data.projectId) {
-      return { error: "Judge provider not in this project" };
+    if (!group) {
+      return { error: "Ensemble group not found in this project" };
     }
-    judgeProviderCredentialId = parsed.data.judgeProviderCredentialId;
-    judgeModel = parsed.data.judgeModel;
+    // judges is stored as JSONB but legacy rows may be JSON-encoded strings.
+    const rawJudges = group.judges as unknown;
+    const judgesArr = (() => {
+      if (typeof rawJudges === "string") {
+        try {
+          const p = JSON.parse(rawJudges);
+          return Array.isArray(p) ? p : [];
+        } catch {
+          return [];
+        }
+      }
+      return Array.isArray(rawJudges) ? rawJudges : [];
+    })() as Array<{ providerCredentialId?: string; model?: string }>;
+    if (judgesArr.length === 0) {
+      return { error: `Ensemble group "${group.name}" has no judges configured` };
+    }
+    // Verify every judge's provider belongs to this project.
+    const providerIds = Array.from(
+      new Set(
+        judgesArr
+          .map((j) => j.providerCredentialId)
+          .filter((id): id is string => typeof id === "string" && id.length > 0),
+      ),
+    );
+    const ownedProviders = await prisma.providerCredential.findMany({
+      where: { id: { in: providerIds }, projectId: parsed.data.projectId },
+      select: { id: true },
+    });
+    if (ownedProviders.length !== providerIds.length) {
+      return {
+        error: `Ensemble group "${group.name}" references a provider that doesn't belong to this project. Edit the group.`,
+      };
+    }
+    ensembleGroupId = group.id;
+    // Populate legacy fields from the group's first judge so existing UI
+    // (badges, runs-table model column) keeps showing something useful for
+    // single-judge groups. Multi-judge groups get the first judge as a
+    // representative; the real per-judge data lives in ensembleResult.
+    const firstJudge = judgesArr[0];
+    judgeProviderCredentialId = firstJudge?.providerCredentialId ?? null;
+    judgeModel = firstJudge?.model ?? null;
 
     rubricId = parsed.data.rubricId ?? benchmark.defaultRubricId ?? null;
     if (!rubricId) {
@@ -352,6 +402,8 @@ export async function startBenchmarkRun(input: z.infer<typeof startRunSchema>) {
       mode,
       judgeProviderCredentialId,
       judgeModel,
+      ensembleGroupId,
+      consensusMethod,
       rubricId,
       samplingParams: parsed.data.samplingParams
         ? (parsed.data.samplingParams as Prisma.InputJsonValue)
@@ -373,6 +425,8 @@ export async function startBenchmarkRun(input: z.infer<typeof startRunSchema>) {
       model: parsed.data.model,
       mode,
       judgeModel,
+      ensembleGroupId,
+      consensusMethod,
       rubricId,
     },
   });
@@ -818,65 +872,230 @@ export async function exportToLabelingPlatform(
   };
 }
 
-// ───── Project-level ensemble judges (shared across all benchmarks) ──────────
+// ───── Ensemble judge groups ─────────────────────────────────────────────────
 
-const ensembleJudgesSchema = z.object({
+const judgeListSchema = z
+  .array(
+    z.object({
+      providerCredentialId: z.string(),
+      model: z.string().min(1).max(120),
+    }),
+  )
+  .max(8);
+
+async function _validateJudgesInProject(
+  projectId: string,
+  judges: Array<{ providerCredentialId: string; model: string }>,
+): Promise<string | null> {
+  if (judges.length === 0) return null;
+  const providerIds = judges.map((j) => j.providerCredentialId);
+  const providers = await prisma.providerCredential.findMany({
+    where: { id: { in: providerIds }, projectId },
+    select: { id: true },
+  });
+  const validIds = new Set(providers.map((p) => p.id));
+  for (const j of judges) {
+    if (!validIds.has(j.providerCredentialId)) {
+      return `Provider ${j.providerCredentialId} not in this project`;
+    }
+  }
+  return null;
+}
+
+const groupCreateSchema = z.object({
   projectId: z.string(),
-  judges: z
-    .array(
-      z.object({
-        providerCredentialId: z.string(),
-        model: z.string().min(1).max(120),
-      }),
-    )
-    .max(8),
+  name: z.string().min(1).max(80),
+  description: z.string().max(500).optional().nullable(),
+  judges: judgeListSchema,
 });
 
-// Save the project's ensemble judge list. Reused by every benchmark in
-// the project — configure once on the benchmarks list page, every
-// run's "Re-judge with ensemble" reads from this list. Empty array
-// disables the ensemble button across all runs.
-export async function setProjectEnsembleJudges(
-  input: z.infer<typeof ensembleJudgesSchema>,
+export async function createEnsembleGroup(
+  input: z.infer<typeof groupCreateSchema>,
 ) {
-  const parsed = ensembleJudgesSchema.safeParse(input);
+  const parsed = groupCreateSchema.safeParse(input);
   if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
   const { user } = await requireProjectPermission(parsed.data.projectId, "benchmarks.write");
 
-  if (parsed.data.judges.length > 0) {
-    const providerIds = parsed.data.judges.map((j) => j.providerCredentialId);
-    const providers = await prisma.providerCredential.findMany({
-      where: { id: { in: providerIds }, projectId: parsed.data.projectId },
-      select: { id: true },
+  const validation = await _validateJudgesInProject(
+    parsed.data.projectId,
+    parsed.data.judges,
+  );
+  if (validation) return { error: validation };
+
+  try {
+    const created = await prisma.ensembleJudgeGroup.create({
+      data: {
+        projectId: parsed.data.projectId,
+        name: parsed.data.name.trim(),
+        description: parsed.data.description?.trim() || null,
+        judges: parsed.data.judges as unknown as Prisma.InputJsonValue,
+      },
     });
-    const validIds = new Set(providers.map((p) => p.id));
-    for (const j of parsed.data.judges) {
-      if (!validIds.has(j.providerCredentialId)) {
-        return { error: `Provider ${j.providerCredentialId} not in this project` };
-      }
+    await logAudit({
+      projectId: parsed.data.projectId,
+      actorUserId: user.id,
+      action: "ensemble_group.create",
+      targetKind: "EnsembleJudgeGroup",
+      targetId: created.id,
+      metadata: {
+        name: created.name,
+        judgeCount: parsed.data.judges.length,
+      },
+    });
+    revalidatePath(`/projects/${parsed.data.projectId}/benchmarks`);
+    return { ok: true, id: created.id };
+  } catch (e) {
+    if (
+      e instanceof Prisma.PrismaClientKnownRequestError &&
+      e.code === "P2002"
+    ) {
+      return { error: `A group named "${parsed.data.name}" already exists in this project` };
     }
+    return { error: (e as Error).message };
+  }
+}
+
+const groupUpdateSchema = z.object({
+  projectId: z.string(),
+  groupId: z.string(),
+  name: z.string().min(1).max(80).optional(),
+  description: z.string().max(500).optional().nullable(),
+  judges: judgeListSchema.optional(),
+});
+
+export async function updateEnsembleGroup(
+  input: z.infer<typeof groupUpdateSchema>,
+) {
+  const parsed = groupUpdateSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
+  const { user } = await requireProjectPermission(parsed.data.projectId, "benchmarks.write");
+
+  const group = await prisma.ensembleJudgeGroup.findFirst({
+    where: { id: parsed.data.groupId, projectId: parsed.data.projectId },
+    select: { id: true },
+  });
+  if (!group) return { error: "Group not found" };
+
+  if (parsed.data.judges) {
+    const validation = await _validateJudgesInProject(
+      parsed.data.projectId,
+      parsed.data.judges,
+    );
+    if (validation) return { error: validation };
   }
 
-  await prisma.project.update({
-    where: { id: parsed.data.projectId },
-    data: {
-      ensembleJudges: parsed.data.judges as unknown as Prisma.InputJsonValue,
-    },
-  });
+  const patch: Record<string, unknown> = {};
+  if (parsed.data.name !== undefined) patch.name = parsed.data.name.trim();
+  if (parsed.data.description !== undefined) {
+    patch.description = parsed.data.description?.trim() || null;
+  }
+  if (parsed.data.judges !== undefined) {
+    patch.judges = parsed.data.judges as unknown as Prisma.InputJsonValue;
+  }
+
+  try {
+    await prisma.ensembleJudgeGroup.update({
+      where: { id: parsed.data.groupId },
+      data: patch,
+    });
+  } catch (e) {
+    if (
+      e instanceof Prisma.PrismaClientKnownRequestError &&
+      e.code === "P2002"
+    ) {
+      return { error: "Another group already uses that name in this project" };
+    }
+    return { error: (e as Error).message };
+  }
 
   await logAudit({
     projectId: parsed.data.projectId,
     actorUserId: user.id,
-    action: "project.ensemble_judges.set",
-    targetKind: "Project",
-    targetId: parsed.data.projectId,
+    action: "ensemble_group.update",
+    targetKind: "EnsembleJudgeGroup",
+    targetId: parsed.data.groupId,
     metadata: {
-      count: parsed.data.judges.length,
-      models: parsed.data.judges.map((j) => j.model),
+      name: parsed.data.name,
+      description: parsed.data.description,
+      judgeCount: parsed.data.judges?.length,
     },
   });
-
   revalidatePath(`/projects/${parsed.data.projectId}/benchmarks`);
+  return { ok: true };
+}
+
+const groupDeleteSchema = z.object({
+  projectId: z.string(),
+  groupId: z.string(),
+});
+
+export async function deleteEnsembleGroup(
+  input: z.infer<typeof groupDeleteSchema>,
+) {
+  const parsed = groupDeleteSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
+  const { user } = await requireProjectPermission(parsed.data.projectId, "benchmarks.write");
+
+  const group = await prisma.ensembleJudgeGroup.findFirst({
+    where: { id: parsed.data.groupId, projectId: parsed.data.projectId },
+    select: { id: true, name: true },
+  });
+  if (!group) return { error: "Group not found" };
+
+  await prisma.ensembleJudgeGroup.delete({ where: { id: parsed.data.groupId } });
+
+  await logAudit({
+    projectId: parsed.data.projectId,
+    actorUserId: user.id,
+    action: "ensemble_group.delete",
+    targetKind: "EnsembleJudgeGroup",
+    targetId: parsed.data.groupId,
+    metadata: { name: group.name },
+  });
+  revalidatePath(`/projects/${parsed.data.projectId}/benchmarks`);
+  return { ok: true };
+}
+
+const setBenchmarkDefaultGroupSchema = z.object({
+  projectId: z.string(),
+  benchmarkId: z.string(),
+  groupId: z.string().nullable(),
+});
+
+export async function setBenchmarkDefaultEnsembleGroup(
+  input: z.infer<typeof setBenchmarkDefaultGroupSchema>,
+) {
+  const parsed = setBenchmarkDefaultGroupSchema.safeParse(input);
+  if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
+  const { user } = await requireProjectPermission(parsed.data.projectId, "benchmarks.write");
+
+  const benchmark = await prisma.benchmark.findFirst({
+    where: { id: parsed.data.benchmarkId, projectId: parsed.data.projectId },
+    select: { id: true },
+  });
+  if (!benchmark) return { error: "Benchmark not found" };
+
+  if (parsed.data.groupId) {
+    const group = await prisma.ensembleJudgeGroup.findFirst({
+      where: { id: parsed.data.groupId, projectId: parsed.data.projectId },
+      select: { id: true },
+    });
+    if (!group) return { error: "Group not found in this project" };
+  }
+
+  await prisma.benchmark.update({
+    where: { id: parsed.data.benchmarkId },
+    data: { defaultEnsembleGroupId: parsed.data.groupId },
+  });
+  await logAudit({
+    projectId: parsed.data.projectId,
+    actorUserId: user.id,
+    action: "benchmark.default_ensemble_group.set",
+    targetKind: "Benchmark",
+    targetId: parsed.data.benchmarkId,
+    metadata: { groupId: parsed.data.groupId },
+  });
+  revalidatePath(`/projects/${parsed.data.projectId}/benchmarks/${parsed.data.benchmarkId}`);
   return { ok: true };
 }
 
@@ -885,6 +1104,11 @@ export async function setProjectEnsembleJudges(
 const ensembleSchema = z.object({
   projectId: z.string(),
   runId: z.string(),
+  // Optional: pick a specific ensemble group. Falls through to:
+  //   1. Benchmark.defaultEnsembleGroupId
+  //   2. Project's only group (if exactly one exists)
+  //   3. error
+  groupId: z.string().optional(),
   filter: z
     .object({
       verdict: z.enum(["pass", "warn"]).optional(),
@@ -897,34 +1121,55 @@ const ensembleSchema = z.object({
 });
 
 // Dispatch a multi-judge ensemble re-judge over a subset of a completed
-// benchmark run. The judges themselves are read from the parent
-// Benchmark.ensembleJudges so the same ensemble config applies across
-// every run of that benchmark — users configure it once on the
-// benchmark detail page, then any completed run can be ensembled with
-// just a filter + threshold. The Python api updates
-// `BenchmarkResult.ensembleResult` in place; returns immediately.
+// benchmark run. Judges come from an EnsembleJudgeGroup chosen via:
+//   - explicit `groupId` in the input (override), or
+//   - Benchmark.defaultEnsembleGroupId (the benchmark's saved default), or
+//   - the project's single group if exactly one exists, else error.
+// The Python api updates `BenchmarkResult.ensembleResult` in place;
+// returns immediately.
 export async function ensembleRejudge(input: z.infer<typeof ensembleSchema>) {
   const parsed = ensembleSchema.safeParse(input);
   if (!parsed.success) return { error: parsed.error.errors[0]?.message ?? "Invalid input" };
   const { user } = await requireProjectPermission(parsed.data.projectId, "benchmarks.execute");
 
-  // Confirm run + ownership, then pull judges from the PROJECT (shared
-  // across every benchmark in the project — configured once on the
-  // benchmarks list page).
   const run = await prisma.benchmarkRun.findFirst({
     where: { id: parsed.data.runId, benchmark: { projectId: parsed.data.projectId } },
-    select: { id: true, status: true, benchmarkId: true },
+    select: {
+      id: true,
+      status: true,
+      benchmarkId: true,
+      benchmark: { select: { defaultEnsembleGroupId: true } },
+    },
   });
   if (!run) return { error: "Benchmark run not found" };
   if (run.status !== "completed") {
     return { error: `Run is ${run.status}; ensemble requires status='completed'.` };
   }
 
-  const projectRow = await prisma.project.findUnique({
-    where: { id: parsed.data.projectId },
-    select: { ensembleJudges: true },
+  // Resolve which group to use.
+  let groupId = parsed.data.groupId ?? run.benchmark.defaultEnsembleGroupId ?? null;
+  if (!groupId) {
+    const allGroups = await prisma.ensembleJudgeGroup.findMany({
+      where: { projectId: parsed.data.projectId },
+      select: { id: true },
+    });
+    if (allGroups.length === 1) groupId = allGroups[0].id;
+  }
+  if (!groupId) {
+    return {
+      error:
+        "No ensemble group selected. Create one in Benchmarks → Ensemble judge groups, " +
+        "and optionally set it as the benchmark's default.",
+    };
+  }
+
+  const group = await prisma.ensembleJudgeGroup.findFirst({
+    where: { id: groupId, projectId: parsed.data.projectId },
+    select: { id: true, name: true, judges: true },
   });
-  const rawJudges = projectRow?.ensembleJudges as unknown;
+  if (!group) return { error: "Ensemble group not found in this project" };
+
+  const rawJudges = group.judges as unknown;
   const judges: Array<{ providerCredentialId: string; model: string }> = [];
   if (Array.isArray(rawJudges)) {
     for (const j of rawJudges) {
@@ -943,13 +1188,11 @@ export async function ensembleRejudge(input: z.infer<typeof ensembleSchema>) {
   }
   if (judges.length < 2) {
     return {
-      error:
-        "Configure at least 2 ensemble judges on the project first " +
-        "(Benchmarks page → Ensemble judges card).",
+      error: `Group "${group.name}" has fewer than 2 judges. Open Benchmarks → Ensemble judge groups to fix.`,
     };
   }
 
-  // Defence in depth: validate each judge's provider is still in-project.
+  // Defence in depth: validate every judge's provider is still in-project.
   const providers = await prisma.providerCredential.findMany({
     where: {
       id: { in: judges.map((j) => j.providerCredentialId) },
@@ -960,7 +1203,7 @@ export async function ensembleRejudge(input: z.infer<typeof ensembleSchema>) {
   const validIds = new Set(providers.map((p) => p.id));
   for (const j of judges) {
     if (!validIds.has(j.providerCredentialId)) {
-      return { error: `Saved judge provider ${j.providerCredentialId} is no longer in this project — re-configure on the benchmark page.` };
+      return { error: `Saved judge provider ${j.providerCredentialId} is no longer in this project — re-configure group "${group.name}".` };
     }
   }
 
@@ -994,6 +1237,8 @@ export async function ensembleRejudge(input: z.infer<typeof ensembleSchema>) {
     targetKind: "BenchmarkRun",
     targetId: parsed.data.runId,
     metadata: {
+      groupId: group.id,
+      groupName: group.name,
       judgeCount: judges.length,
       judgeModels: judges.map((j) => j.model),
       filter: parsed.data.filter ?? {},
@@ -1004,7 +1249,7 @@ export async function ensembleRejudge(input: z.infer<typeof ensembleSchema>) {
   revalidatePath(
     `/projects/${parsed.data.projectId}/benchmarks/${run.benchmarkId}/runs/${parsed.data.runId}`,
   );
-  return { ok: true };
+  return { ok: true, groupName: group.name };
 }
 
 // ───── Cancel ────────────────────────────────────────────────────────────────

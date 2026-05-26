@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Layers, RefreshCw, Settings } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -32,56 +32,87 @@ interface JudgeSummary {
   providerKind: string;
   model: string;
 }
+interface GroupSummary {
+  id: string;
+  name: string;
+  description: string | null;
+  judges: JudgeSummary[];
+}
 
-const NONE = "__none__";
+const VERDICT_ANY = "__any__";
 
-// Dispatch a Tier-3 ensemble re-judge over a subset of a completed
-// benchmark run. Judges themselves are configured ONCE at the project
-// level (Benchmarks page → Ensemble judges card); this dialog just
-// shows the list read-only and asks the user for the row filter +
-// disagreement threshold. When fewer than 2 judges are saved, the
-// trigger button is disabled with a tooltip pointing at the project
-// page.
+// Pick an EnsembleJudgeGroup, then dispatch a Tier-3 ensemble re-judge
+// over a subset of a completed run. Groups themselves are managed once
+// at the project level (Benchmarks page → Ensemble judge groups);
+// here the user just picks which group + filter + threshold to use.
+//
+// The trigger button is disabled when the project has no group with at
+// least 2 judges, with a tooltip pointing at the Benchmarks page.
 export function EnsembleDialog({
   projectId,
   runId,
-  judges,
+  groups,
+  defaultGroupId,
 }: {
   projectId: string;
   runId: string;
-  judges: JudgeSummary[];
+  groups: GroupSummary[];
+  defaultGroupId: string | null;
 }) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [pending, start] = useTransition();
-  const [verdictFilter, setVerdictFilter] = useState<string>(NONE);
-  const [topPercent, setTopPercent] = useState(10); // top 10%
+
+  // Pre-select the benchmark's default group; fall back to the first
+  // viable group (≥2 judges) if there's no default; otherwise leave
+  // unset (the button is disabled in that case).
+  const usableGroups = useMemo(
+    () => groups.filter((g) => g.judges.length >= 2),
+    [groups],
+  );
+  const [groupId, setGroupId] = useState<string>(() => {
+    if (defaultGroupId && usableGroups.find((g) => g.id === defaultGroupId)) {
+      return defaultGroupId;
+    }
+    return usableGroups[0]?.id ?? "";
+  });
+  const [verdictFilter, setVerdictFilter] = useState<string>(VERDICT_ANY);
+  const [topPercent, setTopPercent] = useState(10);
   const [minAxisScore, setMinAxisScore] = useState(3);
   const [threshold, setThreshold] = useState(1.0);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
 
-  const configured = judges.length >= 2;
-  const missingTooltip = configured
+  const selectedGroup = useMemo(
+    () => groups.find((g) => g.id === groupId) ?? null,
+    [groups, groupId],
+  );
+
+  const configured = usableGroups.length > 0;
+  const tooltip = configured
     ? undefined
-    : judges.length === 0
-      ? "No ensemble judges configured. Open Benchmarks → Ensemble judges to set them up."
-      : "Only one judge configured. Add another in Benchmarks → Ensemble judges to enable.";
+    : groups.length === 0
+      ? "No ensemble groups configured. Open Benchmarks → Ensemble judge groups to create one."
+      : "All configured groups have fewer than 2 judges. Add more judges in Benchmarks → Ensemble judge groups.";
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     setInfo(null);
-
+    if (!groupId) {
+      setError("Pick a group with at least 2 judges.");
+      return;
+    }
     start(async () => {
       const filter: Record<string, unknown> = {};
-      if (verdictFilter !== NONE) filter.verdict = verdictFilter;
+      if (verdictFilter !== VERDICT_ANY) filter.verdict = verdictFilter;
       if (topPercent > 0 && topPercent < 100) filter.topPercent = topPercent / 100;
       if (minAxisScore > 1) filter.minAxisScore = minAxisScore;
 
       const res = await ensembleRejudge({
         projectId,
         runId,
+        groupId,
         filter,
         threshold,
       });
@@ -89,7 +120,10 @@ export function EnsembleDialog({
         setError(res.error);
         return;
       }
-      setInfo("Ensemble dispatched. Refresh the page in a minute to see per-row consensus.");
+      const name = "groupName" in res ? res.groupName : selectedGroup?.name;
+      setInfo(
+        `Ensemble dispatched with "${name ?? "group"}". Refresh in a minute to see per-row consensus.`,
+      );
       router.refresh();
     });
   }
@@ -102,7 +136,7 @@ export function EnsembleDialog({
           size="sm"
           variant="outline"
           disabled={!configured}
-          title={missingTooltip}
+          title={tooltip}
         >
           <Layers className="mr-2 h-3.5 w-3.5" />
           Re-judge with ensemble
@@ -112,40 +146,68 @@ export function EnsembleDialog({
         <DialogHeader>
           <DialogTitle>Multi-judge ensemble re-judge</DialogTitle>
           <DialogDescription>
-            Tier-3 pass: re-judge a subset of this run with the project&apos;s
-            configured ensemble judges. Each row gets per-judge breakdowns, a
-            median per-axis score, and a disagreement metric.
+            Tier-3 pass: re-judge a subset of this run with one of the
+            project&apos;s ensemble judge groups. Each row gets per-judge
+            breakdowns, a median per-axis score, and a disagreement metric.
           </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={onSubmit} className="space-y-3">
-          {/* Read-only view of the project's saved judges. The user
-              configures them once on the project benchmarks page; here
-              we just confirm what's about to run. */}
-          <div className="rounded-md border border-border bg-muted/30 px-3 py-2 text-[11px]">
-            <div className="mb-1 flex items-center justify-between">
-              <span className="text-muted-foreground">
-                Using {judges.length} judge{judges.length === 1 ? "" : "s"} from project settings
-              </span>
+          {/* Group picker */}
+          <div className="space-y-1.5">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="ens-group">Ensemble group</Label>
               <Link
                 href={`/projects/${projectId}/benchmarks`}
-                className="inline-flex items-center gap-1 text-muted-foreground hover:text-foreground hover:underline"
+                className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground hover:underline"
               >
                 <Settings className="h-3 w-3" />
-                Configure
+                Manage groups
               </Link>
             </div>
-            <ul className="space-y-0.5 font-mono">
-              {judges.map((j, i) => (
-                <li key={i} className="flex items-center gap-2">
-                  <Badge variant="outline" className="text-[10px]">
-                    {j.providerKind}
-                  </Badge>
-                  <span>{j.model}</span>
-                  <span className="text-muted-foreground">via {j.providerName}</span>
-                </li>
-              ))}
-            </ul>
+            <Select value={groupId} onValueChange={setGroupId}>
+              <SelectTrigger id="ens-group">
+                <SelectValue placeholder="Pick a group" />
+              </SelectTrigger>
+              <SelectContent>
+                {groups.map((g) => {
+                  const disabled = g.judges.length < 2;
+                  return (
+                    <SelectItem
+                      key={g.id}
+                      value={g.id}
+                      disabled={disabled}
+                    >
+                      {g.name}
+                      <span className="ml-1 text-muted-foreground">
+                        ({g.judges.length} judge{g.judges.length === 1 ? "" : "s"}
+                        {disabled && " — needs ≥2"})
+                      </span>
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
+            {selectedGroup && (
+              <div className="rounded-md border border-border bg-muted/30 px-2 py-1.5 text-[11px]">
+                {selectedGroup.description && (
+                  <div className="mb-1 italic text-muted-foreground">
+                    {selectedGroup.description}
+                  </div>
+                )}
+                <ul className="space-y-0.5 font-mono">
+                  {selectedGroup.judges.map((j, i) => (
+                    <li key={i} className="flex items-center gap-2">
+                      <Badge variant="outline" className="text-[10px]">
+                        {j.providerKind}
+                      </Badge>
+                      <span>{j.model}</span>
+                      <span className="text-muted-foreground">via {j.providerName}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
@@ -156,7 +218,7 @@ export function EnsembleDialog({
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={NONE}>Any verdict</SelectItem>
+                  <SelectItem value={VERDICT_ANY}>Any verdict</SelectItem>
                   <SelectItem value="pass">pass only</SelectItem>
                   <SelectItem value="warn">warn only</SelectItem>
                 </SelectContent>
@@ -236,7 +298,7 @@ export function EnsembleDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" size="sm" disabled={pending}>
+            <Button type="submit" size="sm" disabled={pending || !groupId}>
               {pending ? (
                 <>
                   <RefreshCw className="mr-2 h-3.5 w-3.5 animate-spin" />

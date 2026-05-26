@@ -37,57 +37,72 @@ export default async function BenchmarkRunPage({
     select: {
       labelingBaseUrl: true,
       labelingApiKeyEnc: true,
-      ensembleJudges: true,
     },
   });
   const labelingBaseUrl = projectMeta?.labelingBaseUrl ?? null;
   const hasLabelingApiKey = !!projectMeta?.labelingApiKeyEnc;
 
-  // Resolve the project's saved ensemble judges into a list of
-  // {providerCredentialId, providerName, providerKind, model}. The
-  // dialog renders them read-only — actual configuration happens on
-  // the Benchmarks list page.
-  type EnsembleJudgeSpec = { providerCredentialId: string; model: string };
-  const rawJudges = projectMeta?.ensembleJudges as unknown;
-  const judgeSpecs: EnsembleJudgeSpec[] = [];
-  const arr = typeof rawJudges === "string"
-    ? (() => {
-        try { return JSON.parse(rawJudges); } catch { return null; }
-      })()
-    : rawJudges;
-  if (Array.isArray(arr)) {
-    for (const j of arr) {
-      if (
-        j &&
-        typeof j === "object" &&
-        typeof (j as Record<string, unknown>).providerCredentialId === "string" &&
-        typeof (j as Record<string, unknown>).model === "string"
-      ) {
-        judgeSpecs.push({
-          providerCredentialId: (j as { providerCredentialId: string }).providerCredentialId,
-          model: (j as { model: string }).model,
-        });
+  // Load every ensemble group for this project + the benchmark's
+  // saved default. The run-page ensemble dialog renders these as a
+  // dropdown so the user can pick which group to use for this
+  // particular re-judge.
+  const [ensembleGroupsRaw, benchmarkRow, allProviders] = await Promise.all([
+    prisma.ensembleJudgeGroup.findMany({
+      where: { projectId },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true, description: true, judges: true },
+    }),
+    prisma.benchmark.findUnique({
+      where: { id: benchmarkId },
+      select: { defaultEnsembleGroupId: true },
+    }),
+    prisma.providerCredential.findMany({
+      where: { projectId },
+      select: { id: true, name: true, kind: true },
+    }),
+  ]);
+  const providerById = new Map(allProviders.map((p) => [p.id, p]));
+  const ensembleGroups = ensembleGroupsRaw.map((g) => {
+    const raw = g.judges as unknown;
+    const arr = typeof raw === "string"
+      ? (() => {
+          try { return JSON.parse(raw); } catch { return null; }
+        })()
+      : raw;
+    const judges: Array<{
+      providerCredentialId: string;
+      providerName: string;
+      providerKind: string;
+      model: string;
+    }> = [];
+    if (Array.isArray(arr)) {
+      for (const j of arr) {
+        if (
+          j &&
+          typeof j === "object" &&
+          typeof (j as Record<string, unknown>).providerCredentialId === "string" &&
+          typeof (j as Record<string, unknown>).model === "string"
+        ) {
+          const pid = (j as { providerCredentialId: string }).providerCredentialId;
+          const p = providerById.get(pid);
+          if (!p) continue;
+          judges.push({
+            providerCredentialId: pid,
+            providerName: p.name,
+            providerKind: p.kind,
+            model: (j as { model: string }).model,
+          });
+        }
       }
     }
-  }
-  const judgeProviders = judgeSpecs.length > 0
-    ? await prisma.providerCredential.findMany({
-        where: { id: { in: judgeSpecs.map((j) => j.providerCredentialId) } },
-        select: { id: true, name: true, kind: true },
-      })
-    : [];
-  const providerById = new Map(judgeProviders.map((p) => [p.id, p]));
-  const ensembleJudges = judgeSpecs
-    .filter((j) => providerById.has(j.providerCredentialId))
-    .map((j) => {
-      const p = providerById.get(j.providerCredentialId)!;
-      return {
-        providerCredentialId: j.providerCredentialId,
-        providerName: p.name,
-        providerKind: p.kind,
-        model: j.model,
-      };
-    });
+    return {
+      id: g.id,
+      name: g.name,
+      description: g.description,
+      judges,
+    };
+  });
+  const defaultEnsembleGroupId = benchmarkRow?.defaultEnsembleGroupId ?? null;
 
   const run = await prisma.benchmarkRun.findFirst({
     where: { id: runId, benchmarkId },
@@ -196,7 +211,8 @@ export default async function BenchmarkRunPage({
               <EnsembleDialog
                 projectId={projectId}
                 runId={run.id}
-                judges={ensembleJudges}
+                groups={ensembleGroups}
+                defaultGroupId={defaultEnsembleGroupId}
               />
             )}
             {canRestart && run.status === "completed" && (

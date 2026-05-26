@@ -27,7 +27,7 @@ export default async function BenchmarkDetailPage({
   const canWrite = role ? projectRoleAllows(role, "benchmarks.write") : false;
   const canCancel = role ? projectRoleAllows(role, "benchmarks.cancel") : false;
 
-  const [benchmark, providers, rubrics, sourceRuns] = await Promise.all([
+  const [benchmark, providers, rubrics, sourceRuns, ensembleGroups] = await Promise.all([
     prisma.benchmark.findUnique({
       where: { id: benchmarkId },
       include: {
@@ -64,8 +64,44 @@ export default async function BenchmarkDetailPage({
         createdAt: true,
       },
     }),
+    prisma.ensembleJudgeGroup.findMany({
+      where: { projectId },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, name: true, description: true, judges: true },
+    }),
   ]);
   if (!benchmark || benchmark.projectId !== projectId) notFound();
+
+  const providerById = new Map(providers.map((p) => [p.id, p]));
+
+  // Expand judges (stored as JSONB) into a list of provider+model refs
+  // so the dropdown can show "<provider> · <model>" lines.
+  const ensembleGroupOptions = ensembleGroups.map((g) => {
+    const raw = g.judges as unknown;
+    const arr = typeof raw === "string"
+      ? (() => { try { return JSON.parse(raw); } catch { return null; } })()
+      : raw;
+    const judges = (Array.isArray(arr) ? arr : []).flatMap(
+      (j: { providerCredentialId?: string; model?: string }) => {
+        if (!j?.providerCredentialId || !j?.model) return [];
+        const p = providerById.get(j.providerCredentialId);
+        if (!p) return [];
+        return [{
+          providerCredentialId: j.providerCredentialId,
+          providerName: p.name,
+          providerKind: p.kind,
+          model: j.model,
+        }];
+      },
+    );
+    return {
+      id: g.id,
+      name: g.name,
+      description: g.description ?? null,
+      judges,
+      judgeCount: judges.length,
+    };
+  });
 
   const isChatReplay = benchmark.kind === "project-chat-replay";
   const benchmarkConfig =
@@ -157,9 +193,9 @@ export default async function BenchmarkDetailPage({
           <CardHeader>
             <CardTitle>Start a run</CardTitle>
             <CardDescription>
-              Pick a candidate provider + model and a judge. The worker replays each frozen
-              conversation through the candidate, then asks the judge to score it against the
-              reference assistant turns using the rubric you select.
+              Pick an ensemble judge group (1 judge = single-judge; ≥2 = consensus).
+              The worker scores the reference assistant turns in every frozen
+              conversation against the rubric. No candidate model is re-invoked.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -174,8 +210,15 @@ export default async function BenchmarkDetailPage({
                 benchmarkKind={benchmark.kind}
                 defaultMode={defaultMode}
                 defaultRubricId={benchmark.defaultRubricId}
+                defaultEnsembleGroupId={benchmark.defaultEnsembleGroupId}
                 providers={providers}
                 rubrics={rubrics}
+                ensembleGroups={ensembleGroupOptions.map((g) => ({
+                  id: g.id,
+                  name: g.name,
+                  description: g.description,
+                  judges: g.judges,
+                }))}
               />
             )}
           </CardContent>

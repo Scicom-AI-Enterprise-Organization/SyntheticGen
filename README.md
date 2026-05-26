@@ -572,10 +572,15 @@ per-axis rubric using LLM-as-judge, then pick the best ones for human review.
    `Benchmark.frozenConversationIds` so subsequent runs evaluate the same
    items even if the source run is later mutated.
 
-2. **Start a run** — pick the judge provider + model, judge sampling
-   (temperature / max_tokens / strategy: one-shot vs per-turn), the replay
-   mode (single-turn / multi-turn), parallel item count (default 4), and
-   retry count for malformed judge JSON (default 3).
+2. **Start a run** — pick an **ensemble judge group** (manage these on
+   the Benchmarks page → *Ensemble judge groups*). A group of 1 judge
+   runs single-judge; ≥2 judges runs **consensus** (median / mean / min
+   per-axis aggregation, worst verdict, max disagreement per axis). The
+   form also configures judge sampling (temperature / max_tokens /
+   strategy: one-shot vs per-turn), replay mode (single-turn /
+   multi-turn), parallel item count (default 4), and retry count for
+   malformed judge JSON (default 3). Each benchmark can set a *default
+   ensemble group* that's auto-selected here and in the re-judge dialog.
 
 3. **Worker grades each conversation**. In **judge-only mode** (default,
    recommended), the worker takes the EXISTING reference assistant turns

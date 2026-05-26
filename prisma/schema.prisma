@@ -158,13 +158,6 @@ model Project {
   // the same AES-256-GCM helper as provider credentials.
   labelingBaseUrl     String?
   labelingApiKeyEnc   Bytes?
-  // Multi-judge ensemble (Tier-3) config — applies to every "Re-judge
-  // with ensemble" pass on benchmark runs in this project. Shape:
-  //   [{ providerCredentialId, model }, ...]
-  // Configured once on the benchmarks list page; reused across every
-  // benchmark in the project. The ensemble button on a run page is
-  // disabled until at least 2 judges are saved here.
-  ensembleJudges      Json    @default("[]")
   archivedAt       DateTime?
   createdById      String
   createdAt        DateTime  @default(now())
@@ -188,6 +181,7 @@ model Project {
   knowledgeBase    KnowledgeBaseEntry[]
   knowledgeCrawls  KnowledgeCrawl[]
   bootstrapJobs    BootstrapJob[]
+  ensembleGroups   EnsembleJudgeGroup[]
 
   @@index([createdById])
   @@index([archivedAt])
@@ -982,6 +976,10 @@ model Benchmark {
   // Default rubric for chat-replay scoring. Each run inherits this; the run
   // can override with its own rubricId for one-off experiments.
   defaultRubricId       String?
+  // Default ensemble-judge group for "Re-judge with ensemble" on this
+  // benchmark's runs. Null = use the project's first ensemble group as
+  // fallback, or disable the ensemble button if no groups exist.
+  defaultEnsembleGroupId String?
 
   createdById String
   createdAt   DateTime @default(now())
@@ -990,11 +988,40 @@ model Benchmark {
   project       Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
   createdBy     User           @relation(fields: [createdById], references: [id], onDelete: Restrict)
   defaultRubric Rubric?        @relation("BenchmarkDefaultRubric", fields: [defaultRubricId], references: [id], onDelete: SetNull)
+  defaultEnsembleGroup EnsembleJudgeGroup? @relation("BenchmarkDefaultEnsembleGroup", fields: [defaultEnsembleGroupId], references: [id], onDelete: SetNull)
   runs          BenchmarkRun[]
 
   @@unique([projectId, name])
   @@index([projectId])
   @@index([projectId, kind])
+}
+
+// ---------------------------------------------------------------------------
+// Named groups of ensemble judges. Each group is a list of
+// {providerCredentialId, model} pairs the "Re-judge with ensemble" flow
+// uses to re-score a subset of a benchmark run with multiple models for
+// consensus / disagreement. A project can have many groups (e.g. "Strict
+// trio", "Cheap pair", "Validator-style"). Each benchmark picks one as
+// its default; runs can override at re-judge time.
+// ---------------------------------------------------------------------------
+
+model EnsembleJudgeGroup {
+  id          String  @id @default(cuid())
+  projectId   String
+  name        String
+  description String?
+  // [{ providerCredentialId, model }, ...]
+  judges      Json    @default("[]")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  project    Project        @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  benchmarks Benchmark[]    @relation("BenchmarkDefaultEnsembleGroup")
+  runs       BenchmarkRun[] @relation("BenchmarkRunEnsembleGroup")
+
+  @@unique([projectId, name])
+  @@index([projectId])
 }
 
 model BenchmarkRun {
@@ -1013,9 +1040,21 @@ model BenchmarkRun {
   //   function-call — legacy hf-function-call benchmarks (default for backward compat).
   mode                 String @default("function-call")
 
-  // Judge (LLM-as-judge) used for chat-replay scoring. Null for function-call mode.
+  // LEGACY single-judge fields. New chat-replay runs use ensembleGroupId
+  // instead (groups of size 1 are the "single judge" case). Kept for
+  // historical rows. The worker prefers ensembleGroupId when set.
   judgeProviderCredentialId String?
   judgeModel                String?
+  // EnsembleJudgeGroup the run scored against. A group of size 1 behaves
+  // identically to single-judge; size 2+ produces per-row consensus
+  // (median per-axis scores, worst verdict, max disagreement). Null on
+  // legacy rows.
+  ensembleGroupId           String?
+  // Consensus aggregation method when the group has 2+ judges.
+  //   "median" (default) — per-axis scores median; worst verdict
+  //   "mean"             — per-axis scores mean; worst verdict
+  //   "min"              — per-axis scores min;  worst verdict
+  consensusMethod           String   @default("median")
   // Snapshot of which rubric this run was scored against. Falls back to the
   // benchmark's defaultRubricId at queue time. Storing it on the run lets us
   // compare apples-to-apples even if the rubric is later edited or deleted.
@@ -1067,6 +1106,7 @@ model BenchmarkRun {
   providerCredential ProviderCredential  @relation("BenchmarkRunCandidate", fields: [providerCredentialId], references: [id], onDelete: Restrict)
   judgeProvider      ProviderCredential? @relation("BenchmarkRunJudge", fields: [judgeProviderCredentialId], references: [id], onDelete: Restrict)
   rubric             Rubric?             @relation(fields: [rubricId], references: [id], onDelete: SetNull)
+  ensembleGroup      EnsembleJudgeGroup? @relation("BenchmarkRunEnsembleGroup", fields: [ensembleGroupId], references: [id], onDelete: SetNull)
   createdBy          User                @relation(fields: [createdById], references: [id], onDelete: Restrict)
   results            BenchmarkResult[]
 
