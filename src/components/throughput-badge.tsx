@@ -11,7 +11,7 @@
 // Anthropic dashboards use for "live throughput" estimates. Accuracy is
 // usually within ±20% of the real tokenizer count.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 
 export function ThroughputBadge({
@@ -35,8 +35,29 @@ export function ThroughputBadge({
     return () => clearInterval(t);
   }, [running]);
 
+  // Freeze the elapsed time at the moment `running` flips from true → false
+  // (job done / cancelled / failed). Without this, every parent re-render
+  // recomputed `Date.now() - startedAt` and the badge kept ticking forever
+  // even after the stream stopped.
+  const frozenAtRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (running) {
+      // New stream starting (or resuming) — clear any prior freeze.
+      frozenAtRef.current = null;
+    } else if (startedAt) {
+      // First render where running is false AND we'd already started:
+      // capture "now" so future renders use this as the end time.
+      if (frozenAtRef.current === null) {
+        frozenAtRef.current = Date.now();
+      }
+    }
+  }, [running, startedAt]);
+
   if (!startedAt || text.length === 0) return null;
-  const elapsedMs = Math.max(1, Date.now() - startedAt);
+  // While running, use the live clock. Once frozen, use the captured end
+  // time so the chip reads the final tok/s + elapsed indefinitely.
+  const now = running ? Date.now() : (frozenAtRef.current ?? Date.now());
+  const elapsedMs = Math.max(1, now - startedAt);
   const tokens = text.length / 4;
   const tps = (tokens * 1000) / elapsedMs;
   const elapsedSec = elapsedMs / 1000;

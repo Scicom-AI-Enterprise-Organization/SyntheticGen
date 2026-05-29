@@ -25,6 +25,9 @@ env:
   AWS_ROLE_ARN: arn:aws:iam::865626945255:role/Scicom-Syntheticgen-ECRAccessRole
 
 jobs:
+  # ──────────────────────────────────────────────────────────────
+  # 1. Compute next version and push tag
+  # ──────────────────────────────────────────────────────────────
   version:
     name: Compute Version
     runs-on: ubuntu-latest
@@ -65,14 +68,25 @@ jobs:
           git tag "${{ steps.bump.outputs.tag }}"
           git push origin "${{ steps.bump.outputs.tag }}"
 
+  # ──────────────────────────────────────────────────────────────
+  # 2. Build each platform natively and push a platform-tagged image
+  # ──────────────────────────────────────────────────────────────
   build:
-    name: Build & Push
+    name: Build (${{ matrix.suffix }})
     needs: version
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - platform: linux/amd64
+            runner: ubuntu-latest
+            suffix: amd64
+          - platform: linux/arm64
+            runner: ubuntu-24.04-arm
+            suffix: arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
-
-      - uses: docker/setup-qemu-action@v3
 
       - uses: docker/setup-buildx-action@v3
 
@@ -88,18 +102,49 @@ jobs:
         with:
           context: ./worker
           file: ./worker/Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platform }}
           push: true
-          tags: |
-            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.version.outputs.version }}
-            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.version.outputs.major_minor }}
-            ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          provenance: false
+          tags: ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_REPOSITORY }}:${{ needs.version.outputs.version }}-${{ matrix.suffix }}
+          cache-from: type=gha,scope=worker-${{ matrix.suffix }}
+          cache-to: type=gha,mode=max,scope=worker-${{ matrix.suffix }}
 
+  # ──────────────────────────────────────────────────────────────
+  # 3. Merge platform images into a single multi-arch manifest
+  # ──────────────────────────────────────────────────────────────
+  manifest:
+    name: Create Multi-Arch Manifest
+    needs: [version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Create and push multi-arch manifest
+        env:
+          REGISTRY:    ${{ steps.ecr-login.outputs.registry }}
+          REPOSITORY:  ${{ env.ECR_REPOSITORY }}
+          VERSION:     ${{ needs.version.outputs.version }}
+          MAJOR_MINOR: ${{ needs.version.outputs.major_minor }}
+        run: |
+          docker buildx imagetools create \
+            -t "$REGISTRY/$REPOSITORY:$VERSION" \
+            -t "$REGISTRY/$REPOSITORY:$MAJOR_MINOR" \
+            -t "$REGISTRY/$REPOSITORY:latest" \
+            "$REGISTRY/$REPOSITORY:$VERSION-amd64" \
+            "$REGISTRY/$REPOSITORY:$VERSION-arm64"
+
+  # ──────────────────────────────────────────────────────────────
+  # 4. Cut the GitHub Release once the manifest is published
+  # ──────────────────────────────────────────────────────────────
   release:
     name: Create Release
-    needs: [version, build]
+    needs: [version, manifest]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -70,6 +70,20 @@ export async function GET(
         })
       : [];
 
+  // Auto-unwrap historical double-encoded snapshots. The worker used to call
+  // `json.dumps(settings_snapshot)` AND bind to a `$N::jsonb` param — asyncpg's
+  // jsonb codec then re-encoded the already-stringified value, so the column
+  // ended up holding `"{\"mode\": \"flow-driven\", ...}"` (a JSON string) instead
+  // of the object. The write bug is fixed going forward; unwrap here so the
+  // drawer renders existing rows correctly without a DB backfill.
+  let settingsSnapshot: unknown = c.settingsSnapshot ?? null;
+  if (typeof settingsSnapshot === "string") {
+    try {
+      settingsSnapshot = JSON.parse(settingsSnapshot);
+    } catch {
+      settingsSnapshot = null;
+    }
+  }
   return new Response(
     JSON.stringify({
       id: c.id,
@@ -78,7 +92,7 @@ export async function GET(
       difficulty: c.difficulty,
       persona: c.persona?.name ?? null,
       topic: c.taxonomyNode?.name ?? null,
-      settingsSnapshot: c.settingsSnapshot ?? null,
+      settingsSnapshot,
       run: c.run
         ? {
             id: c.run.id,

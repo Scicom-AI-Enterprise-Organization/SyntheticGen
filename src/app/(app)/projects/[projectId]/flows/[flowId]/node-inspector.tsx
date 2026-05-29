@@ -213,14 +213,56 @@ function NodeFields({
       )}
 
       {node.type === "condition" && (
-        <Field label="Expression" disabled={!canWrite}>
-          <Input
-            value={asString(data.expression)}
+        <>
+          <Field label="Expression" disabled={!canWrite}>
+            <Input
+              value={asString(data.expression)}
+              disabled={!canWrite}
+              onChange={(e) => onUpdateNode(node.id, { expression: e.target.value })}
+              placeholder='e.g. "tool.status == healthy"'
+            />
+          </Field>
+          <Field
+            label="Max attempts (loop bound)"
             disabled={!canWrite}
-            onChange={(e) => onUpdateNode(node.id, { expression: e.target.value })}
-            placeholder='e.g. "tool.status == healthy"'
-          />
-        </Field>
+          >
+            <Input
+              type="number"
+              min={1}
+              max={20}
+              // Controlled input bound to the numeric `maxAttempts` field.
+              // `asString` only stringifies strings → it returned "" for a
+              // saved number and the input always rendered empty.
+              value={
+                typeof data.maxAttempts === "number"
+                  ? String(data.maxAttempts)
+                  : ""
+              }
+              disabled={!canWrite}
+              onChange={(e) => {
+                const raw = e.target.value.trim();
+                if (raw === "") {
+                  onUpdateNode(node.id, { maxAttempts: null });
+                  return;
+                }
+                const n = Number(raw);
+                onUpdateNode(node.id, {
+                  maxAttempts: Number.isFinite(n) && n > 0 ? Math.floor(n) : null,
+                });
+              }}
+              placeholder="leave empty for no limit"
+            />
+            <p className="text-[10px] text-muted-foreground">
+              Bounded loop: once this condition has been visited this many
+              times, the runner forces a branch labelled <code>exhausted</code>
+              {" / "}<code>max_retries</code>{" / "}<code>failed</code>{" / "}
+              <code>escalated</code> instead of the LLM's pick. Useful for
+              "ask the customer for their IC 3 times, then escalate"
+              patterns. Add an edge with one of those labels for the
+              runner to fall back to.
+            </p>
+          </Field>
+        </>
       )}
 
       {node.type === "end" && (

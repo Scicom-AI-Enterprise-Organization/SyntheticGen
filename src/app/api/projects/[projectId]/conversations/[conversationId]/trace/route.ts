@@ -80,13 +80,29 @@ export async function GET(
     },
   });
 
-  const events = job
+  // Auto-unwrap any double-encoded jsonb values. The worker used to call
+  // `json.dumps(value)` AND bind to a `$N::jsonb` param — asyncpg's jsonb
+  // codec then re-encoded the already-stringified value, so columns ended up
+  // holding `"{...}"` (a JSON string) instead of `{...}`. Write bug is fixed
+  // going forward; unwrap here so historical rows render correctly without a
+  // DB backfill. Applies to JobEvent.payload and Conversation.settingsSnapshot.
+  const unwrapJson = (v: unknown): unknown => {
+    if (typeof v !== "string") return v;
+    try {
+      return JSON.parse(v);
+    } catch {
+      return v;
+    }
+  };
+
+  const rawEvents = job
     ? await prisma.jobEvent.findMany({
         where: { jobId: job.id },
         orderBy: { ts: "asc" },
         select: { id: true, ts: true, kind: true, payload: true },
       })
     : [];
+  const events = rawEvents.map((e) => ({ ...e, payload: unwrapJson(e.payload) }));
 
   const trace = {
     _schemaVersion: 1,
@@ -103,7 +119,7 @@ export async function GET(
       turnCount: conv.turnCount,
       tokenCount: conv.tokenCount,
       dedupHash: conv.dedupHash,
-      settingsSnapshot: conv.settingsSnapshot,
+      settingsSnapshot: unwrapJson(conv.settingsSnapshot),
       createdAt: conv.createdAt,
       updatedAt: conv.updatedAt,
     },

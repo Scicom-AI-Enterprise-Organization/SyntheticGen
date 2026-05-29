@@ -7,6 +7,9 @@ same code path serves every backend.
 from __future__ import annotations
 
 import json
+import re
+import secrets
+import string
 import time
 from dataclasses import dataclass
 from typing import Any, AsyncIterator, Optional
@@ -105,6 +108,213 @@ def estimate_prompt_tokens(
     return max(1, total_chars // _CHARS_PER_TOKEN)
 
 
+# ── Inline tool-call sentinel parsing ─────────────────────────────────────
+# Some vLLM tool-call parsers (Mistral in particular) don't reliably stream
+# structured tool_calls in deltas — the model's raw sentinel + JSON ends up
+# inside delta.content instead, and we'd persist zero tool_calls even though
+# the model invoked them correctly. Parse the sentinel client-side as a
+# fallback. Covers Mistral's `[TOOL_CALLS]` and Qwen's `<tool_call>` formats.
+#
+# Two Mistral flavours observed in the wild:
+#   1. Non-streaming / official format — JSON array following the sentinel:
+#        [TOOL_CALLS][{"name": "...", "arguments": {...}}, ...]
+#   2. vLLM streaming format — bare identifier + JSON object, possibly
+#      concatenated for multiple calls:
+#        [TOOL_CALLS]get_weather{"location": "KL"}calculate{"expression": "1+2"}
+#
+# We accept both. The Qwen <tool_call>…</tool_call> form is also covered.
+_MISTRAL_SENTINEL = "[TOOL_CALLS]"
+_QWEN_TOOL_RE = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+_IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+
+def _find_balanced_json(text: str, start: int) -> Optional[tuple[int, int, Any]]:
+    """Find the JSON value (object or array) starting at the first
+    `{` or `[` after `start`. Returns (open_idx, end_exclusive_idx,
+    parsed_value) or None. Skips over strings (and escaped quotes) so
+    braces inside string values don't fool the matcher.
+    """
+    n = len(text)
+    i = start
+    while i < n and text[i] not in "{[":
+        if not text[i].isspace():
+            return None
+        i += 1
+    if i >= n:
+        return None
+    open_ch = text[i]
+    close_ch = "}" if open_ch == "{" else "]"
+    depth = 0
+    in_str = False
+    esc = False
+    j = i
+    while j < n:
+        ch = text[j]
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+        else:
+            if ch == '"':
+                in_str = True
+            elif ch == open_ch:
+                depth += 1
+            elif ch == close_ch:
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return i, j + 1, json.loads(text[i : j + 1])
+                    except json.JSONDecodeError:
+                        return None
+        j += 1
+    return None
+
+
+def _parse_mistral_sentinel(text: str) -> tuple[list[dict[str, Any]], str]:
+    """Parse one or more `[TOOL_CALLS]…` blocks out of `text`.
+
+    Handles both the official array form and vLLM's streaming
+    bare-name-then-object form. Returns (tool_calls, cleaned_text).
+    """
+    out: list[dict[str, Any]] = []
+    pieces: list[str] = []
+    cursor = 0
+    n = len(text)
+    while True:
+        idx = text.find(_MISTRAL_SENTINEL, cursor)
+        if idx < 0:
+            pieces.append(text[cursor:])
+            break
+        # Keep everything before the sentinel as content.
+        pieces.append(text[cursor:idx])
+        i = idx + len(_MISTRAL_SENTINEL)
+        # Skip whitespace.
+        while i < n and text[i].isspace():
+            i += 1
+        if i >= n:
+            cursor = n
+            break
+        # Case A: JSON array follows ("official" format).
+        if text[i] == "[":
+            scan = _find_balanced_json(text, i)
+            if scan and isinstance(scan[2], list):
+                for entry in scan[2]:
+                    norm = _normalise_inline_tool_call(entry)
+                    if norm:
+                        out.append(norm)
+                cursor = scan[1]
+                continue
+            # Malformed — keep the literal text as content and move on.
+            cursor = idx + len(_MISTRAL_SENTINEL)
+            pieces.append(_MISTRAL_SENTINEL)
+            continue
+        # Case B: zero or more `<name>{json}` pairs in sequence.
+        progressed = False
+        while i < n:
+            mname = _IDENT_RE.match(text, i)
+            if not mname:
+                break
+            j = mname.end()
+            # Allow optional whitespace between name and object.
+            while j < n and text[j].isspace():
+                j += 1
+            if j >= n or text[j] != "{":
+                break
+            scan = _find_balanced_json(text, j)
+            if not scan or not isinstance(scan[2], dict):
+                break
+            norm = _normalise_inline_tool_call(
+                {"name": mname.group(0), "arguments": scan[2]}
+            )
+            if norm:
+                out.append(norm)
+            i = scan[1]
+            progressed = True
+        if not progressed:
+            # Sentinel with nothing parseable after it — drop the sentinel,
+            # keep the rest as content so we don't lose model output.
+            cursor = idx + len(_MISTRAL_SENTINEL)
+            continue
+        cursor = i
+    cleaned = "".join(pieces).strip() if out else text
+    return out, cleaned
+
+
+def _new_tool_call_id() -> str:
+    alphabet = string.ascii_letters + string.digits
+    return "call_" + "".join(secrets.choice(alphabet) for _ in range(20))
+
+
+def _normalise_inline_tool_call(d: Any) -> Optional[dict[str, Any]]:
+    """Coerce a Mistral/Qwen-style {name, arguments} dict into OpenAI's
+    {id, type:"function", function:{name, arguments(JSON-string)}} shape.
+    """
+    if not isinstance(d, dict):
+        return None
+    fn = d.get("function") if isinstance(d.get("function"), dict) else None
+    name = d.get("name") or (fn.get("name") if fn else None)
+    if not isinstance(name, str) or not name:
+        return None
+    args: Any = d.get("arguments")
+    if args is None and fn:
+        args = fn.get("arguments")
+    if args is None:
+        args_str = "{}"
+    elif isinstance(args, str):
+        args_str = args
+    else:
+        try:
+            args_str = json.dumps(args, ensure_ascii=False)
+        except (TypeError, ValueError):
+            args_str = "{}"
+    return {
+        "id": d.get("id") or _new_tool_call_id(),
+        "type": "function",
+        "function": {"name": name, "arguments": args_str},
+    }
+
+
+def parse_inline_tool_calls(text: str) -> tuple[list[dict[str, Any]], str]:
+    """Scan `text` for Mistral / Qwen tool-call sentinels and parse them
+    into OpenAI-shape tool_calls.
+
+    Returns (tool_calls, cleaned_text). When no sentinel is found returns
+    ([], text) unchanged. Safe to call on any model's content — it's a
+    best-effort fallback for when the server didn't structure them.
+    """
+    if not text:
+        return [], text
+    out: list[dict[str, Any]] = []
+    cleaned = text
+
+    if _MISTRAL_SENTINEL in cleaned:
+        mistral_calls, mistral_cleaned = _parse_mistral_sentinel(cleaned)
+        if mistral_calls:
+            out.extend(mistral_calls)
+            cleaned = mistral_cleaned
+
+    # Qwen / Hermes: one or more `<tool_call>{...}</tool_call>` blocks.
+    qwen_matches = list(_QWEN_TOOL_RE.finditer(cleaned))
+    if qwen_matches:
+        parsed_any = False
+        for qm in qwen_matches:
+            try:
+                obj = json.loads(qm.group(1))
+            except json.JSONDecodeError:
+                continue
+            norm = _normalise_inline_tool_call(obj)
+            if norm:
+                out.append(norm)
+                parsed_any = True
+        if parsed_any:
+            cleaned = _QWEN_TOOL_RE.sub("", cleaned).strip()
+
+    return out, cleaned
+
+
 def _apply_reasoning_controls(
     payload: dict[str, Any],
     reasoning_effort: Optional[str],
@@ -179,10 +389,16 @@ async def chat_completion(
     started = time.perf_counter()
     async with httpx.AsyncClient(timeout=timeout) as client:
         response = await client.post(url, json=payload, headers=headers)
-        # Retry on 5xx and 429.
-        if response.status_code >= 500 or response.status_code == 429:
-            response.raise_for_status()
-        response.raise_for_status()
+        if response.status_code >= 400:
+            # Include the body in the raised error so the caller's log
+            # surfaces what upstream actually complained about (vLLM 400s
+            # often carry the specific field name in the JSON body).
+            body_snippet = response.text[:600] if response.text else ""
+            raise httpx.HTTPStatusError(
+                f"upstream {response.status_code}: {body_snippet}",
+                request=response.request,
+                response=response,
+            )
     elapsed_ms = int((time.perf_counter() - started) * 1000)
 
     raw = response.json()
@@ -190,6 +406,15 @@ async def chat_completion(
     msg = choice.get("message") or {}
     content = msg.get("content") or ""
     tool_calls = msg.get("tool_calls")
+    # Fallback: some vLLM tool-call parsers (Mistral in particular) emit
+    # the raw sentinel inside content instead of populating tool_calls,
+    # especially in streaming mode. Parse it client-side so downstream
+    # code sees a uniform shape regardless of server-side parser quirks.
+    if not tool_calls and content:
+        inline, cleaned = parse_inline_tool_calls(content)
+        if inline:
+            tool_calls = inline
+            content = cleaned
 
     usage = raw.get("usage") or {}
     tokens_in = int(usage.get("prompt_tokens") or 0)
@@ -246,6 +471,7 @@ async def chat_completion_stream(
     max_tokens: int | None = 1500,
     seed: int | None = None,
     tools: Optional[list[dict[str, Any]]] = None,
+    tool_choice: Optional[Any] = None,
     extra_headers: Optional[dict[str, str]] = None,
     timeout: float = 180.0,
     reasoning_effort: Optional[str] = None,
@@ -283,6 +509,15 @@ async def chat_completion_stream(
         payload["seed"] = seed
     if tools:
         payload["tools"] = tools
+        # vLLM's Mistral tool-call parser (and some others) only routes
+        # through the parser when tool_choice is explicitly set. Without
+        # this, Mistral returns the [TOOL_CALLS] sentinel inside the raw
+        # content text and we see zero structured tool_calls in deltas.
+        # Caller may override with "required" or {"type":"function", ...}
+        # to force a specific tool (flow action nodes use this so the
+        # configured tool actually gets invoked instead of the model
+        # answering in plain text).
+        payload["tool_choice"] = tool_choice if tool_choice is not None else "auto"
     _apply_reasoning_controls(payload, reasoning_effort, chat_template_kwargs)
 
     full: list[str] = []
@@ -370,6 +605,28 @@ async def chat_completion_stream(
         final_tool_calls = [t for t in ordered if t["function"].get("name")] or None
 
     final_text = "".join(full)
+    # Fallback: vLLM's Mistral tool-call parser frequently dumps the raw
+    # `[TOOL_CALLS][...]` sentinel into delta.content instead of streaming
+    # structured tool_calls — so the loop above accumulates nothing. Parse
+    # it client-side. Also covers Qwen-style <tool_call>...</tool_call> if
+    # a server returns it as text. Only runs when no structured tool_calls
+    # were already received, so it's a strict fallback.
+    if not final_tool_calls and final_text:
+        inline, cleaned = parse_inline_tool_calls(final_text)
+        if inline:
+            final_tool_calls = inline
+            final_text = cleaned
+            # Emit a synthetic tool_call_delta so consumers that render
+            # streaming markers ("[calling foo(...)]") still get one event
+            # per recovered call. Replays the same shape the live-streamed
+            # path produces.
+            for idx, tc in enumerate(final_tool_calls):
+                yield StreamEvent(tool_call_delta={
+                    "index": idx,
+                    "id": tc.get("id"),
+                    "name": (tc.get("function") or {}).get("name") or "",
+                    "argumentsFragment": (tc.get("function") or {}).get("arguments") or "",
+                })
     # Fallback when the upstream forgot to include `usage` despite
     # stream_options.include_usage=True. Without this we persist 0 (or, after
     # multi-turn rollup, the simulator's tiny 83-token prompt) instead of the

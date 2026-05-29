@@ -16,14 +16,20 @@ export async function GET(
     return Response.json({ error: perm.reason }, { status: 403 });
   }
 
-  // Return BOTH running and recently-terminal jobs so the Live Job Preview can
-  // replay a job's saved tokens after it's already finished. Running jobs are
-  // sorted first (live streams), then most-recent terminal jobs.
-  const [running, recent] = await Promise.all([
+  // Return active (running + queued + pending) AND recently-terminal jobs so
+  // the Live Job Preview can replay saved tokens after a job finishes AND
+  // surface jobs that were just restarted (which sit in `queued` until a
+  // worker picks them up — without including queued here, restart looked
+  // like a no-op because the job vanished from the tile list).
+  const [active, recent] = await Promise.all([
     prisma.generationJob.findMany({
-      where: { runId, run: { projectId }, status: "running" },
+      where: {
+        runId,
+        run: { projectId },
+        status: { in: ["running", "queued", "pending"] },
+      },
       select: { id: true, cellKey: true, status: true },
-      orderBy: { startedAt: "asc" },
+      orderBy: [{ startedAt: "asc" }, { createdAt: "desc" }],
       take: 32,
     }),
     prisma.generationJob.findMany({
@@ -38,5 +44,5 @@ export async function GET(
     }),
   ]);
 
-  return Response.json({ jobs: [...running, ...recent] });
+  return Response.json({ jobs: [...active, ...recent] });
 }

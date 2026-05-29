@@ -89,6 +89,87 @@ export async function GET(
         }
       };
 
+      // Shared helper: replay flow.graph + flow.step from JobEvent so the
+      // run-page visualization paints "green" past nodes whether the job
+      // is still running or already terminal. The in-process pg_notify
+      // cache only buffers events that fired AFTER the cache started
+      // listening; if the user opens a job that's already mid-flight,
+      // earlier flow.node.start events aren't in the buffer. Pulling from
+      // JobEvent here covers that gap regardless of cache state.
+      //
+      // IMPORTANT: restartable jobs accumulate MULTIPLE flow.loaded +
+      // flow.step rows (one set per attempt). We only want the CURRENT
+      // attempt's events, so we anchor on the latest flow.loaded and
+      // filter steps by ts >= that anchor. Without this, the UI replays
+      // stale nodes from prior runs and "visited" sticks on nodes that
+      // aren't actually part of the current attempt's path.
+      const replayFlowFromJobEvents = async () => {
+        const flowLoaded = await prisma.jobEvent.findFirst({
+          where: { jobId, kind: "flow.loaded" },
+          orderBy: { ts: "desc" },
+          select: { payload: true, ts: true },
+        });
+        const unwrapPayload = (v: unknown): unknown => {
+          if (typeof v !== "string") return v;
+          try {
+            return JSON.parse(v);
+          } catch {
+            return v;
+          }
+        };
+        const flowLoadedPayload = unwrapPayload(flowLoaded?.payload);
+        if (
+          !flowLoadedPayload ||
+          typeof flowLoadedPayload !== "object" ||
+          Array.isArray(flowLoadedPayload)
+        ) {
+          return;
+        }
+        const p = flowLoadedPayload as Record<string, unknown>;
+        const graph = (p.graph as Record<string, unknown> | undefined) ?? null;
+        if (graph && Array.isArray(graph.nodes) && Array.isArray(graph.edges)) {
+          send({
+            event: "flow.graph",
+            flowId: typeof p.flowId === "string" ? p.flowId : "",
+            name: typeof p.name === "string" ? p.name : null,
+            nodes: graph.nodes,
+            edges: graph.edges,
+          });
+        }
+        const steps = await prisma.jobEvent.findMany({
+          where: {
+            jobId,
+            kind: "flow.step",
+            // Only the current attempt's steps. flowLoaded.ts is non-null
+            // when flowLoaded exists (we just queried it above).
+            ts: { gte: flowLoaded?.ts ?? new Date(0) },
+          },
+          orderBy: { ts: "asc" },
+          select: { payload: true },
+        });
+        for (const ev of steps) {
+          const sp = unwrapPayload(ev.payload);
+          if (!sp || typeof sp !== "object" || Array.isArray(sp)) continue;
+          const s = sp as Record<string, unknown>;
+          const node = typeof s.node === "string" ? s.node : "";
+          const kind = typeof s.kind === "string" ? s.kind : "";
+          const label = typeof s.label === "string" ? s.label : null;
+          send({ event: "flow.node.start", node, kind, label });
+          send({
+            event: "flow.step",
+            node,
+            kind,
+            label,
+            userText: typeof s.userText === "string" ? s.userText : "",
+            chosenLabel: typeof s.chosenLabel === "string" ? s.chosenLabel : null,
+            options: Array.isArray(s.options) ? s.options : [],
+            outcome: typeof s.outcome === "string" ? s.outcome : null,
+            finalContentChars:
+              typeof s.finalContentChars === "number" ? s.finalContentChars : null,
+          });
+        }
+      };
+
       try {
         send({ event: "open", jobId });
 
@@ -139,6 +220,83 @@ export async function GET(
             shutdown();
             return;
           }
+          await replayFlowFromJobEvents();
+
+          // Pull every "user.simulator.request" + "user.simulator.response"
+          // JobEvent so we can replay the simulator-prompt cards BEFORE the
+          // user turns they produced AND fill in the streamed reasoning +
+          // output that landed inside each card. Keyed by purpose
+          // (`user_turn_1_*` / `user_turn_N`) so the message-replay loop
+          // below can pop the matching one as each user turn comes up.
+          const simEvents = await prisma.jobEvent.findMany({
+            where: {
+              jobId,
+              kind: { in: ["user.simulator.request", "user.simulator.response"] },
+            },
+            orderBy: { ts: "asc" },
+            select: { kind: true, payload: true },
+          });
+          const simReqByTurn = new Map<number, Record<string, unknown>>();
+          const simRespByTurn = new Map<number, Record<string, unknown>>();
+          // Some historical JobEvent.payload rows are double-encoded JSON
+          // strings (asyncpg jsonb codec + a `json.dumps()` upstream both
+          // ran). Unwrap on read so old rows replay correctly.
+          const unwrap = (v: unknown): unknown => {
+            if (typeof v !== "string") return v;
+            try {
+              return JSON.parse(v);
+            } catch {
+              return v;
+            }
+          };
+          for (const ev of simEvents) {
+            const raw = unwrap(ev.payload);
+            if (!raw || typeof raw !== "object" || Array.isArray(raw)) continue;
+            const p = raw as Record<string, unknown>;
+            const purpose = typeof p.purpose === "string" ? p.purpose : "";
+            // user_turn_1_tool_aware / user_turn_1_seed → turn 1.
+            // user_turn_<N> for follow-ups.
+            const m = purpose.match(/^user_turn_(\d+)/);
+            if (!m) continue;
+            const turn = Number(m[1]);
+            if (ev.kind === "user.simulator.request") simReqByTurn.set(turn, p);
+            else simRespByTurn.set(turn, p);
+          }
+          const emitSimRequest = (turn: number) => {
+            const p = simReqByTurn.get(turn);
+            if (!p) return;
+            const system = typeof p.system === "string" ? p.system : "";
+            const SSE_MAX = 5500;
+            const truncated = system.length > SSE_MAX;
+            const purpose = typeof p.purpose === "string" ? p.purpose : "";
+            send({
+              event: "simulator.request",
+              purpose,
+              model: typeof p.model === "string" ? p.model : "",
+              temperature: typeof p.temperature === "number" ? p.temperature : null,
+              max_tokens: typeof p.max_tokens === "number" ? p.max_tokens : null,
+              system: truncated ? system.slice(0, SSE_MAX) : system,
+              user_msg: typeof p.user === "string" ? p.user : "",
+              system_chars: system.length,
+              truncated,
+            });
+            // Synthesize the streamed response as a single reasoning chunk
+            // + single content chunk. The live preview's appendSimulatorDelta
+            // reducer doesn't care whether the text arrived in one chunk or
+            // 1000 — same final state either way.
+            const resp = simRespByTurn.get(turn);
+            if (!resp) return;
+            const reasoning =
+              typeof resp.reasoning_content === "string" ? resp.reasoning_content : "";
+            const content = typeof resp.content === "string" ? resp.content : "";
+            if (reasoning) {
+              send({ event: "simulator.delta", purpose, reasoning: true, text: reasoning });
+            }
+            if (content) {
+              send({ event: "simulator.delta", purpose, reasoning: false, text: content });
+            }
+          };
+
           // Pull all assistant messages from the conversation (single-turn jobs
           // produce one; multi-turn jobs produce N). We replay reasoning first
           // then content for each, with [turn N] headers so the UI shows the
@@ -180,6 +338,9 @@ export async function GET(
               if (m.role === "user") {
                 userTurnNum += 1;
                 assistantOpened = false;
+                // Replay the user-simulator request card (if we captured one
+                // for this turn) immediately BEFORE the user turn it produced.
+                emitSimRequest(userTurnNum);
                 send({
                   event: "turn.user",
                   turn: userTurnNum,
@@ -254,10 +415,25 @@ export async function GET(
           return;
         }
 
+        // Replay the flow graph + already-fired flow.step events from
+        // JobEvent BEFORE subscribing to live deltas. The in-process
+        // pg_notify cache is started lazily on first subscriber, so for
+        // jobs that started before this Next.js process did (dev-server
+        // restart, page opened mid-flight), the cache has no buffered
+        // flow.node.start events to replay. Without this, the run-page
+        // visualization opens with every past node marked "unvisited"
+        // (transparent) instead of green/done — the user only ever sees
+        // the currently-active node highlighted.
+        await replayFlowFromJobEvents();
+
         // Subscribe via the process-wide cache (already started above).
-        // `subscribeJobEvents` replays past events to the handler
-        // SYNCHRONOUSLY before registering for future ones, so live and
-        // historical events arrive in strict order with no interleaving.
+        // `subscribeJobEvents` replays buffered cache events to the
+        // handler SYNCHRONOUSLY before registering for future ones, so
+        // live and historical events arrive in strict order with no
+        // interleaving. The flow replay above + cache replay here are
+        // complementary: JobEvent replay guarantees the graph + visited
+        // nodes; the cache replay catches any delta/tool events the
+        // cache buffered for this job.
         unsubscribe = subscribeJobEvents(jobId, (parsed) => {
           send(parsed);
           if (parsed.event === "done") {

@@ -21,7 +21,7 @@ from typing import Any, Awaitable, Callable
 
 from . import db
 from .ids import cuid_like
-from .providers import chat_completion, chat_completion_stream
+from .providers import chat_completion, chat_completion_stream, estimate_cost
 from .validators import ValidatorContext, run_pipeline
 
 
@@ -74,14 +74,23 @@ def _parse_json_list(v: Any) -> list[dict[str, Any]]:
 
 
 async def _load_tool_defs(tool_ids: list[str]) -> list[dict[str, Any]]:
-    """Load ToolDef rows by id. Returns OpenAI-tools-formatted entries plus the
-    raw row so we can synthesize mock responses."""
+    """Load ToolDef rows by id OR name.
+
+    The flow editor stores `toolIds` as tool NAMES on action nodes
+    (e.g. "banking_customer_inquiry_lookup"), not as DB ids. So we
+    accept both — querying with `id = ANY(...) OR name = ANY(...)`.
+    Without the OR-on-name fallback, every flow action's `tools_for_call`
+    came back empty and the model never got a tool catalog to invoke,
+    which is why "Lookup Customer Inquiry" produced plain text instead
+    of calling `banking_customer_inquiry_lookup`.
+    """
     if not tool_ids:
         return []
     rows = await db.fetch_all(
         """
         SELECT id, name, description, parameters, "mockSeed", "mockResponseSchema", examples
-        FROM "ToolDef" WHERE id = ANY($1::text[])
+        FROM "ToolDef"
+        WHERE id = ANY($1::text[]) OR name = ANY($1::text[])
         """,
         tool_ids,
     )
@@ -155,6 +164,218 @@ def _find_start(nodes: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 # ───── intent → user utterance ───────────────────────────────────────────────
 
+async def _stream_helper_text(
+    *,
+    sys: str,
+    user: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+    extra_headers: dict[str, Any] | None,
+    temperature: float,
+    max_tokens: int,
+    job_id: str | None,
+    run_id: str | None,
+    node_id: str | None,
+) -> tuple[str, int, int]:
+    """Common pattern for the start/intent/bridge helpers: stream a small
+    LLM call and emit `flow.delta` (reasoning + content) tagged with
+    `node_id` so the live preview surfaces the model's thinking inside
+    the matching flow_node card instead of leaving it on `running…`.
+
+    Returns (final_content, tokens_in, tokens_out)."""
+    content_parts: list[str] = []
+    tokens_in = 0
+    tokens_out = 0
+    async for ev in chat_completion_stream(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        messages=[
+            {"role": "system", "content": sys},
+            {"role": "user", "content": user},
+        ],
+        temperature=temperature,
+        max_tokens=max_tokens,
+        extra_headers=extra_headers,
+    ):
+        if ev.done:
+            tokens_in = ev.tokens_in
+            tokens_out = ev.tokens_out
+            break
+        if ev.delta:
+            if not ev.reasoning:
+                content_parts.append(ev.delta)
+            if job_id and run_id and node_id:
+                await _emit_event(
+                    job_id, run_id,
+                    event="flow.delta",
+                    node=node_id,
+                    reasoning=bool(ev.reasoning),
+                    text=ev.delta,
+                )
+    return "".join(content_parts).strip().strip('"').strip("'"), tokens_in, tokens_out
+
+
+async def _start_to_user_greeting(
+    *,
+    start_data: dict[str, Any],
+    persona_ctx: dict[str, Any],
+    lang_ctx: dict[str, Any],
+    base_url: str,
+    api_key: str,
+    model: str,
+    extra_headers: dict[str, Any] | None,
+    job_id: str | None = None,
+    run_id: str | None = None,
+    node_id: str | None = None,
+) -> str:
+    """Generate the FIRST user-side greeting for the flow.
+
+    Was a no-op (the start node just transitioned), which left the saved
+    conversation starting with the intent paraphrase as the only user turn.
+    Now produces a short, persona-aware "hello, I need help with…" so the
+    transcript opens like a real customer conversation. Falls back to a
+    deterministic greeting on any LLM failure.
+    """
+    label = start_data.get("label") or "Greeting"
+    sys = (
+        "Produce ONE short user-side opening greeting (1-2 sentences) the "
+        "customer would type to start a support conversation. Respond in the "
+        "target language and register, in character for the persona. Don't "
+        "state the full problem yet — just a hello + brief intent like 'I "
+        "need help with my account'. Return ONLY the utterance — no preamble, "
+        "no quotes, no role tag, no markdown."
+    )
+    user = (
+        f"Start-node label: {label}\n"
+        f"Persona: {json.dumps(persona_ctx, ensure_ascii=False)}\n"
+        f"Language: {lang_ctx.get('primary')} ({lang_ctx.get('register')})\n"
+    )
+    try:
+        text, _, _ = await _stream_helper_text(
+            sys=sys, user=user,
+            base_url=base_url, api_key=api_key, model=model,
+            extra_headers=extra_headers,
+            temperature=0.8, max_tokens=2048,
+            job_id=job_id, run_id=run_id, node_id=node_id,
+        )
+        if text:
+            return text
+    except Exception as e:  # noqa: BLE001
+        log.warning("start greeting generation failed: %s", e)
+    # Deterministic fallback so the saved conversation always opens with
+    # SOMETHING customer-shaped.
+    lang = (lang_ctx.get("primary") or "ms").lower()
+    if lang.startswith("ms"):
+        return "Selamat sejahtera, saya perlukan bantuan."
+    return "Hello, I need some help, please."
+
+
+async def _simulate_user_follow_up(
+    *,
+    persona_ctx: dict[str, Any],
+    lang_ctx: dict[str, Any],
+    messages: list[dict[str, Any]],
+    base_url: str,
+    api_key: str,
+    model: str,
+    extra_headers: dict[str, Any] | None,
+    job_id: str | None = None,
+    run_id: str | None = None,
+    node_id: str | None = None,
+) -> str:
+    """Generate a single in-character user reply continuing the conversation.
+
+    Used to bridge two consecutive action nodes that would otherwise produce
+    back-to-back assistant turns. The resulting message is PERSISTED to
+    `messages`, so the saved transcript reads as a natural user → assistant
+    → user → assistant alternation rather than several assistant messages
+    glued together with an internal nudge.
+    """
+    transcript_tail = _short_transcript(messages, max_chars=2000)
+    sys = (
+        "You are role-playing the USER side of a customer-support conversation. "
+        "Given the persona and the recent transcript, write ONE short user "
+        "reply (1-2 sentences) that continues the conversation naturally — "
+        "ask a follow-up, provide a detail the assistant requested, or push "
+        "for the next step. Stay in character + in the target language. "
+        "Return ONLY the user's utterance — no preamble, no quotes, no role "
+        "tag, no markdown, no [END] sentinel."
+    )
+    user = (
+        f"Persona: {json.dumps(persona_ctx, ensure_ascii=False)}\n"
+        f"Language: {lang_ctx.get('primary')} ({lang_ctx.get('register')})\n\n"
+        f"Recent transcript:\n{transcript_tail}\n\n"
+        "Write the user's next reply now."
+    )
+    try:
+        text, _, _ = await _stream_helper_text(
+            sys=sys, user=user,
+            base_url=base_url, api_key=api_key, model=model,
+            extra_headers=extra_headers,
+            temperature=0.8, max_tokens=2048,
+            job_id=job_id, run_id=run_id, node_id=node_id,
+        )
+        if text:
+            return text
+    except Exception as e:  # noqa: BLE001
+        log.warning("user follow-up generation failed: %s", e)
+    # Mild fallback — better than a hard "(Please proceed...)" string in
+    # the dataset, but still flags itself as a fallback for reviewers.
+    lang = (lang_ctx.get("primary") or "ms").lower()
+    if lang.startswith("ms"):
+        return "Boleh teruskan?"
+    return "Could you continue?"
+
+
+async def _generate_assistant_ack(
+    *,
+    persona_ctx: dict[str, Any],
+    lang_ctx: dict[str, Any],
+    messages: list[dict[str, Any]],
+    base_url: str,
+    api_key: str,
+    model: str,
+    extra_headers: dict[str, Any] | None,
+    job_id: str | None = None,
+    run_id: str | None = None,
+    node_id: str | None = None,
+) -> str:
+    """Generate a brief assistant acknowledgment used to bridge two
+    consecutive user messages (e.g. start_greet's hello → intent_node's
+    actual request). Keeps the saved transcript alternating."""
+    transcript_tail = _short_transcript(messages, max_chars=1500)
+    sys = (
+        "You are a customer-support assistant. Produce ONE short reply "
+        "(1-2 sentences) that politely acknowledges the customer's greeting "
+        "and invites them to share their question. Respond in the target "
+        "language and register. Return ONLY the reply — no preamble, no "
+        "quotes, no markdown."
+    )
+    user = (
+        f"Persona of the customer: {json.dumps(persona_ctx, ensure_ascii=False)}\n"
+        f"Language: {lang_ctx.get('primary')} ({lang_ctx.get('register')})\n\n"
+        f"Recent transcript:\n{transcript_tail}\n\nWrite the assistant's reply now."
+    )
+    try:
+        text, _, _ = await _stream_helper_text(
+            sys=sys, user=user,
+            base_url=base_url, api_key=api_key, model=model,
+            extra_headers=extra_headers,
+            temperature=0.5, max_tokens=2048,
+            job_id=job_id, run_id=run_id, node_id=node_id,
+        )
+        if text:
+            return text
+    except Exception as e:  # noqa: BLE001
+        log.warning("assistant ack generation failed: %s", e)
+    lang = (lang_ctx.get("primary") or "ms").lower()
+    if lang.startswith("ms"):
+        return "Selamat sejahtera. Bagaimana saya boleh bantu anda hari ini?"
+    return "Hello, how can I help you today?"
+
+
 async def _intent_to_user_text(
     *,
     intent_data: dict[str, Any],
@@ -165,44 +386,86 @@ async def _intent_to_user_text(
     model: str,
     extra_headers: dict[str, Any] | None,
     rng: random.Random,
+    job_id: str | None = None,
+    run_id: str | None = None,
+    node_id: str | None = None,
 ) -> str:
-    """Pick an example utterance verbatim if available, else paraphrase from
-    the intent description via a quick LLM call so the turn lands in the right
-    persona/language."""
-    examples = intent_data.get("examples")
-    if isinstance(examples, list) and examples:
-        candidates = [e for e in examples if isinstance(e, str) and e.strip()]
-        if candidates:
-            return rng.choice(candidates)
-
+    """Produce ONE short user-side utterance that expresses this intent
+    in character. Always routes through the LLM so the live preview can
+    stream reasoning + content into the intent flow_node card. Any
+    `examples` from the flow are used as SEED material the model riffs
+    on — not as a verbatim shortcut — so two cells with the same flow
+    don't produce the same exact opening user message and the live
+    preview always shows the model thinking.
+    """
     label = intent_data.get("label") or "user intent"
     description = intent_data.get("description") or ""
+    examples = intent_data.get("examples") or []
+    examples_block = ""
+    if isinstance(examples, list) and examples:
+        # Show all examples to the model so it can riff on tone/length,
+        # and pick one as the primary seed to anchor the variation.
+        sampled = [e for e in examples if isinstance(e, str) and e.strip()]
+        if sampled:
+            seed = rng.choice(sampled)
+            examples_block = (
+                f"Reference examples (DON'T copy verbatim — riff in your own words):\n"
+                + "\n".join(f"- {e}" for e in sampled)
+                + f"\n\nUse this one as the primary seed for tone + length:\n  → {seed}\n\n"
+            )
     sys = (
         "Produce ONE short user-side utterance (1-2 sentences) that expresses "
         "the intent below. Respond in the target language and register, in "
-        "character for the given persona. Return ONLY the utterance — no "
-        "preamble, no quotes, no role tag."
+        "character for the given persona. If reference examples are provided, "
+        "vary the wording naturally rather than echoing them verbatim.\n\n"
+        "If the intent involves looking up records, transactions, accounts, "
+        "or contacting a service that would need identifying information, "
+        "INCLUDE realistic Malaysian identifiers naturally in the utterance "
+        "— e.g. a MyKad number in `XXXXXX-XX-XXXX` format that matches a "
+        "plausible birthdate, a 10-16 digit account number, a `+60` mobile, "
+        "or a ticket reference like `TCKT-2024XXXXXX`. Real customers "
+        "volunteer this info when asking for help; doing the same here "
+        "lets downstream tools call with valid arguments instead of "
+        "placeholder text.\n\n"
+        "Return ONLY the utterance — no preamble, no quotes, no role tag."
     )
     user = (
         f"Intent label: {label}\n"
         f"Intent description: {description}\n"
         f"Persona: {json.dumps(persona_ctx, ensure_ascii=False)}\n"
-        f"Language: {lang_ctx.get('primary')} ({lang_ctx.get('register')})\n"
+        f"Language: {lang_ctx.get('primary')} ({lang_ctx.get('register')})\n\n"
+        f"{examples_block}"
     )
     try:
-        r = await chat_completion(
-            base_url=base_url,
-            api_key=api_key,
-            model=model,
-            messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
-            temperature=0.7,
-            max_tokens=200,
+        text, _, _ = await _stream_helper_text(
+            sys=sys, user=user,
+            base_url=base_url, api_key=api_key, model=model,
             extra_headers=extra_headers,
+            temperature=0.7, max_tokens=2048,
+            job_id=job_id, run_id=run_id, node_id=node_id,
         )
-        text = (r.content or "").strip().strip('"').strip("'")
-        return text or label
+        if text:
+            return text
+        # Reasoning blew the whole token budget on <think>: content came
+        # back empty. Don't fall back to the literal node-label like
+        # "Identify Customer Intent" — that's developer-facing wording a
+        # real customer would never say. Prefer a seed example verbatim
+        # if any, else a generic in-language opener so the dataset stays
+        # realistic.
+        if examples:
+            sampled = [e for e in examples if isinstance(e, str) and e.strip()]
+            if sampled:
+                return rng.choice(sampled)
+        lang = (lang_ctx.get("primary") or "ms").lower()
+        if lang.startswith("ms"):
+            return "Saya ada satu hal yang ingin saya tanya."
+        return "I have a question I'd like help with."
     except Exception as e:  # noqa: BLE001
         log.warning("intent paraphrase failed: %s", e)
+        if examples:
+            sampled = [e for e in examples if isinstance(e, str) and e.strip()]
+            if sampled:
+                return rng.choice(sampled)
         return label
 
 
@@ -381,6 +644,7 @@ def _synthesize_stub_response(
 async def _run_action(
     *,
     action_data: dict[str, Any],
+    node_id: str,
     tool_defs_by_id: dict[str, dict[str, Any]],
     messages: list[dict[str, Any]],
     base_url: str,
@@ -391,6 +655,8 @@ async def _run_action(
     extra_headers: dict[str, Any] | None,
     reasoning_effort: str | None,
     chat_template_kwargs: dict[str, Any] | None,
+    job_id: str | None = None,
+    run_id: str | None = None,
 ) -> dict[str, Any]:
     """Run one action node. Returns a dict with the new messages appended (also
     mutates `messages` in-place) and aggregated token/cost counters."""
@@ -398,30 +664,112 @@ async def _run_action(
     tools_for_call = [tool_defs_by_id[i] for i in tool_ids if i in tool_defs_by_id]
     tools_payload = _tools_payload(tools_for_call) if tools_for_call else None
 
+    # The outer flow loop guarantees the tail of `messages` isn't an
+    # assistant turn before this action runs — it bridges with a real
+    # synthesized user follow-up turn when the prior action left an
+    # assistant message at the end. So we can send `messages` directly
+    # to chat_completion_stream without an in-call nudge, and the saved
+    # conversation alternates user → assistant → user → assistant
+    # naturally.
     tokens_in = 0
     tokens_out = 0
     cost_usd = 0.0
 
     # The model can chain tool calls; cap at _TOOL_CALL_LIMIT.
-    for _ in range(_TOOL_CALL_LIMIT):
-        result = await chat_completion(
+    # Track the final model/latency so the return value is accurate even if
+    # the last call streamed (we no longer get a single result object back).
+    upstream_model = model
+    last_latency_ms = 0
+    for iter_i in range(_TOOL_CALL_LIMIT):
+        call_messages = messages
+
+        # Action nodes with toolIds expect the model to actually invoke
+        # the configured tool — without forcing tool_choice, reasoning
+        # models routinely answer in plain text and the flow ends with
+        # zero `role: "tool"` rows in the saved dataset. So on the FIRST
+        # iteration we pin tool_choice to:
+        #   - the single tool's name when exactly one is configured (the
+        #     common case for flow action nodes — each step has one tool)
+        #   - "required" when multiple are configured (let the model
+        #     decide which, but it MUST pick one)
+        # Subsequent iterations fall back to "auto" so the model can
+        # either chain another tool call or wrap up with content.
+        tool_choice: Any = None
+        if tools_payload and iter_i == 0:
+            if len(tools_payload) == 1:
+                forced_name = tools_payload[0]["function"]["name"]
+                tool_choice = {"type": "function", "function": {"name": forced_name}}
+            else:
+                tool_choice = "required"
+
+        # Stream the call so the live preview can render content + reasoning
+        # tokens as they arrive (same UX the non-flow path already gets).
+        # Per-delta `flow.delta` events are tagged with the node_id so the
+        # UI knows which flow node the text belongs to.
+        stream_content: list[str] = []
+        stream_reasoning: list[str] = []
+        stream_tool_calls = None
+        stream_tokens_in = 0
+        stream_tokens_out = 0
+        stream_full_text = ""
+        t_start = time.perf_counter()
+        async for ev in chat_completion_stream(
             base_url=base_url,
             api_key=api_key,
             model=model,
-            messages=messages,
+            messages=call_messages,
             tools=tools_payload,
+            tool_choice=tool_choice,
             temperature=temperature,
             max_tokens=max_tokens,
             extra_headers=extra_headers,
             reasoning_effort=reasoning_effort,
             chat_template_kwargs=chat_template_kwargs,
-        )
-        tokens_in += result.tokens_in
-        tokens_out += result.tokens_out
-        cost_usd += result.cost_usd
+        ):
+            if ev.done:
+                stream_tokens_in = ev.tokens_in
+                stream_tokens_out = ev.tokens_out
+                stream_tool_calls = ev.tool_calls
+                stream_full_text = ev.full_text or ""
+                if ev.model:
+                    upstream_model = ev.model
+                break
+            if ev.delta and job_id and run_id:
+                if ev.reasoning:
+                    stream_reasoning.append(ev.delta)
+                else:
+                    stream_content.append(ev.delta)
+                await _emit_event(
+                    job_id, run_id,
+                    event="flow.delta",
+                    node=node_id,
+                    reasoning=bool(ev.reasoning),
+                    text=ev.delta,
+                )
+            elif ev.delta:
+                if ev.reasoning:
+                    stream_reasoning.append(ev.delta)
+                else:
+                    stream_content.append(ev.delta)
+            if ev.tool_call_delta and job_id and run_id:
+                tcd = ev.tool_call_delta
+                await _emit_event(
+                    job_id, run_id,
+                    event="flow.tool_call.frag",
+                    node=node_id,
+                    index=int(tcd.get("index", 0)),
+                    name=tcd.get("name") or "",
+                    fragment=tcd.get("argumentsFragment") or "",
+                )
+        last_latency_ms = int((time.perf_counter() - t_start) * 1000)
+        tokens_in += stream_tokens_in
+        tokens_out += stream_tokens_out
+        cost_usd += estimate_cost(upstream_model, stream_tokens_in, stream_tokens_out)
 
-        tool_calls = result.tool_calls or []
-        content = result.content or ""
+        tool_calls = stream_tool_calls or []
+        # Prefer the providers-layer cleaned full_text (sentinel stripped
+        # for Mistral inline tool_calls). Falls back to joined deltas.
+        content = stream_full_text or "".join(stream_content)
 
         if tool_calls:
             assistant_msg = {
@@ -431,7 +779,9 @@ async def _run_action(
             }
             messages.append(assistant_msg)
 
-            # Synthesize a result for each tool call in order.
+            # Synthesize a result for each tool call in order. Pass an
+            # on_delta callback to stream the synthetic backend's response
+            # (Qwen's "thinking" + JSON) into the live preview.
             for tc in assistant_msg["tool_calls"]:
                 fn = tc.get("function") or {}
                 tool_name = fn.get("name")
@@ -439,11 +789,30 @@ async def _run_action(
                 tool_def = next(
                     (t for t in tools_for_call if t.get("name") == tool_name), None
                 )
+                if job_id and run_id:
+                    await _emit_event(
+                        job_id, run_id,
+                        event="flow.tool.mock.start",
+                        node=node_id,
+                        name=tool_name,
+                        argsPreview=args_text[:300],
+                    )
                 if tool_def is None:
                     tool_result = json.dumps(
                         {"error": f"unknown tool {tool_name!r}"}, ensure_ascii=False
                     )
                 else:
+                    async def _tool_delta(text: str, reasoning: bool = False, _node=node_id, _name=tool_name) -> None:
+                        if not (job_id and run_id):
+                            return
+                        await _emit_event(
+                            job_id, run_id,
+                            event="flow.tool.mock.delta",
+                            node=_node,
+                            tool=_name,
+                            reasoning=bool(reasoning),
+                            text=text,
+                        )
                     tool_result = await _mock_tool_result(
                         tool_def=tool_def,
                         args_text=args_text,
@@ -457,6 +826,18 @@ async def _run_action(
                         },
                         reasoning_effort=reasoning_effort,
                         chat_template_kwargs=chat_template_kwargs,
+                        on_delta=_tool_delta if (job_id and run_id) else None,
+                    )
+                if job_id and run_id:
+                    preview = tool_result.replace("\n", " ")
+                    if len(preview) > 400:
+                        preview = preview[:400] + "…"
+                    await _emit_event(
+                        job_id, run_id,
+                        event="flow.tool.result",
+                        node=node_id,
+                        name=tool_name,
+                        preview=preview,
                     )
                 messages.append({
                     "role": "tool",
@@ -473,8 +854,8 @@ async def _run_action(
             "tokens_in": tokens_in,
             "tokens_out": tokens_out,
             "cost_usd": cost_usd,
-            "model": result.model,
-            "latency_ms": result.latency_ms,
+            "model": upstream_model,
+            "latency_ms": last_latency_ms,
             "final_content": content,
         }
 
@@ -493,6 +874,60 @@ async def _run_action(
     }
 
 
+def _sanitize_tool_args(args: str) -> str:
+    """Best-effort cleanup of a tool_call.arguments JSON string.
+
+    Reasoning models forced to invoke a tool (tool_choice="required" /
+    function-pinned) sometimes emit invalid JSON — e.g. unclosed strings
+    followed by streams of raw \\t / \\n characters. When we echo that
+    assistant message back on the next iteration, vLLM tries to re-parse
+    the arguments field and 400s with "Invalid control character".
+
+    Strategy:
+      1. If args parses cleanly → re-serialize via json.dumps so the
+         output is canonical / control-char-safe.
+      2. If not, escape raw control chars (0x00–0x1F except already-
+         escaped ones) and try again.
+      3. If still broken → fall back to "{}" so the next iteration's
+         conversation history stays valid JSON; the model will react
+         to the empty-args call shape.
+    """
+    if not isinstance(args, str) or not args:
+        return "{}"
+    try:
+        parsed = json.loads(args)
+        if isinstance(parsed, (dict, list)):
+            return json.dumps(parsed, ensure_ascii=False)
+        return "{}"
+    except (json.JSONDecodeError, ValueError):
+        pass
+    # Replace raw control chars inside what should be JSON strings.
+    # `ensure_ascii=False` keeps Unicode readable; control chars get
+    # mapped to their \uXXXX form which IS valid JSON inside a string.
+    cleaned_chars: list[str] = []
+    for ch in args:
+        cp = ord(ch)
+        if cp < 0x20 and ch not in "\n\r":
+            # Map raw control chars to a space so the JSON parser doesn't
+            # choke. We can't preserve them as \uXXXX from outside string
+            # context, so a space is the safest cross-context replacement.
+            cleaned_chars.append(" ")
+        else:
+            cleaned_chars.append(ch)
+    cleaned = "".join(cleaned_chars)
+    try:
+        parsed = json.loads(cleaned)
+        if isinstance(parsed, (dict, list)):
+            return json.dumps(parsed, ensure_ascii=False)
+    except (json.JSONDecodeError, ValueError):
+        pass
+    log.warning(
+        "tool_call.arguments failed to parse even after sanitization; falling back to {}. raw=%r",
+        args[:200],
+    )
+    return "{}"
+
+
 def _normalise_tool_calls(raw: Any) -> list[dict[str, Any]]:
     if not isinstance(raw, list):
         return []
@@ -504,16 +939,18 @@ def _normalise_tool_calls(raw: Any) -> list[dict[str, Any]]:
         name = fn.get("name") if isinstance(fn, dict) else None
         args = fn.get("arguments") if isinstance(fn, dict) else tc.get("arguments")
         if isinstance(args, (dict, list)):
-            args = json.dumps(args, ensure_ascii=False)
+            args_str = json.dumps(args, ensure_ascii=False)
         elif args is None:
-            args = "{}"
-        elif not isinstance(args, str):
-            args = str(args)
+            args_str = "{}"
+        elif isinstance(args, str):
+            args_str = _sanitize_tool_args(args)
+        else:
+            args_str = "{}"
         if name:
             out.append({
                 "id": tc.get("id") or cuid_like(),
                 "type": "function",
-                "function": {"name": name, "arguments": args},
+                "function": {"name": name, "arguments": args_str},
             })
     return out
 
@@ -529,6 +966,11 @@ async def _pick_condition_branch(
     api_key: str,
     model: str,
     extra_headers: dict[str, Any] | None,
+    job_id: str | None = None,
+    run_id: str | None = None,
+    node_id: str | None = None,
+    attempt: int = 1,
+    max_attempts: int | None = None,
 ) -> int:
     """Return the index into `candidates` of the chosen outgoing edge.
     Falls back to 0 (first edge) on any failure."""
@@ -540,40 +982,132 @@ async def _pick_condition_branch(
     label = condition_data.get("label") or "branch"
     expression = condition_data.get("expression") or ""
     options_lines = []
+    fallback_indices: list[int] = []  # "unknown"/"default"/"other" options
     for i, (_tgt, lbl) in enumerate(candidates):
-        options_lines.append(f"{i}: {lbl or '(no label)'}")
+        lbl_str = (lbl or "(no label)")
+        options_lines.append(f"{i}: {lbl_str}")
+        if isinstance(lbl, str) and lbl.lower() in {
+            "unknown", "default", "other", "none", "fallback", "escalated",
+        }:
+            fallback_indices.append(i)
     options_text = "\n".join(options_lines)
-    transcript_tail = _short_transcript(messages, max_chars=2000)
+
+    # Extract the LATEST tool result so the picker can route on it
+    # explicitly — without this, the picker only saw a 2000-char
+    # truncated transcript that often clipped the relevant JSON and
+    # the model defaulted to the "unknown" / fallback branch even
+    # when the tool result clearly mapped to a real branch.
+    last_tool_result_excerpt = ""
+    for m in reversed(messages):
+        if m.get("role") == "tool":
+            content = (m.get("content") or "")
+            last_tool_result_excerpt = content[:1500]
+            break
+    transcript_tail = _short_transcript(messages, max_chars=2500)
+
+    fallback_hint = (
+        f"\n\nIMPORTANT: option(s) {fallback_indices} are fallback / "
+        f"\"unknown\" branches. Pick a fallback ONLY when no other option "
+        f"genuinely fits the data. If the tool result or transcript hints "
+        f"at ANY non-fallback option, choose THAT — flows that always end "
+        f"on the fallback branch are useless for the dataset."
+        if fallback_indices else ""
+    )
 
     sys = (
-        "You are a flow router. Given the conversation so far and a branching "
-        "condition, choose which outgoing edge to follow. Return ONLY a single "
-        "integer (the chosen option index). No surrounding text."
+        "You are a flow router. Read the conversation + the latest tool "
+        "result, then choose which outgoing edge to follow. Tool results "
+        "often contain fields that map directly to one of the option "
+        "labels (e.g. inquiry_type, status, category). Map them. Pick "
+        "the most specific option that fits. Reasoning is fine, but your "
+        "FINAL line must be ONLY a single integer — the chosen option "
+        "index. No surrounding text on the final line." + fallback_hint
     )
+    attempt_block = ""
+    if max_attempts:
+        attempt_block = (
+            f"\nLoop attempt: this condition has been visited "
+            f"{attempt} time(s) so far, out of a configured maximum of "
+            f"{max_attempts}. If retrying would push attempts beyond "
+            f"the maximum, prefer an `exhausted` / `failed` / "
+            f"`escalated` branch when available.\n"
+        )
     user = (
         f"Condition: {label}\n"
-        f"Expression: {expression}\n\n"
+        f"Expression: {expression}\n"
+        f"{attempt_block}\n"
         f"Options:\n{options_text}\n\n"
-        f"Recent transcript:\n{transcript_tail}"
+        + (
+            f"Most recent tool result (use this to pick):\n```\n{last_tool_result_excerpt}\n```\n\n"
+            if last_tool_result_excerpt else ""
+        )
+        + f"Recent transcript:\n{transcript_tail}\n\n"
+        "Final answer (integer only):"
     )
     try:
-        r = await chat_completion(
+        # max_tokens needs to be large enough for reasoning models (Qwen3
+        # thinking, Mistral with --reasoning-parser) to finish their
+        # <think> block AND emit the integer answer. The old budget of 8
+        # was content-only sizing — reasoning models burned all of it on
+        # thinking, returned empty content, and we fell back to 0 (the
+        # first edge label, usually "billing"), making every flow look
+        # like it always routes to billing. 2048 gives reasoning room
+        # plus the trailing integer for both Qwen3 thinking and Mistral.
+        # We DON'T set chat_template_kwargs here — vLLM's Mistral
+        # tokenizer mode rejects any chat_template_kwargs field with
+        # "chat_template is not supported for Mistral tokenizers", and
+        # this picker is provider-agnostic.
+        #
+        # We stream the call so the picker's reasoning + final integer
+        # show up live inside the condition node's flow_node card, so
+        # the user can see WHY a particular branch was chosen.
+        content_parts: list[str] = []
+        async for ev in chat_completion_stream(
             base_url=base_url,
             api_key=api_key,
             model=model,
             messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.0,
-            max_tokens=8,
+            max_tokens=2048,
             extra_headers=extra_headers,
-        )
-        raw = (r.content or "").strip()
-        m = re.search(r"\d+", raw)
-        if m:
-            i = int(m.group(0))
+        ):
+            if ev.done:
+                break
+            if ev.delta and job_id and run_id and node_id:
+                if not ev.reasoning:
+                    content_parts.append(ev.delta)
+                await _emit_event(
+                    job_id, run_id,
+                    event="flow.delta",
+                    node=node_id,
+                    reasoning=bool(ev.reasoning),
+                    text=ev.delta,
+                )
+            elif ev.delta and not ev.reasoning:
+                content_parts.append(ev.delta)
+        raw = "".join(content_parts).strip()
+        # Extract the LAST integer in the content rather than the first.
+        # The model's prose / reasoning before the final answer routinely
+        # mentions earlier option indices ("option 0 maps to billing
+        # but..."); first-integer extraction grabbed those mentions and
+        # routed wrong. The prompt explicitly says the FINAL line is
+        # the integer answer, so the last digit-run in the content is
+        # what we want.
+        all_ints = re.findall(r"\d+", raw)
+        if all_ints:
+            i = int(all_ints[-1])
             if 0 <= i < len(candidates):
                 return i
     except Exception as e:  # noqa: BLE001
         log.warning("condition branch pick failed: %s", e)
+    # Last-resort fallback: if the model is hard-stuck and we have any
+    # non-fallback candidates, prefer the first non-fallback over edge 0.
+    # Without this, picker failures + fallback-first edge ordering would
+    # always route to the "unknown" branch.
+    for i, (_tgt, lbl) in enumerate(candidates):
+        if i in fallback_indices:
+            continue
+        return i
     return 0
 
 
@@ -602,6 +1136,9 @@ async def _produce_closing(
     api_key: str,
     model: str,
     extra_headers: dict[str, Any] | None,
+    job_id: str | None = None,
+    run_id: str | None = None,
+    node_id: str | None = None,
 ) -> dict[str, Any]:
     label = end_data.get("label") or "End"
     outcome = end_data.get("outcome") or "resolved"
@@ -615,31 +1152,73 @@ async def _produce_closing(
         f"Outcome: {outcome}\n\n"
         f"Recent transcript:\n{_short_transcript(messages)}"
     )
+    # Stream so the closing assistant turn materializes inside the end
+    # node's flow_node card in the live preview. Reasoning models need
+    # the larger budget to finish <think> AND emit the closing text.
     try:
-        r = await chat_completion(
+        content_parts: list[str] = []
+        tokens_in = 0
+        tokens_out = 0
+        async for ev in chat_completion_stream(
             base_url=base_url,
             api_key=api_key,
             model=model,
             messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
             temperature=0.5,
-            max_tokens=300,
+            max_tokens=2048,
             extra_headers=extra_headers,
-        )
-        text = (r.content or "").strip()
+        ):
+            if ev.done:
+                tokens_in = ev.tokens_in
+                tokens_out = ev.tokens_out
+                break
+            if ev.delta and job_id and run_id and node_id:
+                if not ev.reasoning:
+                    content_parts.append(ev.delta)
+                await _emit_event(
+                    job_id, run_id,
+                    event="flow.delta",
+                    node=node_id,
+                    reasoning=bool(ev.reasoning),
+                    text=ev.delta,
+                )
+            elif ev.delta and not ev.reasoning:
+                content_parts.append(ev.delta)
+        text = "".join(content_parts).strip()
         return {
             "content": text or label,
-            "tokens_in": r.tokens_in,
-            "tokens_out": r.tokens_out,
-            "cost_usd": r.cost_usd,
+            "tokens_in": tokens_in,
+            "tokens_out": tokens_out,
+            "cost_usd": estimate_cost(model, tokens_in, tokens_out),
         }
     except Exception as e:  # noqa: BLE001
         log.warning("closing turn failed: %s", e)
         return {"content": label, "tokens_in": 0, "tokens_out": 0, "cost_usd": 0.0}
 
 
+# ───── live SSE event emitter ───────────────────────────────────────────────
+
+async def _emit_event(job_id: str, run_id: str, **payload: Any) -> None:
+    """Emit a structured pg_notify event on the synthgen_job channel — same
+    shape as generation._emit_event so the live preview's SSE pipeline picks
+    it up without changes. Best-effort; never throws."""
+    try:
+        async with db.acquire() as ncon:
+            await ncon.execute(
+                "SELECT pg_notify('synthgen_job', $1)",
+                json.dumps(
+                    {"jobId": job_id, "runId": run_id, **payload},
+                    ensure_ascii=False,
+                ),
+            )
+    except Exception:  # noqa: BLE001
+        pass
+
+
 # ───── main entrypoint ──────────────────────────────────────────────────────
 
-_MAX_STEPS = 24  # safety cap on node visits to avoid pathological cycles
+_MAX_STEPS = 60  # safety cap on TOTAL node visits to avoid pathological cycles
+_MAX_VISITS_PER_NODE = 12  # per-node guard for ambient loops without maxAttempts
 
 
 async def execute_flow_job(
@@ -693,7 +1272,40 @@ async def execute_flow_job(
         if isinstance(tid, str):
             referenced_tool_ids.add(tid)
     tool_defs = await _load_tool_defs(sorted(referenced_tool_ids))
-    tool_defs_by_id = {t["id"]: t for t in tool_defs}
+    # Index by both id AND name. Flow editor stores names on action
+    # nodes; some callers / legacy data might use ids. Looking up by
+    # both means the runner finds the def either way.
+    tool_defs_by_id: dict[str, dict[str, Any]] = {}
+    for t in tool_defs:
+        if isinstance(t.get("id"), str):
+            tool_defs_by_id[t["id"]] = t
+        if isinstance(t.get("name"), str):
+            tool_defs_by_id[t["name"]] = t
+
+    # Build a compact graph view (just the fields the UI needs: id, type,
+    # label, position for layout, source/target for edges). Persisted to
+    # JobEvent AND pushed via SSE so the live preview can render the DAG
+    # immediately AND a refresh-after-done can replay the same view.
+    compact_nodes = [
+        {
+            "id": n.get("id"),
+            "type": n.get("type"),
+            "label": (n.get("data") or {}).get("label"),
+            "description": (n.get("data") or {}).get("description"),
+            "position": n.get("position"),
+            "outcome": (n.get("data") or {}).get("outcome"),
+        }
+        for n in flow["nodes"]
+    ]
+    compact_edges = [
+        {
+            "id": e.get("id"),
+            "source": e.get("source"),
+            "target": e.get("target"),
+            "label": e.get("label"),
+        }
+        for e in flow["edges"]
+    ]
 
     await log_event(
         job_id,
@@ -705,8 +1317,21 @@ async def execute_flow_job(
             "nodeCount": len(flow["nodes"]),
             "edgeCount": len(flow["edges"]),
             "toolCount": len(tool_defs),
+            "graph": {"nodes": compact_nodes, "edges": compact_edges},
         },
     )
+
+    try:
+        await _emit_event(
+            job_id, run["id"],
+            event="flow.graph",
+            flowId=flow["id"],
+            name=flow.get("name"),
+            nodes=compact_nodes,
+            edges=compact_edges,
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
     nodes = flow["nodes"]
     edges = flow["edges"]
@@ -730,9 +1355,45 @@ async def execute_flow_job(
         "register": policy.register,
     }
 
+    # Flow-execution conduct that goes on top of the run's normal system
+    # prompt. Two failure modes this addresses:
+    #   1. Forced tool_choice + a user message that lacks the required
+    #      argument (e.g. "My card was declined" with no MyKad) used to
+    #      produce placeholder args like "need to ask" — the mock backend
+    #      then fabricated unrelated customer data, and the saved tool
+    #      call was useless for training data.
+    #   2. After getting a tool result, the assistant routinely asked the
+    #      user AGAIN for info the tool result already contained, making
+    #      the saved conversation incoherent.
+    flow_conduct = (
+        "Flow execution rules (override your normal behaviour):\n"
+        "- When you invoke a tool, fill EVERY required argument with a "
+        "realistic Malaysian value inferred from the conversation context "
+        "and the customer's persona (e.g. a MyKad in `^[0-9]{6}-[0-9]{2}-"
+        "[0-9]{4}$` format that matches a plausible birthdate, a 10-16 "
+        "digit account number, or a `+60[0-9]{9,10}` mobile). DO NOT use "
+        "placeholder strings like \"need to ask\", \"unknown\", \"pending\", "
+        "\"placeholder\", \"...\", or any other non-realistic marker. If "
+        "the user hasn't stated a value, INVENT a plausible one rather "
+        "than emitting placeholder text.\n"
+        "- After a tool returns a result, that result is GROUND TRUTH for "
+        "the rest of this conversation. USE it in your next reply: "
+        "address the customer by the name returned, reference the specific "
+        "values from the response (account number, status, balance, "
+        "ticket / reference id, dates). DO NOT ask the customer for "
+        "information that the tool already returned. If the tool's data "
+        "answers the customer's question, ANSWER from that data; don't "
+        "deflect or ask for more info.\n"
+        "- Closing turns must reflect what ACTUALLY happened in this "
+        "conversation. If a tool reported the issue is `IN_PROGRESS` or "
+        "`PENDING`, do NOT claim it is resolved; say it's being processed "
+        "and give the realistic ETA from the tool result."
+    )
+    composed_system = (
+        f"{system_text}\n\n{flow_conduct}" if system_text else flow_conduct
+    )
     messages: list[dict[str, Any]] = []
-    if system_text:
-        messages.append({"role": "system", "content": system_text})
+    messages.append({"role": "system", "content": composed_system})
 
     # Walk the graph.
     started = time.perf_counter()
@@ -742,17 +1403,180 @@ async def execute_flow_job(
     upstream_model = run["model"]
     user_turn_count = 0
     visited_actions = 0
+    # Per-node visit counter. Used to implement loops with bounded
+    # retries: a condition node with `data.maxAttempts: N` automatically
+    # forces an `exhausted` (or equivalent) branch once it's been visited
+    # N times, regardless of what the LLM picker chose. Lets flow authors
+    # write "try IC verification 3 times, then escalate" without hand-
+    # writing the counter logic into the expression.
+    visit_counts: dict[str, int] = {}
+
+    # Helper that fires both the JobEvent log (for replay) AND the SSE
+    # `flow.step` (so the live preview can flip the node card from
+    # `running…` to done). The OLD code only logged — there was no SSE
+    # event ever, so every flow_node card stuck on "running..." until
+    # the page refreshed.
+    async def emit_flow_step(payload: dict[str, Any]) -> None:
+        await log_event(job_id, "flow.step", payload)
+        await _emit_event(job_id, run["id"], event="flow.step", **payload)
+
+    # Bridges that keep the saved conversation alternating user → assistant.
+    # Defined as locals so they can be called from the main loop right BEFORE
+    # `flow.node.start` fires — otherwise the synthesized user follow-up
+    # ends up rendering AFTER the next flow_node card in the live preview.
+    # Bridges get their own synthetic flow_node cards so the live preview
+    # can stream the model's reasoning + content live inside a regular
+    # flow_node block (with kind="bridge_assistant" or "bridge_user").
+    # Without this the bridge card would sit on `running…` for tens of
+    # seconds while the reasoning model thinks, with nothing visible.
+    bridge_counter = {"n": 0}
+
+    async def bridge_user_to_assistant(before_node: str) -> None:
+        bridge_counter["n"] += 1
+        pseudo_id = f"__bridge_assistant_{bridge_counter['n']}__"
+        # Open a pseudo-node card so the streaming reasoning + content
+        # has somewhere to render.
+        await _emit_event(
+            job_id, run["id"],
+            event="flow.node.start",
+            node=pseudo_id,
+            kind="bridge_assistant",
+            label="Acknowledgement",
+        )
+        ack = await _generate_assistant_ack(
+            persona_ctx=persona_ctx, lang_ctx=lang_ctx, messages=messages,
+            base_url=base_url, api_key=api_key, model=run["model"],
+            extra_headers=extra_headers,
+            job_id=job_id, run_id=run["id"], node_id=pseudo_id,
+        )
+        messages.append({"role": "assistant", "content": ack})
+        await _emit_event(
+            job_id, run["id"],
+            event="flow.step",
+            node=pseudo_id,
+            kind="bridge_assistant",
+            label="Acknowledgement",
+            finalContentChars=len(ack),
+        )
+        await log_event(
+            job_id, "flow.bridge.assistant",
+            {"text": ack, "beforeNode": before_node, "pseudoId": pseudo_id},
+        )
+
+    async def bridge_assistant_to_user(before_node: str) -> None:
+        bridge_counter["n"] += 1
+        pseudo_id = f"__bridge_user_{bridge_counter['n']}__"
+        await _emit_event(
+            job_id, run["id"],
+            event="flow.node.start",
+            node=pseudo_id,
+            kind="bridge_user",
+            label="Customer follow-up",
+        )
+        follow_up = await _simulate_user_follow_up(
+            persona_ctx=persona_ctx, lang_ctx=lang_ctx, messages=messages,
+            base_url=base_url, api_key=api_key, model=run["model"],
+            extra_headers=extra_headers,
+            job_id=job_id, run_id=run["id"], node_id=pseudo_id,
+        )
+        messages.append({"role": "user", "content": follow_up})
+        nonlocal user_turn_count
+        user_turn_count += 1
+        await _emit_event(
+            job_id, run["id"],
+            event="flow.step",
+            node=pseudo_id,
+            kind="bridge_user",
+            label="Customer follow-up",
+            finalContentChars=len(follow_up),
+        )
+        await log_event(
+            job_id, "flow.bridge.user",
+            {"beforeNode": before_node, "text": follow_up, "pseudoId": pseudo_id},
+        )
 
     current = start
     for step in range(_MAX_STEPS):
         kind = current.get("type")
         data = current.get("data") or {}
 
+        # Bridge BEFORE the `flow.node.start` SSE so the synthesized turn
+        # appears in the live preview as a user_turn / assistant_turn block
+        # ABOVE the next flow_node card — natural reading order.
+        if kind in ("action", "end") and messages and messages[-1].get("role") == "assistant":
+            await bridge_assistant_to_user(current.get("id") or "")
+        elif kind == "intent" and messages and messages[-1].get("role") == "user":
+            await bridge_user_to_assistant(current.get("id") or "")
+
+        # Bump the visit counter for this node. Used downstream by
+        # condition-node `maxAttempts` enforcement so loops terminate
+        # after the configured number of retries.
+        _cur_node_id = current.get("id") or ""
+        visit_counts[_cur_node_id] = visit_counts.get(_cur_node_id, 0) + 1
+
+        # Ambient anti-infinite-loop guard for nodes without an explicit
+        # `maxAttempts`. Breaks out of the flow with a stub closing turn
+        # so a misconfigured cycle can't hang a job indefinitely.
+        if visit_counts[_cur_node_id] > _MAX_VISITS_PER_NODE:
+            await log_event(
+                job_id,
+                "flow.loop.guard_tripped",
+                {"node": _cur_node_id, "visits": visit_counts[_cur_node_id]},
+            )
+            messages.append({
+                "role": "assistant",
+                "content": (
+                    "(Flow exited: a node was visited too many times. "
+                    "Add `maxAttempts` on a condition + an `exhausted` "
+                    "branch to bound this loop.)"
+                ),
+            })
+            break
+
+        # Fire a `flow.node.start` SSE event so the live preview can paint
+        # the current node as ACTIVE in the graph before we do any work
+        # on it. Paired with `emit_flow_step` below which fires AFTER the
+        # node completes (carries the result summary AND flips the card
+        # off `running…`).
+        await _emit_event(
+            job_id, run["id"],
+            event="flow.node.start",
+            node=_cur_node_id,
+            kind=kind,
+            label=data.get("label"),
+            attempt=visit_counts[_cur_node_id],
+        )
+
         if kind == "start":
-            await log_event(job_id, "flow.step", {"node": current.get("id"), "kind": "start"})
-            pass  # nothing to emit
+            # Generate an opening user-side greeting. Was a no-op, which
+            # made every saved conversation skip the customer's "hello"
+            # and open straight with the intent paraphrase — out of step
+            # with what a real chat looks like.
+            greeting = await _start_to_user_greeting(
+                start_data=data,
+                persona_ctx=persona_ctx,
+                lang_ctx=lang_ctx,
+                base_url=base_url,
+                api_key=api_key,
+                model=run["model"],
+                extra_headers=extra_headers,
+                job_id=job_id,
+                run_id=run["id"],
+                node_id=current.get("id") or "",
+            )
+            messages.append({"role": "user", "content": greeting})
+            user_turn_count += 1
+            await emit_flow_step({
+                "node": current.get("id"),
+                "kind": "start",
+                "label": data.get("label"),
+                "userText": greeting,
+            })
 
         elif kind == "intent":
+            # (Bridge is handled in the outer loop now — runs BEFORE
+            # `flow.node.start` so the synthesized assistant ack renders
+            # ABOVE the intent node's card in the live preview, not below.)
             user_text = await _intent_to_user_text(
                 intent_data=data,
                 persona_ctx=persona_ctx,
@@ -762,24 +1586,24 @@ async def execute_flow_job(
                 model=run["model"],
                 extra_headers=extra_headers,
                 rng=rng,
+                job_id=job_id,
+                run_id=run["id"],
+                node_id=current.get("id") or "",
             )
             messages.append({"role": "user", "content": user_text})
             user_turn_count += 1
-            await log_event(
-                job_id,
-                "flow.step",
-                {
-                    "node": current.get("id"),
-                    "kind": "intent",
-                    "label": data.get("label"),
-                    "userText": user_text,
-                },
-            )
+            await emit_flow_step({
+                "node": current.get("id"),
+                "kind": "intent",
+                "label": data.get("label"),
+                "userText": user_text,
+            })
 
         elif kind == "action":
             visited_actions += 1
             res = await _run_action(
                 action_data=data,
+                node_id=current.get("id") or "",
                 tool_defs_by_id=tool_defs_by_id,
                 messages=messages,
                 base_url=base_url,
@@ -790,46 +1614,85 @@ async def execute_flow_job(
                 extra_headers=extra_headers,
                 reasoning_effort=reasoning_effort,
                 chat_template_kwargs=chat_template_kwargs,
+                job_id=job_id,
+                run_id=run["id"],
             )
             total_tokens_in += res["tokens_in"]
             total_tokens_out += res["tokens_out"]
             total_cost += res["cost_usd"]
             upstream_model = res.get("model") or upstream_model
-            await log_event(
-                job_id,
-                "flow.step",
-                {
-                    "node": current.get("id"),
-                    "kind": "action",
-                    "label": data.get("label"),
-                    "toolCount": len(data.get("toolIds") or []),
-                    "finalContentChars": len(res.get("final_content") or ""),
-                },
-            )
+            await emit_flow_step({
+                "node": current.get("id"),
+                "kind": "action",
+                "label": data.get("label"),
+                "toolCount": len(data.get("toolIds") or []),
+                "finalContentChars": len(res.get("final_content") or ""),
+            })
 
         elif kind == "condition":
             outs = adj.get(current.get("id") or "") or []
-            choice_idx = await _pick_condition_branch(
-                condition_data=data,
-                candidates=outs,
-                messages=messages,
-                base_url=base_url,
-                api_key=api_key,
-                model=run["model"],
-                extra_headers=extra_headers,
+            # Loop / retry bound: when the condition has a `maxAttempts`
+            # configured AND we've already visited this node that many
+            # times, the runner forces the "exhausted" / "failed" /
+            # "escalated" / "max_retries" branch (whichever label exists)
+            # regardless of what the LLM picker would choose. Lets flow
+            # authors write "verify IC 3 times, else escalate" by adding
+            # a `data.maxAttempts: 3` field on the condition and an edge
+            # labeled `exhausted` (or similar).
+            attempt = visit_counts.get(current.get("id") or "", 1)
+            raw_max = data.get("maxAttempts")
+            max_attempts = (
+                int(raw_max)
+                if isinstance(raw_max, (int, float)) and raw_max > 0
+                else None
             )
-            await log_event(
-                job_id,
-                "flow.step",
-                {
-                    "node": current.get("id"),
-                    "kind": "condition",
-                    "label": data.get("label"),
-                    "options": [lbl for _, lbl in outs],
-                    "chose": choice_idx,
-                    "chosenLabel": outs[choice_idx][1] if outs else None,
-                },
-            )
+            EXHAUST_LABELS = {
+                "exhausted", "max_retries", "max_attempts", "failed",
+                "escalated", "give_up", "gave_up", "timeout",
+            }
+            exhausted_idx: int | None = None
+            for i, (_t, lbl) in enumerate(outs):
+                if isinstance(lbl, str) and lbl.lower() in EXHAUST_LABELS:
+                    exhausted_idx = i
+                    break
+
+            if max_attempts and attempt > max_attempts and exhausted_idx is not None:
+                choice_idx = exhausted_idx
+                await log_event(
+                    job_id,
+                    "flow.bounded_loop.exhausted",
+                    {
+                        "node": current.get("id"),
+                        "attempts": attempt,
+                        "maxAttempts": max_attempts,
+                        "forcedLabel": outs[choice_idx][1],
+                    },
+                )
+            else:
+                choice_idx = await _pick_condition_branch(
+                    condition_data=data,
+                    candidates=outs,
+                    messages=messages,
+                    base_url=base_url,
+                    api_key=api_key,
+                    model=run["model"],
+                    extra_headers=extra_headers,
+                    job_id=job_id,
+                    run_id=run["id"],
+                    node_id=current.get("id") or "",
+                    attempt=attempt,
+                    max_attempts=max_attempts,
+                )
+            await emit_flow_step({
+                "node": current.get("id"),
+                "kind": "condition",
+                "label": data.get("label"),
+                "options": [lbl for _, lbl in outs],
+                "chose": choice_idx,
+                "chosenLabel": outs[choice_idx][1] if outs else None,
+                "attempt": attempt,
+                "maxAttempts": max_attempts,
+            })
             # Skip the generic "first outgoing edge" picker below — use the chosen one.
             if outs:
                 next_id = outs[choice_idx][0]
@@ -840,6 +1703,8 @@ async def execute_flow_job(
             break
 
         elif kind == "end":
+            # (Bridge handled in outer loop, same as action.)
+
             closing = await _produce_closing(
                 end_data=data,
                 messages=messages,
@@ -847,19 +1712,21 @@ async def execute_flow_job(
                 api_key=api_key,
                 model=run["model"],
                 extra_headers=extra_headers,
+                job_id=job_id,
+                run_id=run["id"],
+                node_id=current.get("id") or "",
             )
             messages.append({"role": "assistant", "content": closing["content"]})
             total_tokens_in += closing["tokens_in"]
             total_tokens_out += closing["tokens_out"]
             total_cost += closing["cost_usd"]
-            await log_event(
-                job_id,
-                "flow.step",
+            await emit_flow_step(
                 {
                     "node": current.get("id"),
                     "kind": "end",
                     "label": data.get("label"),
                     "outcome": data.get("outcome"),
+                    "finalContentChars": len(closing.get("content") or ""),
                 },
             )
             break
@@ -974,7 +1841,10 @@ async def execute_flow_job(
                 token_count,
                 "rejected" if has_fail else "accepted",
                 _content_hash(final_content),
-                json.dumps(settings_snapshot, ensure_ascii=False),
+                # Pass the dict directly (NOT json.dumps): asyncpg's jsonb
+                # codec encodes on the way out; pre-stringifying causes
+                # double-encoding and the column ends up as a JSON-string.
+                settings_snapshot,
             )
 
             ordinal = 0

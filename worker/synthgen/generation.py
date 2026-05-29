@@ -192,6 +192,159 @@ async def _emit_event(job_id: str, run_id: str, **payload: Any) -> None:
         pass
 
 
+# pg_notify caps each payload at ~8000 bytes. Persona + tool catalog + rules
+# can produce a 6-10KB system prompt for the user simulator, so we truncate
+# the SSE-visible copy and keep the full one in JobEvent for the trace.
+_SIM_REQUEST_SSE_MAX = 5500
+
+
+async def _emit_simulator_request(
+    *,
+    job_id: str,
+    run_id: str,
+    purpose: str,
+    model: str,
+    system: str,
+    user_msg: str,
+    temperature: float,
+    max_tokens: int,
+) -> None:
+    """Surface the EXACT request sent to the LLM to generate a user turn.
+
+    Two surfaces:
+      1. `pg_notify` event `simulator.request` so the Live job preview can
+         render an expandable "before this user turn" card. System prompt is
+         clipped to keep us under Postgres' 8000-byte NOTIFY limit.
+      2. `JobEvent` row of kind `user.simulator.request` carrying the FULL
+         system + user content for the trace timeline / replay path.
+    """
+    system_chars = len(system)
+    truncated = system_chars > _SIM_REQUEST_SSE_MAX
+    system_for_sse = system[:_SIM_REQUEST_SSE_MAX] if truncated else system
+    await _emit_event(
+        job_id,
+        run_id,
+        event="simulator.request",
+        purpose=purpose,
+        model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        system=system_for_sse,
+        user_msg=user_msg,
+        system_chars=system_chars,
+        truncated=truncated,
+    )
+    await _log_event(
+        job_id,
+        "user.simulator.request",
+        {
+            "purpose": purpose,
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "system": system,
+            "user": user_msg,
+        },
+    )
+
+
+async def _stream_simulator_completion(
+    *,
+    job_id: str | None,
+    run_id: str | None,
+    purpose: str,
+    base_url: str,
+    api_key: str,
+    model: str,
+    messages: list[dict[str, Any]],
+    temperature: float,
+    max_tokens: int,
+    extra_headers: dict[str, Any] | None,
+    reasoning_effort: str | None,
+    chat_template_kwargs: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Streaming variant of `chat_completion` used only by the user-simulator
+    helpers. Emits one `simulator.delta` SSE event per chunk (with the
+    `purpose` and a `reasoning` flag) so the live preview can render the
+    simulator's chain-of-thought + final user utterance materializing inside
+    the same collapsible card that shows the simulator's system prompt.
+
+    Returns a dict matching the subset of fields the callers need from
+    chat_completion (`content`, `reasoning_content`, `tokens_in`,
+    `tokens_out`, `cost_usd`, `model`).
+    """
+    from .providers import chat_completion_stream, estimate_cost
+
+    content_parts: list[str] = []
+    reasoning_parts: list[str] = []
+    tokens_in = 0
+    tokens_out = 0
+    upstream_model = model
+
+    async for ev in chat_completion_stream(
+        base_url=base_url,
+        api_key=api_key,
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        extra_headers=extra_headers,
+        reasoning_effort=reasoning_effort,
+        chat_template_kwargs=chat_template_kwargs,
+    ):
+        if ev.done:
+            tokens_in = ev.tokens_in
+            tokens_out = ev.tokens_out
+            if ev.model:
+                upstream_model = ev.model
+            break
+        if not ev.delta:
+            continue
+        if ev.reasoning:
+            reasoning_parts.append(ev.delta)
+        else:
+            content_parts.append(ev.delta)
+        if job_id and run_id:
+            await _emit_event(
+                job_id,
+                run_id,
+                event="simulator.delta",
+                purpose=purpose,
+                reasoning=bool(ev.reasoning),
+                text=ev.delta,
+            )
+
+    full_content = "".join(content_parts)
+    full_reasoning = "".join(reasoning_parts)
+    # Persist the simulator response so the replay path on a refresh / late
+    # subscriber can synthesize the same `simulator.delta` events from the
+    # saved text — without this, only LIVE viewers see the streaming reply
+    # and anyone re-opening the job sees the request card with a blank
+    # "Waiting for simulator response…" state.
+    if job_id:
+        await _log_event(
+            job_id,
+            "user.simulator.response",
+            {
+                "purpose": purpose,
+                "model": upstream_model,
+                "tokens_in": tokens_in,
+                "tokens_out": tokens_out,
+                "content": full_content,
+                "reasoning_content": full_reasoning or None,
+            },
+        )
+
+    return {
+        "content": full_content,
+        "reasoning_content": full_reasoning or None,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "cost_usd": estimate_cost(upstream_model, tokens_in, tokens_out),
+        "model": upstream_model,
+    }
+
+
 async def _log_event(job_id: str, kind: str, payload: dict[str, Any] | None = None) -> None:
     """Append a step in the job's trace timeline.
 
@@ -203,12 +356,19 @@ async def _log_event(job_id: str, kind: str, payload: dict[str, Any] | None = No
     the worker logs that something needs fixing.
     """
     try:
+        # IMPORTANT: pass the dict directly — the asyncpg jsonb codec
+        # registered in db.py wraps `json.dumps`, so pre-stringifying causes
+        # a DOUBLE encoding and the column ends up storing `"{\"a\": 1}"`
+        # (a JSON string of a JSON string) instead of `{"a": 1}`. Replay
+        # paths that do `typeof payload === "object"` then silently skip
+        # the row. Same fix the assistant-Message insert at line ~2353 uses
+        # for `toolCalls`.
         await db.execute(
             'INSERT INTO "JobEvent" (id, "jobId", kind, payload, ts) VALUES ($1, $2, $3, $4::jsonb, NOW())',
             cuid_like(),
             job_id,
             kind,
-            json.dumps(payload) if payload else None,
+            payload,
         )
     except Exception as exc:  # noqa: BLE001
         # ERROR (not just exception) so it stands out in `docker compose logs`,
@@ -402,6 +562,8 @@ async def _generate_tool_aware_user_text(
     extra_headers: dict[str, Any] | None,
     reasoning_effort: str | None,
     chat_template_kwargs: dict[str, Any] | None,
+    job_id: str | None = None,
+    run_id: str | None = None,
 ) -> tuple[str, int, int, float]:
     """Generate the FIRST user message such that it naturally requires the
     assistant to invoke one of the available tools.
@@ -491,14 +653,33 @@ async def _generate_tool_aware_user_text(
         "  no markdown, no labelled fields like `IC: ...`."
     )
 
+    user_msg = "Write the opening user message now."
+    if job_id and run_id:
+        # Surface the exact request that's about to be sent so the Live preview
+        # can render a "User-simulator request · turn 1" card BEFORE the user
+        # turn it produced. Also persisted to JobEvent for the trace timeline.
+        await _emit_simulator_request(
+            job_id=job_id,
+            run_id=run_id,
+            purpose="user_turn_1_tool_aware",
+            model=model,
+            system=sys,
+            user_msg=user_msg,
+            temperature=0.8,
+            max_tokens=300,
+        )
+
     try:
-        r = await chat_completion(
+        r = await _stream_simulator_completion(
+            job_id=job_id,
+            run_id=run_id,
+            purpose="user_turn_1_tool_aware",
             base_url=base_url,
             api_key=api_key,
             model=model,
             messages=[
                 {"role": "system", "content": sys},
-                {"role": "user", "content": "Write the opening user message now."},
+                {"role": "user", "content": user_msg},
             ],
             temperature=0.8,
             max_tokens=300,
@@ -506,7 +687,7 @@ async def _generate_tool_aware_user_text(
             reasoning_effort=reasoning_effort,
             chat_template_kwargs=chat_template_kwargs,
         )
-        text = (r.content or "").strip().strip('"').strip("'")
+        text = (r["content"] or "").strip().strip('"').strip("'")
         if _looks_like_system_prompt(text):
             log.warning(
                 "tool-aware user-text returned system-prompt-style output "
@@ -516,7 +697,12 @@ async def _generate_tool_aware_user_text(
             text = _synthesize_customer_opening(persona, lp, tool_defs)
         else:
             text = _scrub_user_turn(text, tool_names_to_hide, enum_values_to_hide)
-        return (text or _synthesize_customer_opening(persona, lp, tool_defs)), r.tokens_in, r.tokens_out, r.cost_usd
+        return (
+            (text or _synthesize_customer_opening(persona, lp, tool_defs)),
+            r["tokens_in"],
+            r["tokens_out"],
+            r["cost_usd"],
+        )
     except Exception as e:  # noqa: BLE001
         log.warning("tool-aware user-text generation failed: %s", e)
         return _synthesize_customer_opening(persona, lp, tool_defs), 0, 0, 0.0
@@ -534,6 +720,8 @@ async def _generate_seed_user_text(
     extra_headers: dict[str, Any] | None,
     reasoning_effort: str | None,
     chat_template_kwargs: dict[str, Any] | None,
+    job_id: str | None = None,
+    run_id: str | None = None,
 ) -> tuple[str, int, int, float]:
     """Generate the FIRST user message from a user-seed template body.
 
@@ -583,14 +771,30 @@ async def _generate_seed_user_text(
         "  no markdown, no labelled fields."
     )
 
+    user_msg = "Write the opening user message now."
+    if job_id and run_id:
+        await _emit_simulator_request(
+            job_id=job_id,
+            run_id=run_id,
+            purpose="user_turn_1_seed",
+            model=model,
+            system=sys,
+            user_msg=user_msg,
+            temperature=0.8,
+            max_tokens=300,
+        )
+
     try:
-        r = await chat_completion(
+        r = await _stream_simulator_completion(
+            job_id=job_id,
+            run_id=run_id,
+            purpose="user_turn_1_seed",
             base_url=base_url,
             api_key=api_key,
             model=model,
             messages=[
                 {"role": "system", "content": sys},
-                {"role": "user", "content": "Write the opening user message now."},
+                {"role": "user", "content": user_msg},
             ],
             temperature=0.8,
             max_tokens=300,
@@ -598,7 +802,7 @@ async def _generate_seed_user_text(
             reasoning_effort=reasoning_effort,
             chat_template_kwargs=chat_template_kwargs,
         )
-        text = (r.content or "").strip().strip('"').strip("'")
+        text = (r["content"] or "").strip().strip('"').strip("'")
         if _looks_like_system_prompt(text):
             log.warning(
                 "seed user-text returned system-prompt-style output "
@@ -606,7 +810,12 @@ async def _generate_seed_user_text(
                 model,
             )
             text = _synthesize_customer_opening(persona, lp, None)
-        return (text or _synthesize_customer_opening(persona, lp, None)), r.tokens_in, r.tokens_out, r.cost_usd
+        return (
+            (text or _synthesize_customer_opening(persona, lp, None)),
+            r["tokens_in"],
+            r["tokens_out"],
+            r["cost_usd"],
+        )
     except Exception as e:  # noqa: BLE001
         log.warning("seed user-text generation failed: %s", e)
         return _synthesize_customer_opening(persona, lp, None), 0, 0, 0.0
@@ -628,6 +837,8 @@ async def _simulate_user_turn(
     tool_defs: list[dict[str, Any]] | None = None,
     turn_number: int = 2,
     total_turns: int = 1,
+    job_id: str | None = None,
+    run_id: str | None = None,
 ) -> tuple[str, int, int, float]:
     """Generate the next user-side utterance for a multi-turn conversation.
 
@@ -752,21 +963,43 @@ async def _simulate_user_turn(
         transcript_lines.append(f"[{role}] {content}")
     transcript_text = "\n\n".join(transcript_lines) or "(empty)"
 
-    # The user simulator does NOT need chain-of-thought — we just want one
-    # short utterance role-playing the customer. Force thinking off so a
-    # reasoning model doesn't burn the whole token budget on <think>…</think>
-    # and return empty `content` (which would silently drop the turn).
+    # Keep the run's `enable_thinking` setting as-is so reasoning models can
+    # produce a visible <think> block — that gets streamed via `simulator.delta
+    # · reasoning=true` and shown inside the simulator-request card for turn N
+    # (the same surface turn 1 already gets). We rely on the loop's empty-turn
+    # fallback ("Boleh terangkan lagi?", `turn.user.empty` JobEvent) to keep
+    # the conversation alive if the model still spends the whole budget on
+    # reasoning and leaves `content` empty — the worst case is one degraded
+    # turn, not a silently dropped one.
     sim_kwargs = dict(chat_template_kwargs or {})
-    sim_kwargs["enable_thinking"] = False
+
+    user_msg = f"Transcript so far:\n{transcript_text}"
+    if job_id and run_id:
+        # Same "preflight" surfacing as turn 1: render a card in the live
+        # preview before the user-turn-N card so reviewers can see exactly
+        # what context the simulator was given.
+        await _emit_simulator_request(
+            job_id=job_id,
+            run_id=run_id,
+            purpose=f"user_turn_{turn_number}",
+            model=model,
+            system=sys,
+            user_msg=user_msg,
+            temperature=0.8,
+            max_tokens=max_tokens,
+        )
 
     try:
-        r = await chat_completion(
+        r = await _stream_simulator_completion(
+            job_id=job_id,
+            run_id=run_id,
+            purpose=f"user_turn_{turn_number}",
             base_url=base_url,
             api_key=api_key,
             model=model,
             messages=[
                 {"role": "system", "content": sys},
-                {"role": "user", "content": f"Transcript so far:\n{transcript_text}"},
+                {"role": "user", "content": user_msg},
             ],
             temperature=0.8,
             # Reuse the run's max_tokens — same budget the assistant turns get,
@@ -774,14 +1007,21 @@ async def _simulate_user_turn(
             # for the visible reply after their <think> block.
             max_tokens=max_tokens,
             extra_headers=extra_headers,
-            # Drop reasoning_effort for the simulator — one-shot role-play,
-            # not a problem the model needs to reason about.
-            reasoning_effort=None,
+            # Forward the provider's reasoning_effort so reasoning models
+            # (Mistral with --reasoning-parser, OpenAI o-series) emit a
+            # visible <think> block that the live preview can stream as
+            # `simulator.delta · reasoning=true`. The earlier override to
+            # None saved a few tokens but left the simulator card empty
+            # for Mistral while Qwen kept its CoT (Qwen3's chat template
+            # defaults thinking ON regardless of reasoning_effort). The
+            # max_tokens budget here is the run's full budget (≥8192 in
+            # tool-mode runs), so reasoning + content both have room.
+            reasoning_effort=reasoning_effort,
             chat_template_kwargs=sim_kwargs,
         )
-        text = (r.content or "").strip().strip('"').strip("'")
+        text = (r["content"] or "").strip().strip('"').strip("'")
         text = _scrub_user_turn(text, tool_names_to_hide, enum_values_to_hide)
-        return text, r.tokens_in, r.tokens_out, r.cost_usd
+        return text, r["tokens_in"], r["tokens_out"], r["cost_usd"]
     except Exception as e:  # noqa: BLE001
         log.warning("user simulator failed: %s", e)
         return "[END]", 0, 0, 0.0
@@ -1151,6 +1391,8 @@ async def _execute_job_inner(job_id: str) -> str:
             extra_headers=extra_headers,
             reasoning_effort=provider.get("reasoningEffort"),
             chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")) or None,
+            job_id=job_id,
+            run_id=run["id"],
         )
         await _log_event(
             job_id,
@@ -1176,6 +1418,8 @@ async def _execute_job_inner(job_id: str) -> str:
             extra_headers=extra_headers,
             reasoning_effort=provider.get("reasoningEffort"),
             chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")) or None,
+            job_id=job_id,
+            run_id=run["id"],
         )
         await _log_event(
             job_id,
@@ -1294,6 +1538,7 @@ async def _execute_job_inner(job_id: str) -> str:
             # emit one "[calling foo(…)]" marker per tool call.
             announced_tool_names: set[int] = set()
 
+            stream_final_text: str = ""
             async for ev in chat_completion_stream(
                 base_url=base_url,
                 api_key=api_key,
@@ -1313,6 +1558,13 @@ async def _execute_job_inner(job_id: str) -> str:
                     stream_tokens_out = ev.tokens_out
                     stream_model = ev.model or run["model"]
                     stream_tool_calls = ev.tool_calls
+                    # `ev.full_text` is the providers-layer cleaned content
+                    # — with Mistral's `[TOOL_CALLS]name{args}` sentinel
+                    # stripped after tool_calls were extracted client-side.
+                    # Prefer it over the raw delta accumulator so the saved
+                    # assistant message + the next turn's input don't carry
+                    # the literal sentinel text.
+                    stream_final_text = ev.full_text or ""
                     break
                 if ev.delta:
                     if ev.reasoning:
@@ -1342,7 +1594,10 @@ async def _execute_job_inner(job_id: str) -> str:
             last_latency = int((__import__("time").perf_counter() - t_start) * 1000)
             last_model = stream_model
             tc = _normalise_tool_calls(stream_tool_calls) if stream_tool_calls else []
-            content = "".join(stream_content_parts)
+            # When the providers layer extracted tool_calls from an inline
+            # sentinel (Mistral vLLM streaming), `stream_final_text` is the
+            # cleaned content. Otherwise it equals the joined deltas.
+            content = stream_final_text or "".join(stream_content_parts)
 
             # Mark each streamed tool call as "args complete" so the client can
             # stop the inline "..." indicator and freeze the card.
@@ -1481,6 +1736,13 @@ async def _execute_job_inner(job_id: str) -> str:
         await _emit_event(job_id, run["id"], event="start")
         await _emit_event(
             job_id, run["id"], event="turn.user", turn=1, text=user_text,
+        )
+        # Header for the assistant's first reply. Tool-less first turns get this
+        # at line 1815 via the streaming branch; the tool-aware branch needs to
+        # emit it explicitly because `_run_turn_with_tools` only knows about
+        # *inner* tool/follow-up iterations and can't number the outer turn.
+        await _emit_event(
+            job_id, run["id"], event="turn.assistant", turn=1,
         )
         try:
             first = await _run_turn_with_tools(messages)
@@ -1704,6 +1966,8 @@ async def _execute_job_inner(job_id: str) -> str:
             tool_defs=tool_defs if tool_defs else None,
             turn_number=turn_i,
             total_turns=target_turns,
+            job_id=job_id,
+            run_id=run["id"],
         )
         total_tokens_in += sim_in
         total_tokens_out += sim_out
@@ -1760,6 +2024,14 @@ async def _execute_job_inner(job_id: str) -> str:
         for attempt in range(MULTI_TURN_RETRIES):
             try:
                 if tools_payload is not None:
+                    # Emit the "Assistant · turn N" divider before the model
+                    # call so the live preview shows a header for this turn.
+                    # Mirrors the tool-less branch below; gated on attempt==0
+                    # to avoid duplicate dividers on retry.
+                    if attempt == 0:
+                        await _emit_event(
+                            job_id, run["id"], event="turn.assistant", turn=turn_i,
+                        )
                     next_first = await _run_turn_with_tools(transcript)
                     turn_msgs = next_first["messages"]
                     turn_tokens_in = next_first["tokens_in"]
@@ -2027,7 +2299,10 @@ async def _execute_job_inner(job_id: str) -> str:
                 total_tokens_in + total_tokens_out,
                 "rejected" if has_fail else "accepted",
                 _content_hash(final_assistant_content),
-                json.dumps(settings_snapshot, ensure_ascii=False),
+                # Pass the dict directly (NOT json.dumps): asyncpg's jsonb
+                # codec encodes on the way out; pre-stringifying causes
+                # double-encoding and the column ends up as a JSON-string.
+                settings_snapshot,
             )
 
             ordinal = 0
