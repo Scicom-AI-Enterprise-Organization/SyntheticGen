@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { usePathname, useRouter } from "next/navigation";
-import { Download, FileJson, X } from "lucide-react";
+import { Download, ExternalLink, FileJson, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
@@ -72,11 +72,18 @@ export function ConversationDrawer({
   conversationId,
   initialTab = "messages",
   onClose,
+  fullPage = false,
 }: {
   projectId: string;
   conversationId: string;
   initialTab?: "messages" | "trace";
   onClose: () => void;
+  /** When true, the component renders inline (no fixed overlay, no
+   *  max-width cap) so it can be used as a dedicated `/conversations/[id]`
+   *  page instead of a right-side drawer. The Close button is hidden, and
+   *  the "Open as page" button on the drawer is omitted (we're already
+   *  on it). */
+  fullPage?: boolean;
 }) {
   const router = useRouter();
   const pathname = usePathname();
@@ -204,21 +211,47 @@ export function ConversationDrawer({
     document.body.removeChild(a);
   }
 
+  const Shell: React.ElementType = fullPage ? "div" : "div";
+  const Aside: React.ElementType = fullPage ? "div" : "aside";
+  const shellClass = fullPage ? "" : "fixed inset-0 z-50 flex";
+  const asideClass = fullPage
+    ? "flex w-full flex-col overflow-hidden rounded-md border border-border bg-background"
+    : "flex h-full w-full max-w-2xl flex-col overflow-hidden border-l border-border bg-background shadow-xl";
+
   return (
-    <div className="fixed inset-0 z-50 flex">
-      <div
-        className="flex-1 bg-black/40"
-        role="button"
-        aria-label="Close"
-        onClick={onClose}
-      />
-      <aside className="flex h-full w-full max-w-2xl flex-col overflow-hidden border-l border-border bg-background shadow-xl">
+    <Shell className={shellClass}>
+      {!fullPage && (
+        <div
+          className="flex-1 bg-black/40"
+          role="button"
+          aria-label="Close"
+          onClick={onClose}
+        />
+      )}
+      <Aside className={asideClass}>
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <div className="min-w-0">
             <div className="text-xs text-muted-foreground">Conversation</div>
             <div className="truncate font-mono text-xs">{conversationId}</div>
           </div>
           <div className="flex items-center gap-1">
+            {!fullPage && (
+              <Button
+                variant="outline"
+                size="sm"
+                asChild
+                title="Open this conversation as a dedicated page"
+              >
+                <a
+                  href={`/projects/${projectId}/conversations/${conversationId}`}
+                  target="_blank"
+                  rel="noopener"
+                >
+                  <ExternalLink className="mr-1 h-3 w-3" />
+                  Open as page
+                </a>
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -238,9 +271,11 @@ export function ConversationDrawer({
               <Download className="mr-1 h-3 w-3" />
               Trace
             </Button>
-            <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
-              <X className="h-4 w-4" />
-            </Button>
+            {!fullPage && (
+              <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
+                <X className="h-4 w-4" />
+              </Button>
+            )}
           </div>
         </div>
 
@@ -478,8 +513,8 @@ export function ConversationDrawer({
             </>
           )}
         </div>
-      </aside>
-    </div>
+      </Aside>
+    </Shell>
   );
 }
 
@@ -1061,6 +1096,17 @@ function SettingsPanel({
       ]
         .filter(Boolean)
         .join(" · ") || null,
+    ],
+    // Per-run "Include reasoning per assistant turn" flag — surfaced as a
+    // dedicated row so it's obvious whether each assistant turn was meant
+    // to carry reasoning content. Older runs (no key) suppress this row.
+    [
+      "reasoning per assistant turn",
+      "includeReasoning" in sampling
+        ? sampling.includeReasoning === true
+          ? "on"
+          : "off"
+        : null,
     ],
   ];
   return (

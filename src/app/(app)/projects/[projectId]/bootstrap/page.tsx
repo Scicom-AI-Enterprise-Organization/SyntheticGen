@@ -48,6 +48,28 @@ export default async function BootstrapPage({
     select: { id: true, name: true, defaultModel: true },
   });
 
+  // Existing tools — surfaced to StartForm so it can (a) suggest skipping
+  // the Tools phase, (b) seed the "Suggest prompt" button with the tool
+  // catalog so the generated prompt fits this project, and (c) bias the
+  // rest of bootstrap (taxonomy / personas / templates / flows) toward the
+  // catalog rather than inventing from scratch.
+  const existingTools = await prisma.toolDef.findMany({
+    where: { catalog: { projectId } },
+    select: { name: true, description: true },
+    orderBy: { name: "asc" },
+    take: 80,
+  });
+  const existingToolsCount = existingTools.length;
+  const existingToolsSummary =
+    existingTools.length > 0
+      ? existingTools
+          .map(
+            (t) =>
+              `- ${t.name}: ${t.description.replace(/\s+/g, " ").trim().slice(0, 200)}`,
+          )
+          .join("\n")
+      : null;
+
   const recent = await prisma.bootstrapJob.findMany({
     where: { projectId },
     orderBy: { createdAt: "desc" },
@@ -99,7 +121,7 @@ export default async function BootstrapPage({
           </CardHeader>
           <CardContent>
             <Button asChild>
-              <Link href={`/projects/${projectId}/providers/new`}>
+              <Link href={`/projects/${projectId}/providers`}>
                 Add provider
               </Link>
             </Button>
@@ -142,7 +164,12 @@ export default async function BootstrapPage({
           }}
         />
       ) : (
-        <StartForm projectId={projectId} providers={providers} />
+        <StartForm
+          projectId={projectId}
+          providers={providers}
+          existingToolsCount={existingToolsCount}
+          existingToolsSummary={existingToolsSummary}
+        />
       )}
 
       {recent.length > 0 && (

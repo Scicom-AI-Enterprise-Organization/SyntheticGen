@@ -59,6 +59,9 @@ export interface BootstrapScope {
   flows: boolean;
   rubrics: boolean;
   benchmarks: boolean;
+  // Opt-in: when true, the orchestrator threads the project's existing
+  // tool catalog into every entity-generation phase's extra context.
+  useExistingToolsContext?: boolean;
 }
 
 export const STEP_ORDER: BootstrapStep[] = [
@@ -695,6 +698,29 @@ interface PhaseCtx {
 // user clicked Cancel.
 const ORCH_DEBUG = process.env.BOOTSTRAP_BUS_DEBUG === "1";
 
+// Transient SSE/network failures get retried instead of failing the whole
+// phase. Common one is "stream closed without a `done` event" (upstream LB
+// or model timeout cut the connection mid-stream), plus the usual fetch /
+// 5xx / connection-reset family.
+const AI_RETRY_ATTEMPTS = 3;
+const AI_RETRY_BASE_DELAY_MS = 1500;
+function isTransientAiError(e: Error): boolean {
+  const m = (e.message || "").toLowerCase();
+  return (
+    m.includes("stream closed without") ||
+    m.includes("stream ended") ||
+    m.includes("idle timeout") ||
+    m.includes("fetch failed") ||
+    m.includes("network") ||
+    m.includes("econnreset") ||
+    m.includes("econnrefused") ||
+    m.includes("etimedout") ||
+    m.includes("socket hang up") ||
+    m.includes("upstream") ||
+    /\b(502|503|504|408|429)\b/.test(m)
+  );
+}
+
 async function callAiStreaming(
   jobId: string,
   step: BootstrapStep,
@@ -770,31 +796,95 @@ async function callAiStreaming(
     }
   };
 
+  let lastError: Error | null = null;
   try {
-    const data = await aiAssistStream(
-      {
-        kind,
-        prompt,
-        providerId,
-        model,
-        extraContext,
-        temperature,
-        maxTokens,
-      },
-      (chunk) => {
-        accumulator += chunk;
+    for (let attempt = 1; attempt <= AI_RETRY_ATTEMPTS; attempt++) {
+      // If a previous attempt streamed tokens to the bus, clear the
+      // server-side accumulator and tell the client to discard what it
+      // showed for this phase before retrying. The bus consumer treats
+      // any `kind: "retry"` delta as a signal to reset the current phase
+      // buffer to empty.
+      if (attempt > 1) {
+        accumulator = "";
         bus.emit("token", {
           step,
           phaseIndex,
-          kind: "delta",
-          content: chunk,
+          kind: "retry",
+          meta: {
+            attempt,
+            of: AI_RETRY_ATTEMPTS,
+            previousError: lastError?.message ?? "",
+          },
         });
-      },
-      abort.signal,
-    );
-    bus.emit("token", { step, phaseIndex, kind: "phase-end" });
-    await commitBuffer("done");
-    return data;
+        await appendEvent(jobId, {
+          step,
+          kind: "warning",
+          payload: {
+            message: `Transient AI error — retrying (${attempt}/${AI_RETRY_ATTEMPTS})`,
+            error: lastError?.message ?? "",
+            phaseIndex,
+          },
+        });
+        // Exponential-ish backoff with a tiny base — the upstream is
+        // usually a model server that needs a moment to reset its
+        // streaming pipe, not a rate-limited gateway. Skip the wait if
+        // the job was cancelled during retry.
+        const delay = AI_RETRY_BASE_DELAY_MS * attempt;
+        await new Promise<void>((r) => setTimeout(r, delay));
+        if (abort.signal.aborted) {
+          throw new BootstrapCancelledError();
+        }
+        const row = await prisma.bootstrapJob.findUnique({
+          where: { id: jobId },
+          select: { status: true },
+        });
+        if (row?.status === "cancelled") {
+          throw new BootstrapCancelledError();
+        }
+      }
+
+      try {
+        const data = await aiAssistStream(
+          {
+            kind,
+            prompt,
+            providerId,
+            model,
+            extraContext,
+            temperature,
+            maxTokens,
+          },
+          (chunk) => {
+            accumulator += chunk;
+            bus.emit("token", {
+              step,
+              phaseIndex,
+              kind: "delta",
+              content: chunk,
+            });
+          },
+          abort.signal,
+        );
+        bus.emit("token", { step, phaseIndex, kind: "phase-end" });
+        await commitBuffer("done");
+        return data;
+      } catch (e) {
+        const er = e as Error;
+        // Cancellation always bubbles immediately.
+        if (abort.signal.aborted || er instanceof BootstrapCancelledError) {
+          throw er;
+        }
+        lastError = er;
+        // Retry only transient errors AND only if attempts remain.
+        if (!isTransientAiError(er) || attempt >= AI_RETRY_ATTEMPTS) {
+          throw er;
+        }
+        // fall through to the next iteration of the outer for-loop.
+      }
+    }
+    // Should never get here — the loop either returns on success or
+    // throws on the final attempt — but TypeScript needs the safety net.
+    throw lastError ?? new Error("ai call retry loop exited without result");
   } catch (e) {
     const msg = (e as Error).message;
     bus.emit("token", {
@@ -804,8 +894,6 @@ async function callAiStreaming(
       meta: { error: msg },
     });
     await commitBuffer("error", msg);
-    // Distinguish abort from other errors: if cancelled, surface the
-    // sentinel so the outer catch flips into the cancelled path.
     if (abort.signal.aborted) {
       throw new BootstrapCancelledError();
     }
@@ -911,6 +999,26 @@ export async function runBootstrap(jobId: string): Promise<void> {
   try {
     const ctx: PhaseCtx = { job };
 
+    // Snapshot the existing tool catalog ONCE at the top of the run, but
+    // ONLY when the user opted in via the "Use existing tools as context"
+    // checkbox on the start form. When opted out we leave toolsContextBlock
+    // null so phases run cold, even on projects that already have a tool
+    // catalog — useful when bootstrapping a fresh sub-domain that should not
+    // be biased by the existing tools.
+    const toolsContextBlock = job.scope.useExistingToolsContext
+      ? await (async () => {
+          const existingTools = await prisma.toolDef.findMany({
+            where: { catalog: { projectId: job.projectId } },
+            select: { name: true, description: true },
+            orderBy: { name: "asc" },
+          });
+          if (existingTools.length === 0) return null;
+          return `EXISTING TOOL CATALOG (${existingTools.length} tool${existingTools.length === 1 ? "" : "s"}) — your output should fit a project where the assistant can call these functions. Reference them by name where natural; do not invent unrelated tools or topics that wouldn't be served by this catalog:\n${existingTools
+            .map((t) => `- ${t.name}: ${t.description.replace(/\n/g, " ").slice(0, 220)}`)
+            .join("\n")}`;
+        })()
+      : null;
+
     // --- Taxonomy -----------------------------------------------------------
     // Taxonomy doesn't fit the standard runPhase shape: the AI's taxonomy-node
     // kind returns `{ names: [...] }` (a list of 3–8 nodes per call), not one
@@ -942,10 +1050,14 @@ export async function runBootstrap(jobId: string): Promise<void> {
       for (let i = 0; i < TAX_CALLS; i++) {
         await assertNotCancelled(jobId);
         const hint = TAX_HINTS[i % TAX_HINTS.length];
-        const extraContext =
+        const extraContext = [
           insertedNames.length > 0
             ? `Existing nodes (DO NOT duplicate):\n${insertedNames.map((n) => `- ${n}`).join("\n")}`
-            : null;
+            : null,
+          toolsContextBlock,
+        ]
+          .filter(Boolean)
+          .join("\n\n") || null;
 
         try {
           const data = await callAiStreaming(
@@ -1023,7 +1135,10 @@ export async function runBootstrap(jobId: string): Promise<void> {
         "languages",
         ctx,
         async (invoke, hint) => {
-          const data = await invoke(`${job.prompt} — language profile, ${hint}`);
+          const data = await invoke(
+            `${job.prompt} — language profile, ${hint}`,
+            toolsContextBlock,
+          );
           const out = await insertLanguageProfile(job.projectId, data);
           if (out.ok && out.id) langIds.push(out.id);
           return out;
@@ -1049,7 +1164,10 @@ export async function runBootstrap(jobId: string): Promise<void> {
         "personas",
         ctx,
         async (invoke, hint) => {
-          const data = await invoke(`${job.prompt} — persona, ${hint}`);
+          const data = await invoke(
+            `${job.prompt} — persona, ${hint}`,
+            toolsContextBlock,
+          );
           return insertPersona(job.projectId, data, langIds);
         },
         KIND_FOR_STEP.personas!,
@@ -1071,7 +1189,10 @@ export async function runBootstrap(jobId: string): Promise<void> {
         "templates",
         ctx,
         async (invoke, hint, index) => {
-          const data = await invoke(`${job.prompt} — ${hint}`);
+          const data = await invoke(
+            `${job.prompt} — ${hint}`,
+            toolsContextBlock,
+          );
           const forcedKind =
             TEMPLATE_KINDS_BY_INDEX[index] ?? "user-seed";
           return insertTemplate(job.projectId, data, forcedKind);

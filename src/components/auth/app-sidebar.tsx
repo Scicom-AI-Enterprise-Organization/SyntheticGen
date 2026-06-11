@@ -21,6 +21,7 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  TerminalSquare,
   User,
   Users2,
   Wrench,
@@ -43,6 +44,7 @@ interface ProjectSummary {
 const WORKSPACE: Item[] = [
   { label: "Dashboard", href: "/dashboard", icon: LayoutDashboard },
   { label: "Projects", href: "/projects", icon: FolderKanban },
+  { label: "Playground", href: "/playground", icon: TerminalSquare },
 ];
 
 const ACCOUNT: Item[] = [{ label: "Profile", href: "/profile", icon: User }];

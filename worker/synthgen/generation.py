@@ -275,47 +275,79 @@ async def _stream_simulator_completion(
     """
     from .providers import chat_completion_stream, estimate_cost
 
-    content_parts: list[str] = []
-    reasoning_parts: list[str] = []
+    # Retry on 0-token responses. The upstream proxy `serverlessgpu.aies.…`
+    # intermittently returns HTTP 200 with usage.completion_tokens=0 and an
+    # empty stream — looks like a successful call but produced nothing. We
+    # used to silently fall through to the seed-text / "Boleh terangkan
+    # lagi?" stubs; now we retry up to 3 times with backoff before giving
+    # up, and we log each empty attempt loudly so flakiness is visible.
+    SIM_RETRIES = 3
+    full_content = ""
+    full_reasoning = ""
     tokens_in = 0
     tokens_out = 0
     upstream_model = model
+    for attempt in range(1, SIM_RETRIES + 1):
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        async for ev in chat_completion_stream(
+            base_url=base_url,
+            api_key=api_key,
+            model=model,
+            messages=messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            extra_headers=extra_headers,
+            reasoning_effort=reasoning_effort,
+            chat_template_kwargs=chat_template_kwargs,
+        ):
+            if ev.done:
+                tokens_in = ev.tokens_in
+                tokens_out = ev.tokens_out
+                if ev.model:
+                    upstream_model = ev.model
+                break
+            if not ev.delta:
+                continue
+            if ev.reasoning:
+                reasoning_parts.append(ev.delta)
+            else:
+                content_parts.append(ev.delta)
+            if job_id and run_id:
+                await _emit_event(
+                    job_id,
+                    run_id,
+                    event="simulator.delta",
+                    purpose=purpose,
+                    reasoning=bool(ev.reasoning),
+                    text=ev.delta,
+                )
 
-    async for ev in chat_completion_stream(
-        base_url=base_url,
-        api_key=api_key,
-        model=model,
-        messages=messages,
-        temperature=temperature,
-        max_tokens=max_tokens,
-        extra_headers=extra_headers,
-        reasoning_effort=reasoning_effort,
-        chat_template_kwargs=chat_template_kwargs,
-    ):
-        if ev.done:
-            tokens_in = ev.tokens_in
-            tokens_out = ev.tokens_out
-            if ev.model:
-                upstream_model = ev.model
+        full_content = "".join(content_parts)
+        full_reasoning = "".join(reasoning_parts)
+        if full_content.strip() or tokens_out > 0:
             break
-        if not ev.delta:
-            continue
-        if ev.reasoning:
-            reasoning_parts.append(ev.delta)
-        else:
-            content_parts.append(ev.delta)
-        if job_id and run_id:
-            await _emit_event(
+        # Empty stream — record it and back off briefly before trying again.
+        if job_id:
+            await _log_event(
                 job_id,
-                run_id,
-                event="simulator.delta",
-                purpose=purpose,
-                reasoning=bool(ev.reasoning),
-                text=ev.delta,
+                "user.simulator.empty",
+                {
+                    "purpose": purpose,
+                    "attempt": attempt,
+                    "of": SIM_RETRIES,
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                    "model": upstream_model,
+                },
             )
-
-    full_content = "".join(content_parts)
-    full_reasoning = "".join(reasoning_parts)
+        log.warning(
+            "simulator returned 0 tokens (purpose=%s attempt=%d/%d "
+            "model=%s tokens_in=%d) — retrying",
+            purpose, attempt, SIM_RETRIES, upstream_model, tokens_in,
+        )
+        if attempt < SIM_RETRIES:
+            await asyncio.sleep(1.5 * attempt)
     # Persist the simulator response so the replay path on a refresh / late
     # subscriber can synthesize the same `simulator.delta` events from the
     # saved text — without this, only LIVE viewers see the streaming reply
@@ -653,7 +685,15 @@ async def _generate_tool_aware_user_text(
         "  no markdown, no labelled fields like `IC: ...`."
     )
 
-    user_msg = "Write the opening user message now."
+    # `/no_think` is a Qwen3 chat-template directive — honored regardless of
+    # proxy chain. Belt-and-suspenders alongside `chat_template_kwargs:
+    # {enable_thinking: false}` (which some proxies strip). Non-Qwen models
+    # treat it as harmless literal text.
+    user_msg = "/no_think\n\nWrite the opening user message now."
+    # Raised from 300 → 800: with thinking off this is far more than needed,
+    # but if a proxy leaks reasoning past our defenses, 300 tokens was tight
+    # enough that the actual answer got truncated to empty content.
+    sim_max_tokens = 800
     if job_id and run_id:
         # Surface the exact request that's about to be sent so the Live preview
         # can render a "User-simulator request · turn 1" card BEFORE the user
@@ -666,7 +706,7 @@ async def _generate_tool_aware_user_text(
             system=sys,
             user_msg=user_msg,
             temperature=0.8,
-            max_tokens=300,
+            max_tokens=sim_max_tokens,
         )
 
     try:
@@ -682,7 +722,7 @@ async def _generate_tool_aware_user_text(
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.8,
-            max_tokens=300,
+            max_tokens=sim_max_tokens,
             extra_headers=extra_headers,
             reasoning_effort=reasoning_effort,
             chat_template_kwargs=chat_template_kwargs,
@@ -771,7 +811,11 @@ async def _generate_seed_user_text(
         "  no markdown, no labelled fields."
     )
 
-    user_msg = "Write the opening user message now."
+    # See `_generate_tool_aware_user_text` for the rationale on `/no_think`
+    # and the 800-token cap — same belt-and-suspenders against proxies that
+    # strip chat_template_kwargs and let reasoning models eat the budget.
+    user_msg = "/no_think\n\nWrite the opening user message now."
+    seed_max_tokens = 800
     if job_id and run_id:
         await _emit_simulator_request(
             job_id=job_id,
@@ -781,7 +825,7 @@ async def _generate_seed_user_text(
             system=sys,
             user_msg=user_msg,
             temperature=0.8,
-            max_tokens=300,
+            max_tokens=seed_max_tokens,
         )
 
     try:
@@ -797,7 +841,7 @@ async def _generate_seed_user_text(
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.8,
-            max_tokens=300,
+            max_tokens=seed_max_tokens,
             extra_headers=extra_headers,
             reasoning_effort=reasoning_effort,
             chat_template_kwargs=chat_template_kwargs,
@@ -973,7 +1017,19 @@ async def _simulate_user_turn(
     # turn, not a silently dropped one.
     sim_kwargs = dict(chat_template_kwargs or {})
 
-    user_msg = f"Transcript so far:\n{transcript_text}"
+    # `/no_think` is a Qwen3 directive that disables reasoning for this
+    # turn regardless of whether the upstream proxy honors
+    # `chat_template_kwargs.enable_thinking`. Without this, follow-up
+    # simulator turns can spend the entire max_tokens budget inside
+    # <think> and emit empty content — the "Boleh terangkan lagi?"
+    # fallback path. Other model families treat it as literal text and
+    # ignore it. We ALSO cap max_tokens for the simulator at 1200; the
+    # run's max_tokens is sized for assistant turns that may include
+    # reasoning + a long answer, but user messages don't need that much
+    # — a leaked-reasoning attempt would otherwise burn 8k tokens to
+    # produce nothing.
+    user_msg = f"/no_think\n\nTranscript so far:\n{transcript_text}"
+    sim_turn_max_tokens = min(int(max_tokens or 1200), 1200)
     if job_id and run_id:
         # Same "preflight" surfacing as turn 1: render a card in the live
         # preview before the user-turn-N card so reviewers can see exactly
@@ -986,7 +1042,7 @@ async def _simulate_user_turn(
             system=sys,
             user_msg=user_msg,
             temperature=0.8,
-            max_tokens=max_tokens,
+            max_tokens=sim_turn_max_tokens,
         )
 
     try:
@@ -1002,10 +1058,12 @@ async def _simulate_user_turn(
                 {"role": "user", "content": user_msg},
             ],
             temperature=0.8,
-            # Reuse the run's max_tokens — same budget the assistant turns get,
-            # so reasoning models that ignore enable_thinking still have room
-            # for the visible reply after their <think> block.
-            max_tokens=max_tokens,
+            # Capped via sim_turn_max_tokens — see comment near user_msg.
+            # The run's full max_tokens budget is sized for assistant turns
+            # that may include reasoning + a long answer; a user turn is
+            # 1-3 sentences, so letting reasoning leak into 8k tokens just
+            # to emit two sentences is wasteful and risks empty content.
+            max_tokens=sim_turn_max_tokens,
             extra_headers=extra_headers,
             # Forward the provider's reasoning_effort so reasoning models
             # (Mistral with --reasoning-parser, OpenAI o-series) emit a
@@ -1131,6 +1189,12 @@ async def _settings_snapshot(
             "seed": sampling.get("seed"),
             "turns": sampling.get("turns"),
             "relatedTopics": sampling.get("relatedTopics"),
+            # Persist the per-run reasoning toggle so the conversation
+            # drawer's Settings panel can show whether each assistant
+            # turn was meant to capture reasoning content. Only present
+            # on runs created after the toggle existed; older snapshots
+            # leave it out and the drawer suppresses the row.
+            "includeReasoning": sampling.get("includeReasoning"),
         },
         "toolIds": [t["id"] for t in tool_names],
         "toolNames": [t["name"] for t in tool_names],
@@ -1202,6 +1266,34 @@ async def _execute_job_inner(job_id: str) -> str:
     lp = await _load_language_profile(run["languageProfileId"])
     template = await _load_template(run["templateId"])
     provider = await _load_provider(run["providerCredentialId"])
+
+    # The run's `includeReasoning` flag is the SINGLE SOURCE OF TRUTH for
+    # whether assistant turns reason. We override the provider's
+    # chat_template_kwargs in BOTH directions:
+    #   includeReasoning=true  → enable_thinking=True  (force on, even if
+    #                             provider default is off)
+    #   includeReasoning=false → enable_thinking=False (force off, even if
+    #                             provider default is on)
+    # The old "fall through to provider default when the flag is absent"
+    # behavior is the bug that left runs with empty assistant content:
+    # a reasoning-enabled provider default + an unset flag burned the
+    # entire max_tokens budget inside <think> with nothing emitted.
+    _base_ctk = _as_dict(provider.get("chatTemplateKwargs")) or {}
+    want_reasoning = bool(sampling.get("includeReasoning"))
+    assistant_chat_template_kwargs: dict[str, Any] | None = {
+        **_base_ctk,
+        "enable_thinking": want_reasoning,
+    }
+
+    # User-simulator and helper LLM calls (opening user text, follow-up
+    # user turns) must NEVER reason — those are synthetic user messages,
+    # not assistant output. Force enable_thinking=False unconditionally
+    # so a reasoning-default provider doesn't drain the budget on <think>
+    # and leave us with empty content + the "Boleh terangkan lagi?" stub.
+    simulator_chat_template_kwargs: dict[str, Any] | None = {
+        **_base_ctk,
+        "enable_thinking": False,
+    }
 
     # Lightweight multi-topic: pick N additional sibling node names that the
     # template can weave into `{{taxonomy.related}}`. The conversation's primary
@@ -1390,7 +1482,7 @@ async def _execute_job_inner(job_id: str) -> str:
             model=run["model"],
             extra_headers=extra_headers,
             reasoning_effort=provider.get("reasoningEffort"),
-            chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")) or None,
+            chat_template_kwargs=simulator_chat_template_kwargs,
             job_id=job_id,
             run_id=run["id"],
         )
@@ -1417,7 +1509,7 @@ async def _execute_job_inner(job_id: str) -> str:
             model=run["model"],
             extra_headers=extra_headers,
             reasoning_effort=provider.get("reasoningEffort"),
-            chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")) or None,
+            chat_template_kwargs=simulator_chat_template_kwargs,
             job_id=job_id,
             run_id=run["id"],
         )
@@ -1551,7 +1643,7 @@ async def _execute_job_inner(job_id: str) -> str:
                 seed=sampling.get("seed"),
                 extra_headers=extra_headers,
                 reasoning_effort=provider.get("reasoningEffort"),
-                chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")) or None,
+                chat_template_kwargs=assistant_chat_template_kwargs,
             ):
                 if ev.done:
                     stream_tokens_in = ev.tokens_in
@@ -1599,6 +1691,24 @@ async def _execute_job_inner(job_id: str) -> str:
             # cleaned content. Otherwise it equals the joined deltas.
             content = stream_final_text or "".join(stream_content_parts)
 
+            # Catastrophic-empty detection: model returned HTTP 200 but
+            # produced no content, no tool_calls, AND zero output tokens.
+            # On flaky proxies this is common — we raise so the outer
+            # caller can retry / surface a failure, instead of silently
+            # persisting a blank assistant turn.
+            if (
+                not content
+                and not tc
+                and stream_tokens_out == 0
+                and not "".join(stream_reasoning_parts)
+            ):
+                raise RuntimeError(
+                    f"upstream returned empty completion "
+                    f"(model={stream_model} tokens_in={stream_tokens_in} "
+                    f"latency_ms={last_latency}) — likely a proxy/upstream "
+                    f"hiccup, retry"
+                )
+
             # Mark each streamed tool call as "args complete" so the client can
             # stop the inline "..." indicator and freeze the card.
             for idx in announced_tool_names:
@@ -1626,6 +1736,7 @@ async def _execute_job_inner(job_id: str) -> str:
                 # `tool_call_delta` loop above already announced this call as
                 # the model emitted it. Duplicating it just clutters the UI.
                 tdef = tools_by_name.get(tname)
+                tool_reasoning_parts: list[str] = []
                 if tdef is None:
                     tool_text = json.dumps(
                         {"error": f"unknown tool {tname!r}"}, ensure_ascii=False
@@ -1647,11 +1758,20 @@ async def _execute_job_inner(job_id: str) -> str:
                         # reasoning models with empty `content`).
                         sampling_params=sampling,
                         reasoning_effort=provider.get("reasoningEffort"),
-                        chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")) or None,
+                        # Tool-result mock follows the run's
+                        # includeReasoning toggle: when ON, the mock
+                        # backend's chain-of-thought is captured (so the
+                        # trace can show *why* the synthetic backend
+                        # produced this payload); when OFF, thinking is
+                        # forced off the same way the assistant turn is.
+                        chat_template_kwargs=assistant_chat_template_kwargs,
                         # Forward each mock-backend delta (content + reasoning)
                         # to the live preview so the user sees the synthetic
                         # response materialize.
                         on_delta=_notify,
+                        # Collect reasoning chunks so we can persist them
+                        # on the role=tool Message row alongside content.
+                        reasoning_sink=tool_reasoning_parts,
                     )
                 preview = tool_text.replace("\n", " ")
                 if len(preview) > 400:
@@ -1664,6 +1784,7 @@ async def _execute_job_inner(job_id: str) -> str:
                     "tool_call_id": call.get("id") or cuid_like(),
                     "name": tname,
                     "content": tool_text,
+                    "_reasoning_content": "".join(tool_reasoning_parts) or None,
                 })
         return {
             "messages": new_msgs,
@@ -1706,7 +1827,10 @@ async def _execute_job_inner(job_id: str) -> str:
                 "seed": sampling.get("seed"),
             },
             "reasoningEffort": provider.get("reasoningEffort"),
-            "chatTemplateKwargs": _as_dict(provider.get("chatTemplateKwargs")) or None,
+            # Log the EFFECTIVE chat_template_kwargs (after the run's
+            # `includeReasoning` override) — not just the provider's raw
+            # config. Lets the trace UI show exactly what was sent.
+            "chatTemplateKwargs": assistant_chat_template_kwargs,
         },
     )
 
@@ -1715,6 +1839,7 @@ async def _execute_job_inner(job_id: str) -> str:
     result = _Result()
     result.content = ""
     result.reasoning_content = None
+    result.tool_calls = None
     result.tokens_in = 0
     result.tokens_out = 0
     result.cost_usd = 0.0
@@ -1744,9 +1869,36 @@ async def _execute_job_inner(job_id: str) -> str:
         await _emit_event(
             job_id, run["id"], event="turn.assistant", turn=1,
         )
-        try:
-            first = await _run_turn_with_tools(messages)
-        except Exception as e:  # noqa: BLE001
+        # Retry the first tool-mode turn up to 3 times — covers transient
+        # proxy hiccups (0-token responses, mid-stream drops, 5xx) the
+        # same way the multi-turn loop already does for turns 2..N.
+        FIRST_TURN_RETRIES = 3
+        first = None
+        first_err: Exception | None = None
+        for attempt in range(1, FIRST_TURN_RETRIES + 1):
+            try:
+                first = await _run_turn_with_tools(messages)
+                first_err = None
+                break
+            except Exception as e:  # noqa: BLE001
+                first_err = e
+                log.warning(
+                    "first tool-mode turn attempt %d/%d failed: %s",
+                    attempt, FIRST_TURN_RETRIES, e,
+                )
+                await _log_event(
+                    job_id,
+                    "provider.empty_completion",
+                    {
+                        "attempt": attempt,
+                        "of": FIRST_TURN_RETRIES,
+                        "error": str(e)[:500],
+                    },
+                )
+                if attempt < FIRST_TURN_RETRIES:
+                    await asyncio.sleep(1.5 * attempt)
+        if first is None:
+            e = first_err or RuntimeError("first turn failed without error")
             log.exception("provider tool call failed for job=%s", job_id)
             await _log_event(job_id, "job.error", {"error": str(e)[:1000]})
             await db.execute(
@@ -1757,7 +1909,7 @@ async def _execute_job_inner(job_id: str) -> str:
                 """,
                 job_id, str(e)[:1000],
             )
-            raise
+            raise e
 
         first_msgs = first["messages"]
         first_assistant = next(
@@ -1769,6 +1921,15 @@ async def _execute_job_inner(job_id: str) -> str:
             first_turn_extra_messages = list(first_msgs)
         primary_content = (first_assistant or {}).get("content") or ""
         result.content = primary_content
+        # Carry reasoning + tool_calls from the first tool-mode assistant
+        # turn through to the persisted row. Previously these stayed at
+        # their defaults (None) because the tool-mode branch only copied
+        # `content`, so ordinal-2 assistant messages had blank reasoning
+        # and a null `toolCalls` column even when the model produced both.
+        result.reasoning_content = (first_assistant or {}).get(
+            "_reasoning_content"
+        )
+        result.tool_calls = (first_assistant or {}).get("tool_calls")
         result.tokens_in = first["tokens_in"]
         result.tokens_out = int((first_assistant or {}).get("_tokens_out") or first["tokens_out"])
         result.cost_usd = first["cost_usd"]
@@ -1793,7 +1954,7 @@ async def _execute_job_inner(job_id: str) -> str:
                 max_tokens=sampling.get("max_tokens", 1024),
                 extra_headers=extra_headers,
                 reasoning_effort=provider.get("reasoningEffort"),
-                chat_template_kwargs=_as_dict(provider.get("chatTemplateKwargs")) or None,
+                chat_template_kwargs=assistant_chat_template_kwargs,
             ):
                 if ev.done:
                     tokens_in = ev.tokens_in
@@ -1925,7 +2086,6 @@ async def _execute_job_inner(job_id: str) -> str:
             "toolMode": tools_payload is not None,
         },
     )
-    chat_template_kwargs_arg = _as_dict(provider.get("chatTemplateKwargs")) or None
     # `extra_messages` accumulates EVERY message past the first user+assistant
     # pair: tool calls/results synthesized during turn 1 plus all turns 2..N.
     extra_messages: list[dict[str, Any]] = list(first_turn_extra_messages)
@@ -1961,7 +2121,7 @@ async def _execute_job_inner(job_id: str) -> str:
             model=run["model"],
             extra_headers=extra_headers,
             reasoning_effort=provider.get("reasoningEffort"),
-            chat_template_kwargs=chat_template_kwargs_arg,
+            chat_template_kwargs=simulator_chat_template_kwargs,
             max_tokens=int(sampling.get("max_tokens") or 1024),
             tool_defs=tool_defs if tool_defs else None,
             turn_number=turn_i,
@@ -2098,7 +2258,7 @@ async def _execute_job_inner(job_id: str) -> str:
                     max_tokens=sampling.get("max_tokens", 1024),
                     extra_headers=extra_headers,
                     reasoning_effort=provider.get("reasoningEffort"),
-                    chat_template_kwargs=chat_template_kwargs_arg,
+                    chat_template_kwargs=assistant_chat_template_kwargs,
                 ):
                     if ev.done:
                         stream_tokens_in = ev.tokens_in
@@ -2324,11 +2484,16 @@ async def _execute_job_inner(job_id: str) -> str:
             await conn.execute(
                 """INSERT INTO "Message"
                    (id, "conversationId", ordinal, role, content, "reasoningContent",
+                    "toolCalls",
                     language, script, "tokenCount", "latencyMs", model,
                     "rawProviderResponse", "createdAt")
-                   VALUES ($1, $2, $3, 'assistant', $4, $5, $6, $7, $8, $9, $10, $11, NOW())""",
+                   VALUES ($1, $2, $3, 'assistant', $4, $5, $6::jsonb, $7, $8, $9, $10, $11, $12, NOW())""",
                 asst_msg_id, conv_id, ordinal, result.content,
                 result.reasoning_content,
+                # Pass the Python list directly so the jsonb codec encodes
+                # it once — see the same caveat on the multi-turn assistant
+                # insert below.
+                getattr(result, "tool_calls", None) or None,
                 primary_lang, lp.get("script") or "latin",
                 result.tokens_out, result.latency_ms, result.model,
                 json.dumps(result.raw),
@@ -2376,12 +2541,14 @@ async def _execute_job_inner(job_id: str) -> str:
                 elif role == "tool":
                     await conn.execute(
                         """INSERT INTO "Message"
-                           (id, "conversationId", ordinal, role, content, "toolCallId", "createdAt")
-                           VALUES ($1, $2, $3, 'tool', $4, $5, NOW())""",
+                           (id, "conversationId", ordinal, role, content,
+                            "reasoningContent", "toolCallId", "createdAt")
+                           VALUES ($1, $2, $3, 'tool', $4, $5, $6, NOW())""",
                         cuid_like(),
                         conv_id,
                         ordinal,
                         content,
+                        m.get("_reasoning_content"),
                         m.get("tool_call_id"),
                     )
                 ordinal += 1

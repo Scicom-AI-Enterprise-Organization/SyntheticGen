@@ -139,8 +139,46 @@ export async function aiAssistStream(
   let finalData: Record<string, unknown> | null = null;
   let errorMsg: string | null = null;
 
+  // Idle-byte timeout. If the upstream proxy reports the request as
+  // completed but its pipe stays open with no further bytes, the reader
+  // would block forever and the caller (orchestrator phase) hangs. Race
+  // every read against a timer that resets on each chunk; if the timer
+  // fires we cancel the reader so the read() promise rejects, then throw
+  // a transient error that the orchestrator's retry loop recognizes.
+  const idleMs = Number(process.env.AI_STREAM_IDLE_MS ?? 90_000);
+
   outer: while (true) {
-    const { value, done } = await reader.read();
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+    let idleFired = false;
+    const idle = new Promise<{ idle: true }>((resolve) => {
+      idleTimer = setTimeout(() => {
+        idleFired = true;
+        // Cancelling the reader makes the in-flight read() promise
+        // reject with an error, which we then translate into a transient
+        // "idle" exception below.
+        reader.cancel().catch(() => {});
+        resolve({ idle: true });
+      }, idleMs);
+    });
+    let chunk: ReadableStreamReadResult<Uint8Array> | { idle: true };
+    try {
+      chunk = await Promise.race([reader.read(), idle]);
+    } catch (e) {
+      if (idleFired) {
+        throw new Error(
+          `synthgen-api /internal/ai-assist/stream idle timeout after ${idleMs}ms (no bytes received)`,
+        );
+      }
+      throw e;
+    } finally {
+      if (idleTimer) clearTimeout(idleTimer);
+    }
+    if ("idle" in chunk) {
+      throw new Error(
+        `synthgen-api /internal/ai-assist/stream idle timeout after ${idleMs}ms (no bytes received)`,
+      );
+    }
+    const { value, done } = chunk;
     if (done) break;
     buf += decoder.decode(value, { stream: true });
     const lines = buf.split("\n");

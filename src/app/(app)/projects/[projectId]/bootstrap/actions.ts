@@ -6,7 +6,7 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission } from "@/lib/project-rbac";
 import { logAudit } from "@/lib/audit";
-import { runBootstrap, type BootstrapScope } from "./orchestrator";
+import { runBootstrap, type BootstrapScope, type BootstrapStep } from "./orchestrator";
 
 const scopeSchema = z.object({
   taxonomy: z.boolean(),
@@ -17,6 +17,12 @@ const scopeSchema = z.object({
   flows: z.boolean(),
   rubrics: z.boolean(),
   benchmarks: z.boolean(),
+  // Opt-in: when true, the orchestrator threads the project's existing
+  // tool catalog into the extra-context of every entity-generation phase
+  // so taxonomy / personas / templates / flows reference the user's tools
+  // instead of inventing unrelated ones. Default false to keep cold runs
+  // identical to pre-existing behavior.
+  useExistingToolsContext: z.boolean().optional(),
 });
 
 const startSchema = z.object({
@@ -102,10 +108,88 @@ export async function startBootstrap(input: z.infer<typeof startSchema>) {
   return { ok: true as const, id: created.id };
 }
 
+// Walks the persisted events of a bootstrap job and returns the set of
+// steps that didn't fully succeed — used by the "Rerun failed only" path
+// so we only re-run phases that errored or produced less than their target.
+// A step is "failed" if it has any step-error event, OR its terminal
+// step-done event recorded inserted < attempted (partial production).
+// Steps that the source job didn't run at all (scope=false) are NOT
+// included — they were intentionally skipped, not failed.
+function failedStepsFromEvents(
+  events: unknown,
+  scope: BootstrapScope,
+): BootstrapStep[] {
+  const arr = Array.isArray(events)
+    ? (events as Array<{
+        step?: unknown;
+        kind?: unknown;
+        payload?: { inserted?: unknown; attempted?: unknown };
+      }>)
+    : [];
+  const ALL_STEPS: BootstrapStep[] = [
+    "taxonomy",
+    "languages",
+    "personas",
+    "templates",
+    "tools",
+    "flows",
+    "rubrics",
+    "benchmarks",
+  ];
+  const failed = new Set<BootstrapStep>();
+  for (const e of arr) {
+    if (typeof e.step !== "string") continue;
+    const step = e.step as BootstrapStep;
+    if (!ALL_STEPS.includes(step)) continue;
+    if (!scope[step]) continue;
+    if (e.kind === "step-error") {
+      failed.add(step);
+      continue;
+    }
+    if (e.kind === "step-done") {
+      const ins = Number(e.payload?.inserted ?? 0);
+      const att = Number(e.payload?.attempted ?? 0);
+      if (att > 0 && ins < att) failed.add(step);
+    }
+  }
+  // Also flag any in-scope step that never reached step-done at all — it
+  // means the run was cut off mid-phase (crash, kill, infra timeout).
+  const reachedDone = new Set<BootstrapStep>();
+  for (const e of arr) {
+    if (typeof e.step !== "string") continue;
+    if (e.kind === "step-done") reachedDone.add(e.step as BootstrapStep);
+  }
+  for (const s of ALL_STEPS) {
+    if (scope[s] && !reachedDone.has(s)) failed.add(s);
+  }
+  return ALL_STEPS.filter((s) => failed.has(s));
+}
+
+export async function getFailedSteps(
+  projectId: string,
+  jobId: string,
+): Promise<{ ok: true; steps: BootstrapStep[] } | { error: string }> {
+  await requireProjectPermission(projectId, "project.read");
+  const job = await prisma.bootstrapJob.findFirst({
+    where: { id: jobId, projectId },
+    select: { events: true, scope: true },
+  });
+  if (!job) return { error: "Job not found" };
+  const scope = job.scope as unknown as BootstrapScope;
+  return { ok: true, steps: failedStepsFromEvents(job.events, scope) };
+}
+
 // Clones an existing job's prompt/provider/model/scope into a new BootstrapJob
 // row and fires the orchestrator on it. Lets the user click "Start another"
 // from a completed run and immediately re-generate with the same config.
-export async function rerunBootstrap(projectId: string, sourceJobId: string) {
+// When `onlyFailed` is true, the cloned scope is narrowed to only the
+// steps that failed in the source — useful after a transient infra
+// blip leaves rubrics/benchmarks empty but everything else fine.
+export async function rerunBootstrap(
+  projectId: string,
+  sourceJobId: string,
+  opts: { onlyFailed?: boolean } = {},
+) {
   const { user } = await requireProjectPermission(projectId, "project.update");
 
   const source = await prisma.bootstrapJob.findFirst({
@@ -117,9 +201,38 @@ export async function rerunBootstrap(projectId: string, sourceJobId: string) {
       temperature: true,
       maxTokens: true,
       scope: true,
+      events: true,
     },
   });
   if (!source) return { error: "Source job not found" };
+
+  // Build the scope for the new job. Default = identical to source.
+  // When onlyFailed=true, narrow it to just the steps that failed (or
+  // didn't reach step-done) in the source, while preserving the
+  // useExistingToolsContext flag.
+  const sourceScope = source.scope as unknown as BootstrapScope;
+  let nextScope: BootstrapScope = sourceScope;
+  if (opts.onlyFailed) {
+    const failed = failedStepsFromEvents(source.events, sourceScope);
+    if (failed.length === 0) {
+      return {
+        error:
+          "No failed steps to retry — the original run finished every in-scope phase.",
+      };
+    }
+    nextScope = {
+      taxonomy: false,
+      languages: false,
+      personas: false,
+      templates: false,
+      tools: false,
+      flows: false,
+      rubrics: false,
+      benchmarks: false,
+      useExistingToolsContext: sourceScope.useExistingToolsContext,
+    };
+    for (const s of failed) nextScope[s] = true;
+  }
 
   // Same single-flight guard as startBootstrap — refuse if another bootstrap
   // is already in flight for this project.
@@ -157,7 +270,7 @@ export async function rerunBootstrap(projectId: string, sourceJobId: string) {
       model: source.model,
       temperature: source.temperature,
       maxTokens: source.maxTokens,
-      scope: source.scope as Prisma.InputJsonValue,
+      scope: nextScope as unknown as Prisma.InputJsonValue,
       status: "queued",
       createdById: user.id,
     },
@@ -169,7 +282,7 @@ export async function rerunBootstrap(projectId: string, sourceJobId: string) {
     action: "bootstrap.rerun",
     targetKind: "BootstrapJob",
     targetId: created.id,
-    metadata: { sourceJobId },
+    metadata: { sourceJobId, onlyFailed: opts.onlyFailed === true },
   });
 
   void runBootstrap(created.id).catch((e) => {

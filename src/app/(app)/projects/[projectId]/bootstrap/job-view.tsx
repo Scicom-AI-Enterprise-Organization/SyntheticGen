@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
   Check,
+  ChevronDown,
   ChevronRight,
   Loader2,
   Sparkles,
@@ -33,8 +34,17 @@ import {
 } from "@/components/ui/dialog";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   cancelBootstrap,
   deleteJobGenerations,
+  getFailedSteps,
   rerunBootstrap,
   summarizeJobGenerations,
 } from "./actions";
@@ -75,7 +85,7 @@ interface BootstrapEvent {
 interface TokenEvent {
   step: string;
   phaseIndex: number;
-  kind: "delta" | "phase-start" | "phase-end";
+  kind: "delta" | "phase-start" | "phase-end" | "retry";
   content?: string;
   meta?: Record<string, unknown>;
 }
@@ -163,9 +173,13 @@ export function JobView({ initial }: { initial: JobInitial }) {
   );
   const [cancelling, startCancel] = useTransition();
 
-  // Rerun-with-same-config state.
+  // Rerun-with-same-config state. `failedSteps` is null until we've
+  // queried the server for the list of failed steps (used to label the
+  // "Rerun failed only" menu item with a count). Re-queried on mount and
+  // whenever the events list grows.
   const [rerunning, startRerun] = useTransition();
   const [rerunError, setRerunError] = useState<string | null>(null);
+  const [failedSteps, setFailedSteps] = useState<string[] | null>(null);
 
   // Delete-generations dialog state.
   const [deleteOpen, setDeleteOpen] = useState(false);
@@ -185,6 +199,26 @@ export function JobView({ initial }: { initial: JobInitial }) {
   const [deleting, startDelete] = useTransition();
 
   const lastRefresh = useRef(0);
+
+  // Refresh the list of failed steps whenever the job reaches a terminal
+  // state or its events grow. Used to label the "Rerun failed only"
+  // dropdown item with an accurate count.
+  useEffect(() => {
+    if (!isTerminal(status)) {
+      setFailedSteps(null);
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      const res = await getFailedSteps(initial.projectId, initial.id);
+      if (cancelled) return;
+      if ("ok" in res) setFailedSteps(res.steps);
+      else setFailedSteps([]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [status, events.length, initial.projectId, initial.id]);
 
   // Subscribe to the SSE stream. Replays from current event count so a
   // navigate-away-then-back picks up cleanly.
@@ -261,6 +295,39 @@ export function JobView({ initial }: { initial: JobInitial }) {
             }
             return { ...cur, text: cur.text + (t.content ?? "") };
           }
+          if (t.kind === "retry") {
+            // Server-side retry — wipe the current phase buffer so the
+            // user doesn't see two interleaved attempts. Keep the panel
+            // open in streaming state with a small "retry N/N" badge in
+            // the text, which gets overwritten by the next delta.
+            if (
+              !cur ||
+              cur.step !== t.step ||
+              cur.phaseIndex !== t.phaseIndex
+            ) {
+              return cur;
+            }
+            const attempt =
+              t.meta && typeof t.meta.attempt === "number"
+                ? t.meta.attempt
+                : null;
+            const of =
+              t.meta && typeof t.meta.of === "number" ? t.meta.of : null;
+            const prev =
+              t.meta && typeof t.meta.previousError === "string"
+                ? t.meta.previousError
+                : "";
+            const banner =
+              attempt && of
+                ? `[retry ${attempt}/${of}${prev ? ` — ${prev}` : ""}]\n\n`
+                : "[retry]\n\n";
+            return {
+              ...cur,
+              text: banner,
+              state: "streaming",
+              startedAt: Date.now(),
+            };
+          }
           if (t.kind === "phase-end") {
             if (
               !cur ||
@@ -324,14 +391,16 @@ export function JobView({ initial }: { initial: JobInitial }) {
   // scope) as a NEW job rather than dropping the user on the start form.
   // Clicking the button on the bare /bootstrap page (no job loaded) is
   // handled separately on the StartForm — that's the "fresh prompt" path.
-  function onRestart() {
+  // When `onlyFailed` is true, the new job only re-runs the phases that
+  // failed (errored or didn't reach step-done) in this run.
+  function onRestart(onlyFailed: boolean = false) {
     setRerunError(null);
     startRerun(async () => {
-      const res = await rerunBootstrap(initial.projectId, initial.id);
+      const res = await rerunBootstrap(initial.projectId, initial.id, {
+        onlyFailed,
+      });
       if ("error" in res && res.error) {
         setRerunError(res.error);
-        // If the server told us a job is already running, jump to it so the
-        // user lands somewhere useful instead of a stuck state.
         if (
           "runningJobId" in res &&
           typeof res.runningJobId === "string"
@@ -451,20 +520,70 @@ export function JobView({ initial }: { initial: JobInitial }) {
                     <Sparkles className="mr-1 h-3 w-3" />
                     New prompt
                   </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={onRestart}
-                    disabled={rerunning}
-                    title="Rerun this bootstrap with the same prompt + provider + scope"
-                  >
-                    {rerunning ? (
-                      <Loader2 className="mr-1 h-3 w-3 animate-spin" />
-                    ) : (
-                      <RotateCw className="mr-1 h-3 w-3" />
-                    )}
-                    Rerun
-                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={rerunning}
+                        title="Rerun this bootstrap"
+                      >
+                        {rerunning ? (
+                          <Loader2 className="mr-1 h-3 w-3 animate-spin" />
+                        ) : (
+                          <RotateCw className="mr-1 h-3 w-3" />
+                        )}
+                        Rerun
+                        <ChevronDown className="ml-1 h-3 w-3" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="w-64">
+                      <DropdownMenuLabel className="text-xs font-normal text-muted-foreground">
+                        Run again with the same prompt + provider
+                      </DropdownMenuLabel>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem
+                        onClick={() => onRestart(false)}
+                        disabled={rerunning}
+                      >
+                        <RotateCw className="mr-2 h-3.5 w-3.5" />
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <span className="text-sm">Rerun everything</span>
+                          <span className="text-[11px] text-muted-foreground">
+                            Re-runs every in-scope phase from scratch.
+                            Adds new entities alongside the existing ones.
+                          </span>
+                        </div>
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={() => onRestart(true)}
+                        disabled={
+                          rerunning ||
+                          failedSteps === null ||
+                          failedSteps.length === 0
+                        }
+                      >
+                        <AlertCircle className="mr-2 h-3.5 w-3.5" />
+                        <div className="flex min-w-0 flex-1 flex-col">
+                          <span className="text-sm">
+                            Rerun failed only
+                            {failedSteps && failedSteps.length > 0 && (
+                              <span className="ml-1 text-muted-foreground">
+                                ({failedSteps.length})
+                              </span>
+                            )}
+                          </span>
+                          <span className="text-[11px] text-muted-foreground">
+                            {failedSteps === null
+                              ? "Checking…"
+                              : failedSteps.length === 0
+                                ? "No failed phases to retry."
+                                : `Re-runs: ${failedSteps.join(", ")}`}
+                          </span>
+                        </div>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
                   <Button
                     variant="destructive"
                     size="sm"

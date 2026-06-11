@@ -115,6 +115,7 @@ export function RunWizard({
   const [temperature, setTemperature] = useState(0.7);
   const [maxTokens, setMaxTokens] = useState(8192);
   const [relatedTopics, setRelatedTopics] = useState(0);
+  const [includeReasoning, setIncludeReasoning] = useState(false);
   const [toolIds, setToolIds] = useState<string[]>([]);
   const [flowIds, setFlowIds] = useState<string[]>([]);
   // Explicit user choice: single-turn manual grid vs flow-driven multi-turn.
@@ -179,6 +180,7 @@ export function RunWizard({
         topP: 1.0,
         maxTokens,
         seed: null,
+        includeReasoning,
       });
       if (res && "error" in res && res.error) setSubmitError(res.error);
       // Successful path redirects in the action.
@@ -326,6 +328,32 @@ export function RunWizard({
             for reasoning models so thinking + answer both fit.
           </p>
         </div>
+
+        <label
+          htmlFor="r-include-reasoning"
+          className="flex cursor-pointer items-start gap-2 rounded-md border border-border bg-background p-3 sm:col-span-2 hover:bg-muted/40"
+        >
+          <Checkbox
+            id="r-include-reasoning"
+            checked={includeReasoning}
+            onCheckedChange={(v) => setIncludeReasoning(v === true)}
+            className="mt-0.5"
+          />
+          <span className="min-w-0 text-sm">
+            <span className="block font-medium">
+              Include reasoning per assistant turn
+            </span>
+            <span className="block text-xs text-muted-foreground">
+              Forces <code>enable_thinking=true</code> on every assistant call so
+              the model's chain-of-thought is captured and saved to{" "}
+              <code>Message.reasoningContent</code>. The conversation viewer shows
+              it under each assistant message. Requires a reasoning-capable model
+              (Qwen3-thinking, DeepSeek-R1, OpenAI o-series, etc.) — non-reasoning
+              models will just return empty reasoning. Bump max output tokens
+              when ON.
+            </span>
+          </span>
+        </label>
 
       </div>
 

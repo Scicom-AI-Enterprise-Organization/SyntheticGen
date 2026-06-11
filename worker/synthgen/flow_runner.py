@@ -115,7 +115,27 @@ async def _load_tool_defs(tool_ids: list[str]) -> list[dict[str, Any]]:
 
 
 def _tools_payload(tool_defs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """OpenAI `tools` array shape."""
+    """OpenAI `tools` array shape.
+
+    Capped at SYNTHGEN_MAX_TOOLS_PER_REQUEST (default 30). Some upstream
+    proxies (we hit this on serverlessgpu.aies.scicom.dev) silently
+    return HTTP 200 with an empty body when the request has too many
+    tools / payload exceeds ~150KB. Rather than fail invisibly, we
+    truncate and log a warning. Pre-filter at run config if you need a
+    specific subset; this cap is the safety net.
+    """
+    import os
+    max_tools = int(os.environ.get("SYNTHGEN_MAX_TOOLS_PER_REQUEST", "30"))
+    if max_tools > 0 and len(tool_defs) > max_tools:
+        import logging
+        logging.getLogger("synthgen.providers").warning(
+            "tool list truncated from %d to %d "
+            "(SYNTHGEN_MAX_TOOLS_PER_REQUEST). Some upstream proxies drop "
+            "requests with too many tools — increase the env var if your "
+            "proxy supports a higher count.",
+            len(tool_defs), max_tools,
+        )
+        tool_defs = tool_defs[:max_tools]
     return [
         {
             "type": "function",
@@ -486,6 +506,7 @@ async def _mock_tool_result(
     reasoning_effort: str | None = None,
     chat_template_kwargs: dict[str, Any] | None = None,
     on_delta: Callable[..., Awaitable[None]] | None = None,
+    reasoning_sink: list[str] | None = None,
 ) -> str:
     """Synthesize a realistic tool response. Order of preference:
         1. tool.mockSeed (deterministic).
@@ -549,7 +570,13 @@ async def _mock_tool_result(
                 if ev.done:
                     break
                 if ev.delta:
-                    if not ev.reasoning:
+                    if ev.reasoning:
+                        # Capture the mock-backend's chain-of-thought when
+                        # the caller wants it persisted. Same chunks the
+                        # live preview already streams via on_delta.
+                        if reasoning_sink is not None:
+                            reasoning_sink.append(ev.delta)
+                    else:
                         content_parts.append(ev.delta)
                     await on_delta(ev.delta, reasoning=ev.reasoning)
             text = "".join(content_parts).strip()
@@ -1257,7 +1284,14 @@ async def execute_flow_job(
         raise RuntimeError(f"flow not found: {flow_id}")
 
     config = _as_dict(run.get("configSnapshot"))
-    chat_template_kwargs = _as_dict(provider.get("chatTemplateKwargs")) or None
+    # When the run opted into per-turn reasoning, force enable_thinking=True
+    # on every model call so the providers layer mirrors it to
+    # include_reasoning=True and reasoning content is captured.
+    _base_ctk = _as_dict(provider.get("chatTemplateKwargs")) or {}
+    if bool(sampling.get("includeReasoning")):
+        chat_template_kwargs = {**_base_ctk, "enable_thinking": True}
+    else:
+        chat_template_kwargs = _base_ctk or None
     reasoning_effort = provider.get("reasoningEffort")
 
     # Load every tool referenced anywhere in the flow's action nodes (plus

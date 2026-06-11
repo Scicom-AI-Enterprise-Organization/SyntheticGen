@@ -553,6 +553,18 @@ export default async function RunDetailPage({
                   .filter(Boolean)
                   .join(" · ") || null,
               ],
+              // Dedicated row so the flag is visible without scanning the
+              // long sampling string. Older runs (created before the toggle
+              // existed) won't have the key — KV drops null values, so the
+              // row is suppressed for those.
+              [
+                "reasoning per assistant turn",
+                "includeReasoning" in cfgSampling
+                  ? cfgSampling.includeReasoning === true
+                    ? "on"
+                    : "off"
+                  : null,
+              ],
               [
                 "total cells",
                 `${totalCells} (${

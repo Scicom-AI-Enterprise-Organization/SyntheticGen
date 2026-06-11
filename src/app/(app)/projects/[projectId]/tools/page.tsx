@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ToolsTable } from "./tools-table";
+import { BulkImportButton } from "./bulk-import-button";
 
 export default async function ToolsPage({
   params,
@@ -51,12 +52,15 @@ export default async function ToolsPage({
           </p>
         </div>
         {canWrite && catalog && (
-          <Button asChild>
-            <Link href={`/projects/${projectId}/tools/new`}>
-              <Plus className="mr-2 h-4 w-4" />
-              New tool
-            </Link>
-          </Button>
+          <div className="flex gap-2">
+            <BulkImportButton projectId={projectId} catalogId={catalog.id} />
+            <Button asChild>
+              <Link href={`/projects/${projectId}/tools/new`}>
+                <Plus className="mr-2 h-4 w-4" />
+                New tool
+              </Link>
+            </Button>
+          </div>
         )}
       </div>
 

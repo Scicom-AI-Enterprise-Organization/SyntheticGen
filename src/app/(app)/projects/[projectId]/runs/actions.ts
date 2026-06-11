@@ -28,6 +28,11 @@ const startRunSchema = z.object({
   topP: z.number().min(0).max(1).default(1.0),
   maxTokens: z.number().int().min(16).max(64000).default(1024),
   seed: z.number().int().optional().nullable(),
+  // When true, the worker forces `enable_thinking=true` on every assistant
+  // turn so the Message.reasoningContent column is populated. Lets a project
+  // get reasoning per turn even when the provider's default chatTemplateKwargs
+  // would otherwise suppress it.
+  includeReasoning: z.boolean().default(false),
 });
 
 export async function createAndStartRun(input: z.infer<typeof startRunSchema>) {
@@ -57,6 +62,7 @@ export async function createAndStartRun(input: z.infer<typeof startRunSchema>) {
     seed: data.seed ?? null,
     turns: data.turns,
     relatedTopics: data.relatedTopics,
+    includeReasoning: data.includeReasoning,
   };
 
   const gridSpec = {
