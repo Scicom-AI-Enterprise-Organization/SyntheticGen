@@ -14,11 +14,24 @@ import { RunWizard } from "./run-wizard";
 
 export default async function NewRunPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ projectId: string }>;
+  searchParams: Promise<{ cloneFrom?: string }>;
 }) {
   const { projectId } = await params;
+  const sp = await searchParams;
   await requireProjectPermission(projectId, "runs.execute");
+
+  // When invoked with ?cloneFrom=<runId>, load that run's frozen config so
+  // the wizard can pre-fill its defaults. Lets the user replicate a run
+  // and tweak any setting before starting, instead of re-typing everything.
+  const cloneFromRun = sp.cloneFrom
+    ? await prisma.generationRun.findFirst({
+        where: { id: sp.cloneFrom, projectId },
+        include: { taxonomyNodes: true, personas: true },
+      })
+    : null;
 
   const [taxonomy, personas, languageProfiles, providers, templates, tools, flows] = await Promise.all([
     prisma.taxonomy.findFirst({
@@ -108,9 +121,23 @@ export default async function NewRunPage({
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between gap-4">
-        <h1 className="text-2xl font-semibold tracking-tight">New run</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          {cloneFromRun ? "Replicate run" : "New run"}
+        </h1>
         {backButton}
       </div>
+      {cloneFromRun && (
+        <div className="rounded-md border border-blue-500/40 bg-blue-500/5 px-3 py-2 text-xs text-blue-900 dark:text-blue-200">
+          Form pre-filled from{" "}
+          <Link
+            className="font-medium underline-offset-2 hover:underline"
+            href={`/projects/${projectId}/runs/${cloneFromRun.id}`}
+          >
+            {cloneFromRun.name}
+          </Link>
+          . Tweak anything you want, then hit Start to launch a fresh run.
+        </div>
+      )}
       <RunWizard
         projectId={projectId}
         taxonomy={taxonomy!.nodes.map((n) => ({ id: n.id, name: n.name, path: n.path }))}
@@ -130,6 +157,33 @@ export default async function NewRunPage({
           description:
             "The grid is taxonomyNodes × personas × difficulties × rowsPerCell. Slice 1 caps total cells at 1000.",
         }}
+        cloneFrom={
+          cloneFromRun
+            ? {
+                id: cloneFromRun.id,
+                name: cloneFromRun.name,
+                description: cloneFromRun.description,
+                providerCredentialId: cloneFromRun.providerCredentialId,
+                templateId: cloneFromRun.templateId,
+                languageProfileId: cloneFromRun.languageProfileId,
+                model: cloneFromRun.model,
+                formalityPolicy: cloneFromRun.formalityPolicy,
+                samplingParams: cloneFromRun.samplingParams as Record<
+                  string,
+                  unknown
+                >,
+                gridSpec: cloneFromRun.gridSpec as Record<string, unknown>,
+                configSnapshot: cloneFromRun.configSnapshot as Record<
+                  string,
+                  unknown
+                >,
+                taxonomyNodeIds: cloneFromRun.taxonomyNodes.map(
+                  (t) => t.taxonomyNodeId,
+                ),
+                personaIds: cloneFromRun.personas.map((p) => p.personaId),
+              }
+            : null
+        }
       />
     </div>
   );

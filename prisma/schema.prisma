@@ -38,6 +38,33 @@ model User {
   auditLog             AuditLogEntry[]
   bootstrapJobs        BootstrapJob[]       @relation("BootstrapJobCreatedBy")
   globalProvidersCreated GlobalProviderCredential[] @relation("GlobalProviderCreatedBy")
+  apiKeys              ApiKey[]
+}
+
+// Personal access tokens for programmatic API use. A token's bearer can do
+// anything the owning user can (same role + project memberships). The raw
+// token is shown once at creation; afterwards we only retain the sha256 hash
+// (`hashedToken`, unique-indexed for O(1) lookup) plus a short visible
+// `prefix` for identification in the UI.
+model ApiKey {
+  id          String    @id @default(cuid())
+  userId      String
+  name        String
+  // First 12 chars of the raw token (e.g. "sgk_a1b2c3d4")
+  // shown alongside the row so users can tell tokens apart in the list.
+  prefix      String
+  // sha256(rawToken) — never the raw token. UNIQUE so a bearer-auth lookup
+  // is one indexed query.
+  hashedToken String    @unique
+  createdAt   DateTime  @default(now())
+  lastUsedAt  DateTime?
+  // Soft-revoke: when set, the token is rejected by the bearer middleware.
+  // We keep the row so the UI can still show "revoked on …" if we want.
+  revokedAt   DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, revokedAt])
 }
 
 model Account {

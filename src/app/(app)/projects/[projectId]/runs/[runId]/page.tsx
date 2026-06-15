@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/card";
 import { RunLiveStatus } from "./run-live-status";
 import { CancelRunButton } from "./cancel-run-button";
+import { ReplicateRunMenu } from "./replicate-run-menu";
 import { LiveJobPreview } from "./live-job-preview";
 import { JumpstartJobButton } from "./jumpstart-job-button";
 import { RegenRunButton } from "./regen-run-button";
@@ -288,12 +289,15 @@ export default async function RunDetailPage({
             )}
           </p>
         </div>
-        <Button asChild variant="ghost" size="sm">
-          <Link href={`/projects/${projectId}/runs`}>
-            <ChevronLeft className="mr-1 h-4 w-4" />
-            Back to runs
-          </Link>
-        </Button>
+        <div className="flex shrink-0 items-start gap-2">
+          <ReplicateRunMenu projectId={projectId} runId={runId} />
+          <Button asChild variant="ghost" size="sm">
+            <Link href={`/projects/${projectId}/runs`}>
+              <ChevronLeft className="mr-1 h-4 w-4" />
+              Back to runs
+            </Link>
+          </Button>
+        </div>
       </div>
 
       <RunLiveStatus

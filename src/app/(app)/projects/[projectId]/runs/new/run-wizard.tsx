@@ -67,6 +67,22 @@ interface Flow {
 }
 
 
+interface CloneFrom {
+  id: string;
+  name: string;
+  description: string | null;
+  providerCredentialId: string | null;
+  templateId: string | null;
+  languageProfileId: string | null;
+  model: string;
+  formalityPolicy: string;
+  samplingParams: Record<string, unknown>;
+  gridSpec: Record<string, unknown>;
+  configSnapshot: Record<string, unknown>;
+  taxonomyNodeIds: string[];
+  personaIds: string[];
+}
+
 export function RunWizard({
   projectId,
   taxonomy,
@@ -77,6 +93,7 @@ export function RunWizard({
   tools,
   flows,
   card,
+  cloneFrom,
 }: {
   projectId: string;
   taxonomy: Node[];
@@ -87,40 +104,119 @@ export function RunWizard({
   tools: Tool[];
   flows: Flow[];
   card?: { title: string; description?: string };
+  cloneFrom?: CloneFrom | null;
 }) {
+  // Helpers — pull a value out of cloneFrom.samplingParams / configSnapshot
+  // with a typed fallback, so the useState initializers below stay terse.
+  const cs = cloneFrom?.samplingParams ?? {};
+  const cfg = cloneFrom?.configSnapshot ?? {};
+  const cgrid = cloneFrom?.gridSpec ?? {};
+  function pickNum(obj: Record<string, unknown>, k: string, fallback: number): number {
+    const v = obj[k];
+    return typeof v === "number" && Number.isFinite(v) ? v : fallback;
+  }
+  function pickBool(obj: Record<string, unknown>, k: string, fallback: boolean): boolean {
+    const v = obj[k];
+    return typeof v === "boolean" ? v : fallback;
+  }
+  function pickStr<T extends string>(
+    obj: Record<string, unknown>,
+    k: string,
+    fallback: T,
+    allowed?: readonly T[],
+  ): T {
+    const v = obj[k];
+    if (typeof v !== "string") return fallback;
+    if (allowed && !allowed.includes(v as T)) return fallback;
+    return v as T;
+  }
+  function pickStrArr(obj: Record<string, unknown>, k: string): string[] {
+    const v = obj[k];
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+  }
   // SSR-stable default. `new Date()` would tick between server render and
   // hydrate, breaking Radix's useId-based aria-controls on every Select. Fill
   // the timestamp on mount instead — by then no SSR comparison is happening.
-  const [name, setName] = useState("Run");
+  const [name, setName] = useState(
+    cloneFrom ? `${cloneFrom.name} (copy)` : "Run",
+  );
   useEffect(() => {
+    // Only run the auto-timestamp default when we are NOT cloning from a
+    // source run — cloning already supplied a meaningful name.
+    if (cloneFrom) return;
     setName((cur) =>
       cur === "Run"
         ? "Run " + new Date().toISOString().slice(0, 16).replace("T", " ")
         : cur,
     );
+    // Intentionally empty deps — equivalent to "mount once", same as before.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
-  const [templateId, setTemplateId] = useState(templates[0]?.id ?? "");
-  const [languageProfileId, setLanguageProfileId] = useState(languageProfiles[0]?.id ?? "");
-  const [providerId, setProviderId] = useState(providers[0]?.id ?? "");
-  const [model, setModel] = useState(providers[0]?.defaultModel ?? "");
-  const [nodeIds, setNodeIds] = useState<string[]>(taxonomy.length > 0 ? [taxonomy[0].id] : []);
+  const [templateId, setTemplateId] = useState(
+    cloneFrom?.templateId ?? templates[0]?.id ?? "",
+  );
+  const [languageProfileId, setLanguageProfileId] = useState(
+    cloneFrom?.languageProfileId ?? languageProfiles[0]?.id ?? "",
+  );
+  const [providerId, setProviderId] = useState(
+    cloneFrom?.providerCredentialId ?? providers[0]?.id ?? "",
+  );
+  const [model, setModel] = useState(
+    cloneFrom?.model ?? providers[0]?.defaultModel ?? "",
+  );
+  const clonedNodeIds = cloneFrom ? pickStrArr(cgrid, "taxonomyNodeIds") : [];
+  const clonedPersonaIds = cloneFrom ? pickStrArr(cgrid, "personaIds") : [];
+  const clonedFlowIds = cloneFrom ? pickStrArr(cfg, "flowIds") : [];
+  const clonedToolIds = cloneFrom ? pickStrArr(cfg, "toolIds") : [];
+  const [nodeIds, setNodeIds] = useState<string[]>(
+    clonedNodeIds.length > 0
+      ? clonedNodeIds
+      : taxonomy.length > 0
+        ? [taxonomy[0].id]
+        : [],
+  );
   const [personaIds, setPersonaIds] = useState<string[]>(
-    personas.length > 0 ? [personas[0].id] : [],
+    clonedPersonaIds.length > 0
+      ? clonedPersonaIds
+      : personas.length > 0
+        ? [personas[0].id]
+        : [],
   );
-  const [rowsPerCell, setRowsPerCell] = useState(5);
-  const [turns, setTurns] = useState(1);
-  const [formalityPolicy, setFormalityPolicy] = useState<"inherit" | "formal" | "semi-formal" | "colloquial" | "mixed">(
-    "inherit",
+  const [rowsPerCell, setRowsPerCell] = useState(
+    cloneFrom ? pickNum(cgrid, "rowsPerCell", 5) : 5,
   );
-  const [temperature, setTemperature] = useState(0.7);
-  const [maxTokens, setMaxTokens] = useState(8192);
-  const [relatedTopics, setRelatedTopics] = useState(0);
-  const [includeReasoning, setIncludeReasoning] = useState(false);
-  const [toolIds, setToolIds] = useState<string[]>([]);
-  const [flowIds, setFlowIds] = useState<string[]>([]);
+  const [turns, setTurns] = useState(cloneFrom ? pickNum(cs, "turns", 1) : 1);
+  const [formalityPolicy, setFormalityPolicy] = useState<
+    "inherit" | "formal" | "semi-formal" | "colloquial" | "mixed"
+  >(
+    cloneFrom
+      ? pickStr(
+          { v: cloneFrom.formalityPolicy } as unknown as Record<string, unknown>,
+          "v",
+          "inherit",
+          ["inherit", "formal", "semi-formal", "colloquial", "mixed"] as const,
+        )
+      : "inherit",
+  );
+  const [temperature, setTemperature] = useState(
+    cloneFrom ? pickNum(cs, "temperature", 0.7) : 0.7,
+  );
+  const [maxTokens, setMaxTokens] = useState(
+    cloneFrom ? pickNum(cs, "max_tokens", 8192) : 8192,
+  );
+  const [relatedTopics, setRelatedTopics] = useState(
+    cloneFrom ? pickNum(cs, "relatedTopics", 0) : 0,
+  );
+  const [includeReasoning, setIncludeReasoning] = useState(
+    cloneFrom ? pickBool(cs, "includeReasoning", false) : false,
+  );
+  const [toolIds, setToolIds] = useState<string[]>(clonedToolIds);
+  const [flowIds, setFlowIds] = useState<string[]>(clonedFlowIds);
   // Explicit user choice: single-turn manual grid vs flow-driven multi-turn.
   // Flow-driven hides turns/relatedTopics/taxonomy/tools; the flow owns all of that.
-  const [mode, setMode] = useState<"single" | "flow">("single");
+  const [mode, setMode] = useState<"single" | "flow">(
+    clonedFlowIds.length > 0 ? "flow" : "single",
+  );
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [pending, start] = useTransition();
 

@@ -6,12 +6,14 @@ import { usePathname } from "next/navigation";
 import {
   BookOpen,
   Building2,
+  Code2,
   FileCode,
   FlaskConical,
   FolderKanban,
   Gauge,
   GitBranch,
   Home,
+  KeyRound,
   KeySquare,
   Languages,
   LayoutDashboard,
@@ -47,7 +49,11 @@ const WORKSPACE: Item[] = [
   { label: "Playground", href: "/playground", icon: TerminalSquare },
 ];
 
-const ACCOUNT: Item[] = [{ label: "Profile", href: "/profile", icon: User }];
+const ACCOUNT: Item[] = [
+  { label: "Profile", href: "/profile", icon: User },
+  { label: "API tokens", href: "/api-keys", icon: KeyRound },
+  { label: "API docs", href: "/api-docs", icon: Code2 },
+];
 
 const ADMIN: Item[] = [
   { label: "Roles", href: "/admin/roles", icon: ShieldCheck },

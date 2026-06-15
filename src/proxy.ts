@@ -12,6 +12,11 @@ export default auth((req) => {
   if (
     pathname.startsWith("/_next") ||
     pathname.startsWith("/api/auth") ||
+    // The public v1 REST API does its own bearer-token auth inside each
+    // route handler (`requireUserFromRequest`) and returns 401 JSON when
+    // the token is missing/invalid. Don't redirect non-browser clients to
+    // the HTML /login page.
+    pathname.startsWith("/api/v1") ||
     pathname.startsWith("/images") ||
     pathname === "/favicon.ico" ||
     pathname === "/icon.svg" ||

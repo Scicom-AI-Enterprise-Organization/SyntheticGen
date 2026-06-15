@@ -717,6 +717,19 @@ function isTransientAiError(e: Error): boolean {
     m.includes("etimedout") ||
     m.includes("socket hang up") ||
     m.includes("upstream") ||
+    // httpx / serverless-GPU streaming drops: the upstream cut the connection
+    // mid-stream (common when a large model like GLM is under load or the LB
+    // recycles the socket). These are retryable — the next attempt usually
+    // completes. Seen in the wild as RemoteProtocolError("peer closed
+    // connection without sending complete message body (incomplete chunked
+    // read)").
+    m.includes("peer closed connection") ||
+    m.includes("incomplete chunked read") ||
+    m.includes("incomplete read") ||
+    m.includes("remoteprotocolerror") ||
+    m.includes("connection reset") ||
+    m.includes("connection closed") ||
+    m.includes("response ended prematurely") ||
     /\b(502|503|504|408|429)\b/.test(m)
   );
 }

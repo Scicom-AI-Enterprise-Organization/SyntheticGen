@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import re
 from dataclasses import asdict
 from typing import Any
@@ -1869,10 +1870,15 @@ async def _execute_job_inner(job_id: str) -> str:
         await _emit_event(
             job_id, run["id"], event="turn.assistant", turn=1,
         )
-        # Retry the first tool-mode turn up to 3 times — covers transient
-        # proxy hiccups (0-token responses, mid-stream drops, 5xx) the
-        # same way the multi-turn loop already does for turns 2..N.
-        FIRST_TURN_RETRIES = 3
+        # Retry the first tool-mode turn — covers transient proxy hiccups
+        # (0-token responses, mid-stream drops, 5xx). The upstream we're
+        # talking to (serverlessgpu.aies.scicom.dev) regularly returns
+        # HTTP 200 with empty body for tool-mode requests; bumped to 8
+        # with longer backoff so a single proxy blip doesn't fail the
+        # whole job. Configurable via env so ops can dial it.
+        FIRST_TURN_RETRIES = int(
+            os.environ.get("SYNTHGEN_FIRST_TURN_RETRIES", "8")
+        )
         first = None
         first_err: Exception | None = None
         for attempt in range(1, FIRST_TURN_RETRIES + 1):

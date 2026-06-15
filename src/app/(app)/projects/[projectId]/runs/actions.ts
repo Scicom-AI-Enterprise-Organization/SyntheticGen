@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import { requireProjectPermission } from "@/lib/project-rbac";
 import { logAudit } from "@/lib/audit";
@@ -149,6 +150,116 @@ export async function createAndStartRun(input: z.infer<typeof startRunSchema>) {
 
   revalidatePath(`/projects/${data.projectId}/runs`);
   redirect(`/projects/${data.projectId}/runs/${run.id}`);
+}
+
+// Clones the run's frozen config (provider, template, sampling, scope, tools,
+// flows, etc.) into a NEW GenerationRun + its GenerationJobs and starts the
+// worker on it. Same shape as createAndStartRun, but seeded from the source
+// row instead of a form submit. Used by the "Replicate as-is" dropdown item
+// on the run detail page.
+export async function replicateRunAction(
+  projectId: string,
+  sourceRunId: string,
+) {
+  const { user } = await requireProjectPermission(projectId, "runs.execute");
+
+  const source = await prisma.generationRun.findFirst({
+    where: { id: sourceRunId, projectId },
+    include: { taxonomyNodes: true, personas: true },
+  });
+  if (!source) return { error: "Source run not found" };
+
+  // Confirm the provider still exists in this project. If the provider was
+  // archived/deleted between runs, surface a clear error.
+  const provider = await prisma.providerCredential.findUnique({
+    where: { id: source.providerCredentialId ?? "" },
+    select: { projectId: true },
+  });
+  if (!provider || provider.projectId !== projectId) {
+    return {
+      error:
+        "Original provider is no longer available — open the start form and pick a new one.",
+    };
+  }
+
+  const cfg = (source.configSnapshot ?? {}) as Record<string, unknown>;
+  const toolIds = Array.isArray(cfg.toolIds)
+    ? (cfg.toolIds as string[]).filter((v): v is string => typeof v === "string")
+    : [];
+  const flowIds = Array.isArray(cfg.flowIds)
+    ? (cfg.flowIds as string[]).filter((v): v is string => typeof v === "string")
+    : [];
+  const grid = (source.gridSpec ?? {}) as Record<string, unknown>;
+  const rowsPerCell =
+    typeof grid.rowsPerCell === "number" ? grid.rowsPerCell : 1;
+  const taxonomyNodeIds = source.taxonomyNodes.map((t) => t.taxonomyNodeId);
+  const personaIds = source.personas.map((p) => p.personaId);
+  const flowMode = flowIds.length > 0;
+  const primaryIds = flowMode ? flowIds : taxonomyNodeIds;
+  const primaryKey = flowMode ? "f" : "t";
+  const totalCells = primaryIds.length * personaIds.length * rowsPerCell;
+
+  const created = await prisma.generationRun.create({
+    data: {
+      projectId,
+      name: `${source.name} (copy)`,
+      description: source.description,
+      status: "draft",
+      configSnapshot: source.configSnapshot as Prisma.InputJsonValue,
+      providerCredentialId: source.providerCredentialId,
+      templateId: source.templateId,
+      languageProfileId: source.languageProfileId,
+      model: source.model,
+      samplingParams: source.samplingParams as Prisma.InputJsonValue,
+      gridSpec: source.gridSpec as Prisma.InputJsonValue,
+      formalityPolicy: source.formalityPolicy,
+      targetCount: totalCells,
+      createdById: user.id,
+      taxonomyNodes: {
+        create: taxonomyNodeIds.map((id) => ({ taxonomyNodeId: id })),
+      },
+      personas: {
+        create: personaIds.map((id) => ({ personaId: id })),
+      },
+    },
+  });
+
+  const jobs: Array<{ runId: string; cellKey: string; inputContext: object }> = [];
+  for (const primaryId of primaryIds) {
+    for (const personaId of personaIds) {
+      for (let idx = 0; idx < rowsPerCell; idx++) {
+        jobs.push({
+          runId: created.id,
+          cellKey: `${primaryKey}:${primaryId}|p:${personaId}|i:${idx}`,
+          inputContext: flowMode
+            ? { flowId: primaryId, personaId, idx }
+            : { taxonomyNodeId: primaryId, personaId, idx },
+        });
+      }
+    }
+  }
+  if (jobs.length > 0) {
+    await prisma.generationJob.createMany({ data: jobs });
+  }
+
+  await logAudit({
+    projectId,
+    actorUserId: user.id,
+    action: "run.replicate",
+    targetKind: "GenerationRun",
+    targetId: created.id,
+    metadata: { sourceRunId, name: created.name, targetCount: totalCells },
+  });
+
+  await tryCall(() => startRun(created.id), `start run ${created.id}`);
+
+  // Touch toolIds so the variable isn't flagged as unused — we preserved
+  // the config snapshot wholesale, but tools live inside `configSnapshot`
+  // rather than as relations, so there's nothing else to copy here.
+  void toolIds;
+
+  revalidatePath(`/projects/${projectId}/runs`);
+  redirect(`/projects/${projectId}/runs/${created.id}`);
 }
 
 export async function cancelRunAction(projectId: string, runId: string) {

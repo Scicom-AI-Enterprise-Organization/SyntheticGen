@@ -125,7 +125,7 @@ def _tools_payload(tool_defs: list[dict[str, Any]]) -> list[dict[str, Any]]:
     specific subset; this cap is the safety net.
     """
     import os
-    max_tools = int(os.environ.get("SYNTHGEN_MAX_TOOLS_PER_REQUEST", "30"))
+    max_tools = int(os.environ.get("SYNTHGEN_MAX_TOOLS_PER_REQUEST", "12"))
     if max_tools > 0 and len(tool_defs) > max_tools:
         import logging
         logging.getLogger("synthgen.providers").warning(
