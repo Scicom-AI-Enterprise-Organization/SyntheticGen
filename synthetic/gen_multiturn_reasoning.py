@@ -314,9 +314,63 @@ def _retry_call(fn, *, retries: int = _RETRY_ATTEMPTS, what: str = "call"):
     raise RuntimeError(f"{what} failed after {retries} attempts: {last}")
 
 
+def _new_tool_id() -> str:
+    return "call_" + uuid.uuid4().hex[:20]
+
+
+def stream_collect(client: OpenAI, kw: dict) -> tuple[str, str, list, Optional[str]]:
+    """Run a streaming chat completion and accumulate it into
+    (content, reasoning, tool_calls, finish_reason).
+
+    Streaming is what the serverless gateway needs during cold starts: it holds
+    the SSE connection and emits tokens once the worker is up, instead of the
+    non-stream path hitting the gateway's 60s 'no completion' 504. tool_calls and
+    reasoning_content deltas are accumulated by index just like the worker's
+    providers.py does.
+    """
+    kw = dict(kw)
+    kw["stream"] = True
+    kw["stream_options"] = {"include_usage": True}
+    content: list[str] = []
+    reasoning: list[str] = []
+    tc: dict[int, dict] = {}
+    finish: Optional[str] = None
+    stream = client.chat.completions.create(**kw)
+    for chunk in stream:
+        if not chunk.choices:
+            continue
+        ch0 = chunk.choices[0]
+        if ch0.finish_reason:
+            finish = ch0.finish_reason
+        d = ch0.delta
+        if not d:
+            continue
+        if d.content:
+            content.append(d.content)
+        rc = getattr(d, "reasoning", None) or getattr(d, "reasoning_content", None)
+        if rc:
+            reasoning.append(rc)
+        for tt in (d.tool_calls or []):
+            idx = tt.index if tt.index is not None else 0
+            slot = tc.setdefault(idx, {"id": None, "name": "", "args": ""})
+            if tt.id:
+                slot["id"] = tt.id
+            fn = getattr(tt, "function", None)
+            if fn and fn.name:
+                slot["name"] = fn.name
+            if fn and fn.arguments:
+                slot["args"] += fn.arguments
+    tool_calls = [
+        {"id": tc[k]["id"] or _new_tool_id(), "type": "function",
+         "function": {"name": tc[k]["name"], "arguments": tc[k]["args"] or "{}"}}
+        for k in sorted(tc) if tc[k]["name"]
+    ]
+    return "".join(content), "".join(reasoning), tool_calls, finish
+
+
 def chat_text(client: OpenAI, model: str, messages: list, *, temperature: float,
               max_tokens: int, seed: Optional[int] = None,
-              extra_body: Optional[dict] = None) -> str:
+              extra_body: Optional[dict] = None, stream: bool = True) -> str:
     def _do():
         kw: dict = dict(model=model, messages=messages, temperature=temperature,
                         max_tokens=max_tokens)
@@ -324,14 +378,18 @@ def chat_text(client: OpenAI, model: str, messages: list, *, temperature: float,
             kw["seed"] = seed
         if extra_body:
             kw["extra_body"] = extra_body
+        if stream:
+            return stream_collect(client, kw)[0]
         resp = client.chat.completions.create(**kw)
+        if not getattr(resp, "choices", None):
+            raise RuntimeError(f"no choices: {str(resp)[:200]}")
         return resp.choices[0].message.content or ""
     return _retry_call(_do, what="chat_text")
 
 
 def chat_json(client: OpenAI, model: str, messages: list, *, temperature: float,
               max_tokens: int, seed: Optional[int] = None,
-              extra_body: Optional[dict] = None) -> Any:
+              extra_body: Optional[dict] = None, stream: bool = True) -> Any:
     """Chat call expected to return a JSON object. Tries response_format json,
     falls back to plain + robust extraction."""
     def _do(use_rf: bool):
@@ -343,7 +401,11 @@ def chat_json(client: OpenAI, model: str, messages: list, *, temperature: float,
             kw["extra_body"] = extra_body
         if use_rf:
             kw["response_format"] = {"type": "json_object"}
+        if stream:
+            return stream_collect(client, kw)[0]
         resp = client.chat.completions.create(**kw)
+        if not getattr(resp, "choices", None):
+            raise RuntimeError(f"no choices: {str(resp)[:200]}")
         return resp.choices[0].message.content or ""
 
     # First try with response_format; if the endpoint rejects it, retry without.
@@ -541,7 +603,7 @@ def gen_user_turn(client, model, lib, language, convo, turn, sentiment, args) ->
                 {"role": "user", "content": instr}]
     obj = chat_json(client, model, messages, temperature=args.user_temperature,
                     max_tokens=args.max_tokens, seed=args.seed,
-                    extra_body=prefix_cache_extra(args))
+                    extra_body=prefix_cache_extra(args), stream=args.stream)
     if not isinstance(obj, dict) or "message" not in obj:
         # Last-resort: treat any text as the message with empty reasoning.
         text = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False)
@@ -567,7 +629,7 @@ def planner_reasoning(client, model, lib, language, convo, tool_calls, content, 
     try:
         return chat_text(client, model, messages, temperature=0.3,
                          max_tokens=400, seed=args.seed,
-                         extra_body=prefix_cache_extra(args)).strip()
+                         extra_body=prefix_cache_extra(args), stream=args.stream).strip()
     except Exception:
         return ""
 
@@ -595,27 +657,24 @@ def gen_assistant_turn(client, model, lib, language, tools, convo, args, known_i
         eb = prefix_cache_extra(args)
         if eb:
             kw["extra_body"] = eb
+        if args.stream:
+            content, reasoning, tool_calls, _ = stream_collect(client, kw)
+            return content, reasoning, tool_calls
         resp = client.chat.completions.create(**kw)
         if not getattr(resp, "choices", None):
             # Malformed/empty upstream body (e.g. a 200 carrying an error obj).
             raise RuntimeError(f"no choices in response: {str(resp)[:300]}")
-        return resp
+        msg = resp.choices[0].message
+        tcs = [{
+            "id": tc.id, "type": "function",
+            "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"},
+        } for tc in (msg.tool_calls or [])]
+        return msg.content or "", extract_reasoning(msg), tcs
 
     # Let a persistently-failing call propagate: in batch mode the row-level retry
     # loop regenerates the whole conversation rather than baking an empty turn
     # (honours "always retry until success"). _do already raises on an empty body.
-    resp = _retry_call(_do, what="assistant")
-    msg = resp.choices[0].message
-    content = msg.content or ""
-    tool_calls = []
-    for tc in (msg.tool_calls or []):
-        tool_calls.append({
-            "id": tc.id,
-            "type": "function",
-            "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"},
-        })
-
-    reasoning = extract_reasoning(msg)
+    content, reasoning, tool_calls = _retry_call(_do, what="assistant")
     source = "native"
     if not reasoning and not args.no_native_reasoning:
         # Native channel empty for this model -> reconstruct via planner.
@@ -649,7 +708,7 @@ def gen_tool_response(client, model, lib, fn_schema_map, convo, tool_call, args,
                 {"role": "user", "content": instr}]
     obj = chat_json(client, model, messages, temperature=args.tool_temperature,
                     max_tokens=args.max_tokens, seed=args.seed,
-                    extra_body=prefix_cache_extra(args))
+                    extra_body=prefix_cache_extra(args), stream=args.stream)
     if isinstance(obj, dict) and "response" in obj:
         reasoning = str(obj.get("reasoning", ""))
         response = obj["response"]
@@ -899,6 +958,8 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--language", default="ms", help="Conversation language code (ms, en, ta, zh, ...).")
     gen.add_argument("--max-tool-rounds", type=int, default=3, help="Max tool-call rounds per assistant turn.")
     gen.add_argument("--no-native-reasoning", action="store_true", help="Always reconstruct assistant reasoning via a planner call.")
+    gen.add_argument("--stream", action=argparse.BooleanOptionalAction, default=False,
+                     help="Use streaming requests. Default off (non-stream). Enable with --stream if an endpoint 504s on long non-stream completions.")
     gen.add_argument("--sentiment", default="neutral",
                      help="User emotional tone: one of %s, or 'mixed' (reroll per turn) / 'random' (one per conversation)."
                           % ", ".join(REAL_SENTIMENTS))
@@ -919,6 +980,10 @@ def build_parser() -> argparse.ArgumentParser:
     mdl.add_argument("--base-url", default=os.environ.get("OPENAI_BASE_URL", "https://openrouter.ai/api/v1"))
     mdl.add_argument("--api-key", default=os.environ.get("OPENAI_API_KEY"))
     mdl.add_argument("--max-tokens", type=int, default=4096)
+    mdl.add_argument("--timeout", type=float, default=600.0,
+                     help="Per-request timeout (s). Generous by default so requests "
+                          "waiting in the serverless queue for a free worker complete "
+                          "instead of being aborted; the retry loop covers real failures.")
     mdl.add_argument("--seed", type=int, default=None)
     mdl.add_argument("--user-temperature", type=float, default=0.9)
     mdl.add_argument("--assistant-temperature", type=float, default=0.4)
@@ -945,9 +1010,13 @@ def main() -> int:
         print("error: provide --tools or --parquet", file=sys.stderr)
         return 2
 
-    client = OpenAI(base_url=args.base_url, api_key=args.api_key)
+    # max_retries=0: our _retry_call is the only retry layer (no hidden SDK retries
+    # stacking exponential backoff on top). timeout caps cold-start hangs.
+    client = OpenAI(base_url=args.base_url, api_key=args.api_key,
+                    timeout=args.timeout, max_retries=0)
     print(f"[config] base_url={args.base_url} model={args.model} "
           f"language={args.language} turns={args.turns} sentiment={args.sentiment} "
+          f"stream={args.stream} timeout={args.timeout} "
           f"simulate_errors={args.simulate_errors}"
           + (f" error_rate={args.error_rate}" if args.simulate_errors else ""),
           file=sys.stderr)
