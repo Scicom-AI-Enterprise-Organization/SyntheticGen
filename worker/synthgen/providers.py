@@ -6,7 +6,9 @@ same code path serves every backend.
 """
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 import re
 import secrets
 import string
@@ -21,6 +23,44 @@ from tenacity import (
     stop_after_attempt,
     wait_exponential,
 )
+
+log = logging.getLogger(__name__)
+
+# How many times to (re)open a streaming chat-completion when the upstream
+# drops the connection transiently. Serverless-GPU backends behind a load
+# balancer routinely close the socket mid-stream while a node is cold-starting,
+# recycling, or under load — surfacing as httpx RemoteProtocolError("peer
+# closed connection without sending complete message body (incomplete chunked
+# read)"), connection resets, or a 5xx before the first byte.
+_STREAM_MAX_ATTEMPTS = 3
+
+_TRANSIENT_STREAM_MARKERS = (
+    "peer closed connection",
+    "incomplete chunked read",
+    "incomplete read",
+    "connection reset",
+    "connection closed",
+    "response ended prematurely",
+    "server disconnected",
+    "remoteprotocolerror",
+)
+
+
+def _is_transient_stream_error(exc: BaseException) -> bool:
+    """True when a streaming failure looks like a retryable upstream/transport
+    hiccup rather than a client/auth/validation error."""
+    # Transport-layer errors (RemoteProtocolError, ReadError, ConnectError,
+    # timeouts, pool/network errors) are transient — except LocalProtocolError,
+    # which means *we* built a bad request.
+    if isinstance(exc, httpx.LocalProtocolError):
+        return False
+    if isinstance(exc, httpx.TransportError):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code if exc.response is not None else 0
+        return code in (408, 429, 500, 502, 503, 504)
+    msg = str(exc).lower()
+    return any(marker in msg for marker in _TRANSIENT_STREAM_MARKERS)
 
 
 # Pricing per 1M tokens (input, output) in USD. Source: vendor pricing pages.
@@ -528,75 +568,113 @@ async def chat_completion_stream(
     # by `index` (a tool_call's position in the response). Each delta may
     # contribute the id, name, or another chunk of `arguments`.
     tc_acc: dict[int, dict[str, Any]] = {}
+    # Tracks whether the consumer has already seen real answer text / a tool
+    # call this attempt. Governs the retry policy in the except handler below.
+    content_started = False
 
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        async with client.stream("POST", url, json=payload, headers=headers) as resp:
-            if resp.status_code >= 400:
-                body = await resp.aread()
-                raise httpx.HTTPStatusError(
-                    f"upstream {resp.status_code}: {body.decode('utf-8', 'replace')[:500]}",
-                    request=resp.request,
-                    response=resp,
-                )
-            async for line in resp.aiter_lines():
-                if not line or line.startswith(":"):
-                    continue
-                if not line.startswith("data:"):
-                    continue
-                payload_str = line[len("data:"):].strip()
-                if payload_str == "[DONE]":
-                    break
-                try:
-                    event = json.loads(payload_str)
-                except json.JSONDecodeError:
-                    continue
-                if mdl := event.get("model"):
-                    upstream_model = mdl
-                choices = event.get("choices") or []
-                if choices:
-                    delta_obj = choices[0].get("delta") or {}
-                    # Reasoning models (Qwen thinking, DeepSeek-R1, OpenAI o-series via
-                    # some proxies) stream chain-of-thought as `delta.reasoning` first,
-                    # then the actual answer as `delta.content`. Surface both for UX,
-                    # but only `content` counts toward the final parsed payload.
-                    reasoning_text = delta_obj.get("reasoning") or delta_obj.get("reasoning_content") or ""
-                    if reasoning_text:
-                        yield StreamEvent(delta=reasoning_text, reasoning=True)
-                    delta_text = delta_obj.get("content") or ""
-                    if delta_text:
-                        full.append(delta_text)
-                        yield StreamEvent(delta=delta_text)
-                    # Streamed tool_calls: each entry has an `index` and may
-                    # contribute the id, function.name, or a chunk of
-                    # function.arguments. Accumulate per-index.
-                    streamed_calls = delta_obj.get("tool_calls") or []
-                    for tc in streamed_calls:
-                        if not isinstance(tc, dict):
-                            continue
-                        idx = int(tc.get("index", 0))
-                        slot = tc_acc.setdefault(
-                            idx,
-                            {"id": None, "type": "function", "function": {"name": "", "arguments": ""}},
+    # Retry transient streaming drops. Because this is an async generator we
+    # can't use tenacity's @retry (the failure happens mid-iteration, after we
+    # may have yielded), so we hand-roll it:
+    #   * drop BEFORE any content/tool-call → restart the stream from scratch
+    #     (safe: the consumer hasn't been handed any answer yet).
+    #   * drop AFTER content started → almost always the upstream cut the
+    #     connection after the body was complete but before the terminating
+    #     chunk; salvage what we streamed and finish cleanly rather than
+    #     discarding a good turn or risking a duplicated/divergent re-roll.
+    for attempt in range(1, _STREAM_MAX_ATTEMPTS + 1):
+        full.clear()
+        tc_acc.clear()
+        tokens_in = 0
+        tokens_out = 0
+        content_started = False
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                async with client.stream("POST", url, json=payload, headers=headers) as resp:
+                    if resp.status_code >= 400:
+                        body = await resp.aread()
+                        raise httpx.HTTPStatusError(
+                            f"upstream {resp.status_code}: {body.decode('utf-8', 'replace')[:500]}",
+                            request=resp.request,
+                            response=resp,
                         )
-                        if tc.get("id"):
-                            slot["id"] = tc["id"]
-                        if tc.get("type"):
-                            slot["type"] = tc["type"]
-                        fn = tc.get("function") or {}
-                        if fn.get("name"):
-                            slot["function"]["name"] = fn["name"]
-                        if fn.get("arguments"):
-                            slot["function"]["arguments"] += fn["arguments"]
-                        yield StreamEvent(tool_call_delta={
-                            "index": idx,
-                            "id": slot["id"],
-                            "name": slot["function"]["name"],
-                            "argumentsFragment": fn.get("arguments") or "",
-                        })
-                usage = event.get("usage")
-                if usage:
-                    tokens_in = int(usage.get("prompt_tokens") or 0)
-                    tokens_out = int(usage.get("completion_tokens") or 0)
+                    async for line in resp.aiter_lines():
+                        if not line or line.startswith(":"):
+                            continue
+                        if not line.startswith("data:"):
+                            continue
+                        payload_str = line[len("data:"):].strip()
+                        if payload_str == "[DONE]":
+                            break
+                        try:
+                            event = json.loads(payload_str)
+                        except json.JSONDecodeError:
+                            continue
+                        if mdl := event.get("model"):
+                            upstream_model = mdl
+                        choices = event.get("choices") or []
+                        if choices:
+                            delta_obj = choices[0].get("delta") or {}
+                            # Reasoning models (Qwen thinking, DeepSeek-R1, OpenAI o-series via
+                            # some proxies) stream chain-of-thought as `delta.reasoning` first,
+                            # then the actual answer as `delta.content`. Surface both for UX,
+                            # but only `content` counts toward the final parsed payload.
+                            reasoning_text = delta_obj.get("reasoning") or delta_obj.get("reasoning_content") or ""
+                            if reasoning_text:
+                                yield StreamEvent(delta=reasoning_text, reasoning=True)
+                            delta_text = delta_obj.get("content") or ""
+                            if delta_text:
+                                content_started = True
+                                full.append(delta_text)
+                                yield StreamEvent(delta=delta_text)
+                            # Streamed tool_calls: each entry has an `index` and may
+                            # contribute the id, function.name, or a chunk of
+                            # function.arguments. Accumulate per-index.
+                            streamed_calls = delta_obj.get("tool_calls") or []
+                            for tc in streamed_calls:
+                                if not isinstance(tc, dict):
+                                    continue
+                                idx = int(tc.get("index", 0))
+                                slot = tc_acc.setdefault(
+                                    idx,
+                                    {"id": None, "type": "function", "function": {"name": "", "arguments": ""}},
+                                )
+                                if tc.get("id"):
+                                    slot["id"] = tc["id"]
+                                if tc.get("type"):
+                                    slot["type"] = tc["type"]
+                                fn = tc.get("function") or {}
+                                if fn.get("name"):
+                                    slot["function"]["name"] = fn["name"]
+                                if fn.get("arguments"):
+                                    slot["function"]["arguments"] += fn["arguments"]
+                                content_started = True
+                                yield StreamEvent(tool_call_delta={
+                                    "index": idx,
+                                    "id": slot["id"],
+                                    "name": slot["function"]["name"],
+                                    "argumentsFragment": fn.get("arguments") or "",
+                                })
+                        usage = event.get("usage")
+                        if usage:
+                            tokens_in = int(usage.get("prompt_tokens") or 0)
+                            tokens_out = int(usage.get("completion_tokens") or 0)
+            # Stream finished cleanly (hit [DONE] or the body ended normally).
+            break
+        except Exception as exc:  # noqa: BLE001
+            if content_started:
+                log.warning(
+                    "stream dropped mid-body after %d chars (attempt %d) — salvaging and finishing: %s: %s",
+                    sum(len(s) for s in full), attempt, type(exc).__name__, exc,
+                )
+                break
+            if _is_transient_stream_error(exc) and attempt < _STREAM_MAX_ATTEMPTS:
+                log.warning(
+                    "transient stream error before first token (attempt %d/%d) — retrying: %s: %s",
+                    attempt, _STREAM_MAX_ATTEMPTS, type(exc).__name__, exc,
+                )
+                await asyncio.sleep(min(8.0, float(attempt)))
+                continue
+            raise
 
     final_tool_calls: Optional[list[dict[str, Any]]] = None
     if tc_acc:
